@@ -423,6 +423,11 @@ def _render_run_notes(state: dict, hosts) -> str:
                 f"{command_count} command(s) reported; final tracked files "
                 f"dirty: {_tri_state(report.get('tracked_files_dirty'))}."
             )
+            if report.get("superseded"):
+                lines.append(
+                    f"  Superseded {len(report['superseded'])} earlier "
+                    f"report(s); the last one was `{report['superseded'][-1].get('status')}`."
+                )
 
     summary = state.get("dispatch_plan_summary")
     if isinstance(summary, dict) and summary:

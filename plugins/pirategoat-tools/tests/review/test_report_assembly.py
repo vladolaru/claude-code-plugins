@@ -467,6 +467,44 @@ class TestRecordAssembly:
             "tracked files dirty: unknown.",
             id="recorded_report",
         ),
+        pytest.param(
+            {
+                "dependency_refresh_precheck": {
+                    "tracked_files_dirty": False, "dirty_files": [],
+                },
+                "dependency_refresh_report": {
+                    "schema": 1,
+                    "status": "failed",
+                    "commands": [{
+                        "directory": ".",
+                        "command": "custom sync",
+                        "exit_status": "failed",
+                    }],
+                    "tracked_files_dirty": True,
+                    "dirty_files": ["tracked.txt"],
+                    "superseded": [
+                        {
+                            "schema": 1,
+                            "status": "partial",
+                            "commands": [],
+                            "tracked_files_dirty": False,
+                            "dirty_files": [],
+                            "superseded_at": "2026-09-14T10:20:00+00:00",
+                        },
+                        {
+                            "schema": 1,
+                            "status": "completed",
+                            "commands": [],
+                            "tracked_files_dirty": False,
+                            "dirty_files": [],
+                            "superseded_at": "2026-09-14T10:25:00+00:00",
+                        },
+                    ],
+                },
+            },
+            "Superseded 2 earlier report(s); the last one was `completed`.",
+            id="recorded_report_with_superseded",
+        ),
     )
 
     @pytest.mark.parametrize(("state", "fragment"), DEPENDENCY_REFRESH_NOTES)
@@ -477,6 +515,8 @@ class TestRecordAssembly:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert fragment in text
+        if "superseded" not in state.get("dependency_refresh_report", {}):
+            assert "Superseded" not in text
 
     @pytest.mark.parametrize(
         ("state", "expected_line"),

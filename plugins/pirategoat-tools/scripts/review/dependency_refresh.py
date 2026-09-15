@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -42,8 +43,9 @@ _MAX_REPORT_BYTES = 1024 * 1024
 _MAX_REPORTED_COMMANDS = 32
 _MAX_DIRECTORY_CHARS = 200
 _MAX_COMMAND_CHARS = 500
+_MAX_SUPERSEDED = 5
 _REQUEST_FIELDS = frozenset({"schema", "status", "commands"})
-_SCRIPT_OWNED_FIELDS = frozenset({"tracked_files_dirty", "dirty_files"})
+_SCRIPT_OWNED_FIELDS = frozenset({"tracked_files_dirty", "dirty_files", "superseded"})
 _CANONICAL_FIELDS = _REQUEST_FIELDS | _SCRIPT_OWNED_FIELDS
 _COMMAND_FIELDS = frozenset({"directory", "command", "exit_status"})
 
@@ -234,6 +236,27 @@ def validate_canonical_report(payload):
                 f"dirty_files[{index}]",
                 _MAX_DIRTY_FILE_CHARS,
             ))
+
+    superseded = payload.get("superseded")
+    if "superseded" in payload:
+        if not isinstance(superseded, list) or len(superseded) > _MAX_SUPERSEDED:
+            problems.append(
+                f"'superseded' must be a list of at most {_MAX_SUPERSEDED} earlier reports"
+            )
+        else:
+            for index, earlier in enumerate(superseded):
+                if not isinstance(earlier, dict) or "superseded" in earlier:
+                    problems.append(f"superseded[{index}] must be an earlier report without its own history")
+                    continue
+                stamp = earlier.get("superseded_at")
+                if not isinstance(stamp, str) or not stamp:
+                    problems.append(f"superseded[{index}].superseded_at must be a timestamp")
+                problems.extend(
+                    f"superseded[{index}]: {problem}"
+                    for problem in validate_canonical_report(
+                        {k: v for k, v in earlier.items() if k != "superseded_at"}
+                    )
+                )
     return problems
 
 
@@ -250,8 +273,15 @@ def load_dependency_refresh_report(output_dir):
     return payload
 
 
-def save_report(output_dir, report_path, repo_root):
-    """Validate a request, add final tracked state, and publish atomically."""
+def save_report(output_dir, report_path, repo_root, *, now=None):
+    """Validate a request, add final tracked state, and publish atomically.
+
+    A save that replaces a different earlier report keeps that report under
+    `superseded` (newest last, at most _MAX_SUPERSEDED): run B on
+    2026-09-14 saved a false `failed`, then the true `completed` overwrote
+    it and nothing showed the first record had existed. An identical
+    re-save records nothing.
+    """
     payload, problems = _read_report_request(report_path)
     if not problems:
         problems = validate_report_request(payload)
@@ -266,6 +296,15 @@ def save_report(output_dir, report_path, repo_root):
         "tracked_files_dirty": observation["tracked_files_dirty"],
         "dirty_files": list(observation["dirty_files"]),
     }
+    previous = load_dependency_refresh_report(output_dir)
+    if previous is not None:
+        history = list(previous.get("superseded") or [])
+        earlier = {k: v for k, v in previous.items() if k != "superseded"}
+        if earlier != canonical:
+            stamp = (now or datetime.now(timezone.utc)).isoformat()
+            history.append({**earlier, "superseded_at": stamp})
+        if history:
+            canonical["superseded"] = history[-_MAX_SUPERSEDED:]
     path = artifact_path(output_dir, "dependency_refresh")
     path.parent.mkdir(exist_ok=True)
     atomic_write_json(path, canonical)
@@ -302,6 +341,10 @@ def run_save(args):
             )
         return 1
     print(f"SAVED {REPORT_RUN_RELATIVE_PATH}")
+    report = load_dependency_refresh_report(args.output_dir) or {}
+    count = len(report.get("superseded") or [])
+    if count:
+        print(f"SUPERSEDED: {count} earlier report(s)")
     return 0
 
 

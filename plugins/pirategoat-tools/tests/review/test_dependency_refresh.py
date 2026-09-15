@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -289,6 +290,59 @@ class TestSaveReport:
             dependency_refresh.save_report(output_dir, report_path, git_repo)
         assert canonical.read_bytes() == b'{"existing":true}\n'
 
+    def test_a_second_save_keeps_the_report_it_replaces(self, git_repo, tmp_path):
+        """Run B (2026-09-14) saved a false `failed`, then a `completed`
+        that overwrote it; nothing showed the first record ever existed."""
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        report_path = tmp_path / "request.json"
+        _write_request(report_path, _request(status="failed"))
+        first_clock = datetime(2026, 9, 14, 10, 20, tzinfo=timezone.utc)
+        assert dependency_refresh.save_report(output_dir, report_path, git_repo, now=first_clock) == []
+        _write_request(report_path, _request(status="completed"))
+        second_clock = datetime(2026, 9, 14, 10, 25, tzinfo=timezone.utc)
+        assert dependency_refresh.save_report(output_dir, report_path, git_repo, now=second_clock) == []
+
+        canonical = json.loads(_canonical(output_dir).read_text())
+        assert canonical["status"] == "completed"
+        assert len(canonical["superseded"]) == 1
+        assert canonical["superseded"][0]["status"] == "failed"
+        assert canonical["superseded"][0]["superseded_at"] == second_clock.isoformat()
+        assert "superseded" not in canonical["superseded"][0]
+        assert dependency_refresh.validate_canonical_report(canonical) == []
+        assert dependency_refresh.load_dependency_refresh_report(output_dir) == canonical
+
+    def test_an_identical_second_save_records_no_supersession(self, git_repo, tmp_path):
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        report_path = tmp_path / "request.json"
+        _write_request(report_path, _request())
+        dependency_refresh.save_report(output_dir, report_path, git_repo)
+        dependency_refresh.save_report(output_dir, report_path, git_repo)
+        canonical = json.loads(_canonical(output_dir).read_text())
+        assert "superseded" not in canonical
+
+    def test_supersessions_are_bounded_newest_last(self, git_repo, tmp_path):
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        report_path = tmp_path / "request.json"
+        statuses = ["failed", "partial", "completed", "failed", "partial", "completed", "failed"]
+        for index, status in enumerate(statuses):
+            _write_request(report_path, _request(status=status))
+            clock = datetime(2026, 9, 14, 10, index, tzinfo=timezone.utc)
+            assert dependency_refresh.save_report(output_dir, report_path, git_repo, now=clock) == []
+        canonical = json.loads(_canonical(output_dir).read_text())
+        assert canonical["status"] == "failed"
+        assert [entry["status"] for entry in canonical["superseded"]] == ["partial", "completed", "failed", "partial", "completed"]
+
+    def test_a_request_may_not_carry_superseded(self, git_repo, tmp_path):
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        report_path = tmp_path / "request.json"
+        _write_request(report_path, {**_request(), "superseded": []})
+        problems = dependency_refresh.save_report(output_dir, report_path, git_repo)
+        assert problems == ["'superseded' is script-owned"]
+
 
 class TestRequestValidation:
     @pytest.mark.parametrize(
@@ -496,3 +550,39 @@ class TestSaveCli:
         assert "INVALID dependency refresh report:" not in proc.stderr
         assert "No such file or directory" in proc.stderr
         assert dependency_refresh.load_dependency_refresh_report(output_dir) is None
+
+    def test_saved_echo_stays_the_exact_gate_literal(self, git_repo, tmp_path):
+        """The step-3 briefing gates on the literal `SAVED
+        pipeline/dependency-refresh.json` line; a suffix on a re-save would
+        make exactly this task's supersession miss the gate."""
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        report_path = tmp_path / "request.json"
+
+        def _save(status):
+            _write_request(report_path, _request(status=status))
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "save",
+                    "--output-dir",
+                    str(output_dir),
+                    "--report",
+                    str(report_path),
+                ],
+                cwd=git_repo,
+                capture_output=True,
+                text=True,
+            )
+
+        first = _save("failed")
+        assert first.returncode == 0, first.stderr
+        assert first.stdout.splitlines() == ["SAVED pipeline/dependency-refresh.json"]
+
+        second = _save("completed")
+        assert second.returncode == 0, second.stderr
+        assert second.stdout.splitlines() == [
+            "SAVED pipeline/dependency-refresh.json",
+            "SUPERSEDED: 1 earlier report(s)",
+        ]

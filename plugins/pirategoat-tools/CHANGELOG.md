@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The reviewer return signal's COUNTS template now includes low, which counts toward the verdict, so reviewers no longer append it by hand.
 - toolchain-reviewer now runs with a fixed 50-call budget instead of one scaled from its usually tiny diff, so the briefing no longer tells it to wrap up at 18 calls when reading the changelogs its job requires takes 30 to 50.
 - The step-6 dispatch briefing now sends the orchestrator straight to step 7 instead of inviting a status poll, since step 7 is where the watchdog and the wait rules are; two of three orchestrators on 2026-09-14 waited inside step 6 without them.
+- A dependency-refresh save that replaces a different earlier report now keeps that report under superseded (at most five, newest last) and says so, where the earlier record used to vanish; run B on 2026-09-14 saved a false failed and then overwrote it without a trace.
 
 ## [1.119.6] - 2026-09-14
 
