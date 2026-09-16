@@ -115,7 +115,7 @@ class TestRenderMarkdown:
         [
             pytest.param(
                 ["src/unread.py", "docs/not checked.md"],
-                "**Not reviewed (budget):** `src/unread.py`, "
+                "**Not reviewed (unclaimed):** `src/unread.py`, "
                 "`docs/not checked.md`\n\n",
                 id="non-empty",
             ),
@@ -132,7 +132,7 @@ class TestRenderMarkdown:
         rendered = render_markdown(data)
 
         if expected is None:
-            assert "**Not reviewed (budget):**" not in rendered
+            assert "**Not reviewed (unclaimed):**" not in rendered
         else:
             assert expected in rendered
 

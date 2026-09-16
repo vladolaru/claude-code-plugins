@@ -205,7 +205,7 @@ def render_review_body(data: Dict) -> str:
     # Unclaimed review work derived from the reviewer's assignment.
     if data.get('unclaimed_review_files'):
         files = ", ".join(f"`{f}`" for f in data['unclaimed_review_files'])
-        md.append(f"**Not reviewed (budget):** {files}\n\n")
+        md.append(f"**Not reviewed (unclaimed):** {files}\n\n")
 
     # Reconciliation block — the narrative's "Pipeline:" line, now
     # rendered from the metrics the producer already records under

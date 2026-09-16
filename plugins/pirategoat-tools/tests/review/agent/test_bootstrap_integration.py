@@ -281,9 +281,12 @@ class TestCategoryRepresentatives:
         # derived from this exact claimable set, not a neighboring fact
         # (e.g. total scope files) that also happens to be non-empty here.
         # A mis-wired count would pass every other assertion in this suite.
-        assert ("Not reviewed (budget):" in briefing) == bool(
-            data["review_claimable_files"]
-        )
+        claimable = data["review_claimable_files"]
+        assert (
+            "in-scope files are listed under REVIEW-CLAIMABLE" in briefing
+        ) == bool(claimable)
+        if claimable:
+            assert f"Spend the budget: {len(claimable)} in-scope files" in briefing
 
     def test_large_end_to_end_bootstrap_keeps_every_artifact_in_reviewer_directory(
         self, tmp_path
