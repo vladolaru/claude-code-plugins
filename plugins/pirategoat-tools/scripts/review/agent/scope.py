@@ -1813,9 +1813,10 @@ def write_scope_summary(scope: dict, path: str) -> None:
     ARE the assignment's two counts); ``list_only_files`` is descriptive
     scope; ``routing_files`` is the every-mode population the run-level file
     review subtracts from the changed set; ``in_scope_stat_lines`` sizes the
-    tool-call budget; ``inline_diff_lines`` is how many diff lines the
-    briefing actually carried, which telemetry records so a run whose
-    briefings arrived empty is visible without reading them by hand.
+    tool-call budget; ``inline_diff_lines`` is how many hunk lines this
+    scope fetched and inlined into its own output, before bootstrap cuts the
+    briefing to fit one Read. Telemetry records bootstrap's carried count,
+    not this one; this fetched count is the point it is compared against.
 
     The last two answer different questions and can disagree: the diffstat
     total counts every changed line of every reviewed file, while the

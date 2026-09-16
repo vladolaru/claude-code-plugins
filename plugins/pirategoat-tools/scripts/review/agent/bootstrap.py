@@ -158,7 +158,8 @@ class ScopeSection(NamedTuple):
     comparable with the sidecar's fetched count. `remaining_reads` are
     (offset, limit) pairs for the Read tool against the scoped-diff file,
     offsets 1-based line numbers as the Read tool counts them, each read one
-    the tool returns whole; empty when the whole scope is inline.
+    the tool returns whole unless one line alone exceeds the character limit;
+    empty when the whole scope is inline.
     """
 
     text: str
@@ -191,8 +192,9 @@ def fits_one_read(text: str) -> bool:
 def _chunk_reads(lines: List[str], first_line: int) -> List[Tuple[int, int]]:
     """(offset, limit) Read calls covering `lines`, which start at file line
     `first_line`. Each read holds at most BRIEFING_READ_LINE_LIMIT lines and
-    BRIEFING_READ_CHAR_LIMIT characters, so each comes back whole; a line
-    longer than the character limit is a read of its own."""
+    BRIEFING_READ_CHAR_LIMIT characters, so each comes back whole unless one
+    line alone exceeds the character limit; such a line is a read of its own
+    and comes back partial."""
     reads: List[Tuple[int, int]] = []
     line_limit = max(BRIEFING_READ_LINE_LIMIT, 1)
     start = 0
@@ -273,10 +275,12 @@ def _continuation_digit_growth(widest: ScopeSection, scope_line_count: int) -> i
     The widest block states 0 lines kept and 0 diff lines carried, and its
     reads name the smallest offsets and limits; a cut names at most as many
     reads (greedy chunks of a suffix never outnumber the whole's), but each
-    of its numbers, all at most the scoped-diff file's line count, can be
-    wider. Two numbers in the "Inlined above" line and two per read.
+    of its numbers can be wider. Two numbers in the "Inlined above" line and
+    two per read. Every number is at most the scoped-diff file's line count
+    or the scope's diff-line total, and the total can be the larger:
+    count_diff_lines() splits on bare CRs, which the Read tool does not.
     """
-    widest_digits = len(str(_WARNING_LINE_COUNT + scope_line_count))
+    widest_digits = len(str(max(_WARNING_LINE_COUNT + scope_line_count, widest.total_lines)))
     return (2 + 2 * len(widest.remaining_reads)) * (widest_digits - 1)
 
 
@@ -291,8 +295,11 @@ def fit_scope_to_one_read(
     depend on it. The cut is computed from measured sizes, not guessed: the
     rest of the briefing from the first build, and the continuation block
     reserved at its widest, so the cut briefing fits one Read whenever the
-    rest plus that widest block does. `scope_file` is None when no scoped-
-    diff file was written, and the scope then rides whole.
+    rest plus that widest block does; when even that exceeds a limit, the
+    cut inlines nothing and names every scope line as a read, the smallest
+    briefing possible, and the Read tool's partial-page notice takes over.
+    `scope_file` is None when no scoped-diff file was written, and the scope
+    then rides whole.
     """
     section = render_scope_section(scope_output, scope_file)
     output = build(section.text)
@@ -646,8 +653,12 @@ _SCOPE_FACT_LISTS = (
 )
 
 # Both are required, not defaulted: a summary missing either is malformed,
-# and an absent count silently read as 0 would report an empty briefing and
-# a zero-sized budget as measured facts.
+# and an absent count silently read as 0 would size a zero budget or report
+# an empty fetch as measured facts. Bootstrap no longer reads
+# inline_diff_lines for telemetry, which records the lines the briefing
+# carried after the fit-to-one-Read cut; it still validates the schema-4
+# sidecar whole, and the count scope.py fetched stays the comparison point
+# for that carried count.
 _SCOPE_FACT_COUNTS = (
     "in_scope_stat_lines",
     "inline_diff_lines",

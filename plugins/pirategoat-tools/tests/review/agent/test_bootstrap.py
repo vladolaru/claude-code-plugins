@@ -1305,7 +1305,7 @@ class TestRenderScopeSection:
         assert _read_tool_lines(_mod.READ_LINE_NUMBER_WARNING + scope)[long_offset - 1] == lines[12]
         _assert_reads_fetch_exactly_the_rest(section, scope, kept=0)
 
-    @pytest.mark.parametrize("separator", ["\x0c", " ", "\x85", "\r"])
+    @pytest.mark.parametrize("separator", ["\x0c", "\u2028", "\x85", "\r"])
     def test_offsets_count_only_newlines_as_line_ends(self, separator):
         """str.splitlines() also breaks on form feed, U+2028, NEL and a bare
         CR, which the Read tool does not; one such character in a diff line
@@ -1366,7 +1366,7 @@ class TestFitScopeToOneRead:
         assert section.remaining_reads, "the scope did not fit, so reads must be named"
         assert output == build(section.text)
         kept = section.text.split("\n\n=== SCOPE CONTINUES IN FILE ===")[0].split("\n")
-        assert 0 < len(kept) < 62
+        assert section.carried_lines > 0
         assert section.carried_lines == len(kept) - 2
         _assert_reads_fetch_exactly_the_rest(section, scope, kept=len(kept), scope_file="/f")
 
@@ -1439,6 +1439,46 @@ class TestFitScopeToOneRead:
                     if kept and len(widest.remaining_reads) >= min_reads:
                         checked_cuts += 1
         assert checked_cuts > 20, f"the sweep must exercise cuts that keep scope and name {min_reads}+ reads"
+
+    def test_diff_line_counts_wider_than_the_file_are_reserved_for(self, monkeypatch):
+        """count_diff_lines() splits on bare CRs, which the Read tool does not,
+        so the diff-line numbers the block states can have more digits than
+        the file's line count. One diff line of 1,000 `\\r-` pairs among 92
+        short ones counted 1,093 diff lines in a 98-line file, and the cut
+        briefing came out one character over the limit."""
+        scope = "+" + "\r-" * 1000 + "\n" + "\n".join(f"+{i}" for i in range(92)) + "\n"
+        build = self._build_like_build_output
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 10**6)
+        checked_cuts = 0
+        for char_limit in range(2000, 6000):
+            monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", char_limit)
+            widest = _mod.render_scope_section(scope, "/f", line_allowance=0, char_allowance=0)
+            if not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text)):
+                continue
+            output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+            assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output), f"char limit {char_limit}"
+            checked_cuts += section.carried_lines > 999
+        assert checked_cuts > 20, "the sweep must exercise cuts that carry the long line"
+
+    def test_a_briefing_too_big_even_for_the_widest_block_names_every_line(self, monkeypatch):
+        """When the rest of the briefing plus the block naming every read
+        already exceeds a limit, nothing is inlined: the briefing is as small
+        as it can be, every scope line is named as a read, and the harness's
+        partial-page notice takes over from there."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 30)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 10**6)
+        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(60)) + "\n"
+        build = self._build_like_build_output
+        widest = _mod.render_scope_section(scope, "/f", line_allowance=0, char_allowance=0)
+        assert not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text))
+
+        output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+
+        assert section == widest
+        assert output == build(widest.text)
+        assert section.carried_lines == 0
+        _assert_reads_fetch_exactly_the_rest(section, scope, kept=0, scope_file="/f")
+        assert not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
 
     def test_no_scoped_diff_file_means_the_scope_rides_whole(self, monkeypatch):
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 5)
