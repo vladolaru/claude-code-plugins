@@ -1590,8 +1590,9 @@ class TestBriefingFitsOneRead:
         assert next_offset == len(file_lines) + 1
         assert agent_start["scope"]["inline_lines"] == self._hunk_lines(inline)
         assert 0 < agent_start["scope"]["inline_lines"] < self._hunk_lines(scoped.read_text())
-        # The stub tells the reviewer what the block asks of it.
-        assert "SCOPE CONTINUES IN FILE, make exactly the Read calls it lists" in result.stdout
+        # The stub defers to the block, which says how the reads are paced.
+        assert "SCOPE CONTINUES IN FILE, make the Read calls it lists, as it says." in result.stdout
+        assert "before reviewing" not in result.stdout
 
 
 class TestScopeSectionRidesVerbatim:

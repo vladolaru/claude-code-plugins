@@ -1,5 +1,6 @@
 """Tests for review/agent/bootstrap.py — unit tests (direct function imports)."""
 
+import collections
 import json
 import os
 import sys
@@ -1331,6 +1332,62 @@ class TestRenderScopeSection:
         assert "Inlined above: 0 of 11 scope lines (0 of 4 diff lines)." in section.text
         _assert_reads_fetch_exactly_the_rest(section, self.SCOPE, kept=0)
 
+    @staticmethod
+    def _lines_of_ten(count):
+        """`count` scope lines of ten characters each, newline included."""
+        return "".join(f"+line {i:03d}\n" for i in range(count))
+
+    @pytest.mark.parametrize(
+        ("read_count", "paced"),
+        [
+            pytest.param(1, False, id="one-read-reads-first"),
+            pytest.param(2, False, id="two-reads-read-first"),
+            pytest.param(3, True, id="three-reads-are-paced"),
+            pytest.param(6, True, id="six-reads-are-paced"),
+        ],
+    )
+    def test_past_two_reads_the_block_paces_them(self, monkeypatch, read_count, paced):
+        """Up to two named reads the reviewer reads the rest before reviewing;
+        past two, it reviews each part before the next, since a 14,000-line
+        scope named 17 mandatory reads. Either way a read the Read tool
+        answers partially (dense text passes its token cap under the
+        character limit) resumes from the notice's offset before the next
+        listed call."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 100)
+        scope = self._lines_of_ten(10 * read_count)
+        section = _mod.render_scope_section(scope, SCOPE_FILE, line_allowance=0, char_allowance=0)
+        assert len(section.remaining_reads) == read_count
+        read_first = "Read the rest now, with exactly these calls, before reviewing:"
+        paced_wording = "Make these calls in order, reviewing each part before the next, and skip none:"
+        assert (read_first in section.text) is not paced
+        assert (paced_wording in section.text) is paced
+        assert (
+            "If one of these reads comes back partial, continue from the offset "
+            "the Read tool's notice names before the next listed call."
+        ) in section.text.split("\n")
+
+    @pytest.mark.parametrize(
+        ("char_limit", "line_count", "line_allowance", "stated"),
+        [
+            pytest.param(50_000, 1, 0, "The rest is 1 read of about 10 characters.", id="exact-under-a-thousand"),
+            pytest.param(50_000, 245, 0, "The rest is 1 read of about 2,000 characters.", id="rounds-down-to-thousands"),
+            pytest.param(50_000, 255, 0, "The rest is 1 read of about 3,000 characters.", id="rounds-up-to-thousands"),
+            pytest.param(100, 30, 0, "The rest is 3 reads of about 300 characters.", id="counts-every-read"),
+            pytest.param(100, 30, 5, "The rest is 3 reads of about 250 characters.", id="counts-only-what-is-not-inlined"),
+        ],
+    )
+    def test_the_block_states_the_reads_and_about_how_many_characters_they_hold(
+        self, monkeypatch, char_limit, line_count, line_allowance, stated
+    ):
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", char_limit)
+        scope = self._lines_of_ten(line_count)
+        section = _mod.render_scope_section(
+            scope, SCOPE_FILE, line_allowance=line_allowance, char_allowance=10**9
+        )
+        assert section.remaining_reads
+        [line] = [line for line in section.text.split("\n") if line.startswith("The rest is ")]
+        assert line.startswith(stated + " ")
+
     def test_no_scoped_diff_file_means_nothing_is_cut(self):
         """With no file written there is nothing a cut could name."""
         section = _mod.render_scope_section(self.SCOPE, None, line_allowance=0, char_allowance=0)
@@ -1387,40 +1444,65 @@ class TestFitScopeToOneRead:
         )
 
     @pytest.mark.parametrize(
-        ("scope", "line_limits", "char_limits", "min_reads"),
+        "longer_wording",
         [
-            # Diff-like lines over a coarse grid of both limits: pins the
-            # line reserve.
+            pytest.param("paced", id="as-built"),
+            # The reserve holds the longer of the two read instructions, not
+            # the one the widest block happens to use: swapped, a widest block
+            # of paced reads is shorter than a cut naming two reads first.
+            pytest.param("read-first", id="wordings-swapped"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("scope", "scope_file", "line_limits", "char_limits", "min_reads", "regimes"),
+        [
+            # Diff-like lines and a long scope-file path over a coarse grid
+            # of both limits: pins the line reserve however many reads the
+            # block names, in both wordings.
             pytest.param(
                 "=== REVIEW SCOPE ===\n=== DIFFS ===\n"
                 + "\n".join(f"+{i:04d} " + "y" * (30 + i % 17) for i in range(1000)) + "\n",
+                "/" + "a-deeply-nested-run-directory/" * 8 + "reviewers/code/scoped-diff.patch",
                 range(40, 700, 23),
                 range(4000, 40000, 1700),
-                10,
+                3,
+                {("paced", "paced"), ("paced", "read-first")},
                 id="diff-lines-both-limits",
             ),
             # One-character hunk lines under every character limit in a
             # range: a cut can then end on any character, which pins the
             # reserve for the block's numbers growing wider than the widest
-            # block's.
+            # block's and for the wording a cut with fewer reads switches
+            # to. The path is short so a read the cut drops cannot pay for
+            # either.
             pytest.param(
                 "\n".join("+" if i % 3 else "-" for i in range(1200)) + "\n",
+                "/f",
                 [10**6],
-                range(1500, 4000),
+                range(700, 4000),
                 1,
+                {("read-first", "read-first"), ("paced", "paced"), ("paced", "read-first")},
                 id="short-lines-every-char-limit",
             ),
         ],
     )
     def test_the_cut_fits_whenever_the_rest_and_the_widest_block_do(
-        self, monkeypatch, scope, line_limits, char_limits, min_reads
+        self, monkeypatch, scope, scope_file, line_limits, char_limits, min_reads, regimes, longer_wording
     ):
         """The continuation block is reserved at its widest, the one naming
-        every read, so however many reads a long scope-file path and a large
-        scope need, the cut briefing still comes back in one Read."""
-        scope_file = "/" + "a-deeply-nested-run-directory/" * 8 + "reviewers/code/scoped-diff.patch"
+        every read, and at the longer read instruction a cut can switch to,
+        so however many reads a long scope-file path and a large scope need,
+        and whichever wording the cut's read count selects, the cut briefing
+        still comes back in one Read."""
+        if longer_wording == "read-first":
+            monkeypatch.setattr(_mod, "_READ_FIRST_WORDING", _mod._PACED_WORDING)
+            monkeypatch.setattr(_mod, "_PACED_WORDING", "Read these in order:")
         build = self._build_like_build_output
-        checked_cuts = 0
+        cuts = collections.Counter()
+
+        def regime(section):
+            return "paced" if len(section.remaining_reads) > _mod.READ_FIRST_MAX_READS else "read-first"
+
         for line_limit in line_limits:
             for char_limit in char_limits:
                 monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", line_limit)
@@ -1437,8 +1519,12 @@ class TestFitScopeToOneRead:
                     kept = len(inline[:-2].split("\n")) if inline else 0
                     _assert_reads_fetch_exactly_the_rest(section, scope, kept=kept, scope_file=scope_file)
                     if kept and len(widest.remaining_reads) >= min_reads:
-                        checked_cuts += 1
-        assert checked_cuts > 20, f"the sweep must exercise cuts that keep scope and name {min_reads}+ reads"
+                        cuts[regime(widest), regime(section)] += 1
+        for pair in regimes:
+            assert cuts[pair] > 20, (
+                f"the sweep must exercise cuts that keep scope with a widest block of "
+                f"{pair[0]} reads and a cut of {pair[1]} reads; saw {dict(cuts)}"
+            )
 
     def test_diff_line_counts_wider_than_the_file_are_reserved_for(self, monkeypatch):
         """count_diff_lines() splits on bare CRs, which the Read tool does not,

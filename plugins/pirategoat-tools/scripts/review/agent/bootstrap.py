@@ -211,6 +211,35 @@ def _chunk_reads(lines: List[str], first_line: int) -> List[Tuple[int, int]]:
     return reads
 
 
+# Up to this many named reads, the reviewer reads the rest before reviewing:
+# two reads is about 45K tokens on top of a ~22K-token briefing. Past it the
+# reads are paced, each part reviewed before the next, since the old unpaced
+# hint left most of the file unread in run C.
+READ_FIRST_MAX_READS = 2
+
+_READ_FIRST_WORDING = "Read the rest now, with exactly these calls, before reviewing:"
+_PACED_WORDING = "Make these calls in order, reviewing each part before the next, and skip none:"
+# Text that tokenizes densely can pass the Read tool's token cap under the
+# character limit a read is chunked to, so a named read can still come back
+# partial.
+_PARTIAL_READ_WORDING = (
+    "If one of these reads comes back partial, continue from the offset "
+    "the Read tool's notice names before the next listed call."
+)
+
+
+def _read_instruction(read_count: int) -> str:
+    """How the continuation block asks for its `read_count` named reads."""
+    return _READ_FIRST_WORDING if read_count <= READ_FIRST_MAX_READS else _PACED_WORDING
+
+
+def _about(chars: int) -> int:
+    """`chars` as the block states it: exact under a thousand, else to the
+    nearest thousand. Never smaller for a larger count, so a cut's stated
+    size is never wider than the widest block's."""
+    return chars if chars < 1000 else (chars + 500) // 1000 * 1000
+
+
 def render_scope_section(
     scope_output: str,
     scope_file: Optional[str],
@@ -226,8 +255,11 @@ def render_scope_section(
     _WARNING_LINE_COUNT lines are the line-number warning. The reviewer's
     next action is then a specific call, not a guess: run C's reviewers
     left 69 to 100 % of the file unread when the old block said only
-    "Read with offset/limit to continue". `scope_file` is None when no
-    scoped-diff file was written; nothing is cut then, since a cut would
+    "Read with offset/limit to continue". The block states how many reads
+    the rest is and about how many characters they hold, asks for them
+    before reviewing up to READ_FIRST_MAX_READS and paced past it, and says
+    how to resume a read that comes back partial. `scope_file` is None when
+    no scoped-diff file was written; nothing is cut then, since a cut would
     name a file that is not there.
     """
     count = _scope_mod.count_diff_lines
@@ -248,15 +280,20 @@ def render_scope_section(
         return whole
     inline = "\n".join(scope_lines[:kept])
     carried = count(inline)
-    reads = _chunk_reads(scope_lines[kept:], _WARNING_LINE_COUNT + kept + 1)
+    rest = scope_lines[kept:]
+    reads = _chunk_reads(rest, _WARNING_LINE_COUNT + kept + 1)
+    rest_chars = sum(len(line) + 1 for line in rest)
     block = [
         "=== SCOPE CONTINUES IN FILE ===",
         f"Inlined above: {kept} of {len(scope_lines)} scope lines "
         f"({carried} of {total_lines} diff lines).",
         f"The whole scope is in {scope_file}; its first {_WARNING_LINE_COUNT} lines are a "
-        "line-number warning. Read the rest now, with exactly these calls, before reviewing:",
+        "line-number warning.",
+        f"The rest is {len(reads)} {'read' if len(reads) == 1 else 'reads'} of about "
+        f"{_about(rest_chars):,} characters. {_read_instruction(len(reads))}",
     ]
     block += [f"  Read {scope_file} offset={offset} limit={limit}" for offset, limit in reads]
+    block.append(_PARTIAL_READ_WORDING)
     text = (inline + "\n\n" if kept else "") + "\n".join(block) + "\n"
     return ScopeSection(text, carried, total_lines, reads)
 
@@ -269,7 +306,7 @@ _CUT_EXTRA_LINES = 2
 _CUT_EXTRA_CHARS = 1
 
 
-def _continuation_digit_growth(widest: ScopeSection, scope_line_count: int) -> int:
+def _continuation_growth(widest: ScopeSection, scope_line_count: int) -> int:
     """Characters a cut's continuation block can add to the widest block's.
 
     The widest block states 0 lines kept and 0 diff lines carried, and its
@@ -279,9 +316,18 @@ def _continuation_digit_growth(widest: ScopeSection, scope_line_count: int) -> i
     two per read. Every number is at most the scoped-diff file's line count
     or the scope's diff-line total, and the total can be the larger:
     count_diff_lines() splits on bare CRs, which the Read tool does not.
+    The read count and the stated size are the widest block's at most.
+
+    Fewer reads can also switch the read instruction: a widest block past
+    READ_FIRST_MAX_READS is paced while a cut naming fewer can ask for its
+    reads first, so the reserve holds the longer of the wordings a cut can
+    use, whichever that is.
     """
     widest_digits = len(str(max(_WARNING_LINE_COUNT + scope_line_count, widest.total_lines)))
-    return (2 + 2 * len(widest.remaining_reads)) * (widest_digits - 1)
+    digit_growth = (2 + 2 * len(widest.remaining_reads)) * (widest_digits - 1)
+    own_wording = len(_read_instruction(len(widest.remaining_reads)))
+    wording_growth = max(len(_read_instruction(1)), own_wording) - own_wording
+    return digit_growth + wording_growth
 
 
 def fit_scope_to_one_read(
@@ -308,7 +354,7 @@ def fit_scope_to_one_read(
     rest_newlines = output.count("\n") - section.text.count("\n")
     rest_chars = len(output) - len(section.text)
     widest = render_scope_section(scope_output, scope_file, line_allowance=0, char_allowance=0)
-    growth = _continuation_digit_growth(widest, len(_read_tool_lines(scope_output)))
+    growth = _continuation_growth(widest, len(_read_tool_lines(scope_output)))
     section = render_scope_section(
         scope_output,
         scope_file,
@@ -1528,7 +1574,7 @@ def build_output(
 # enough to push the rest past Read's limit would otherwise leave the
 # OUTPUT INSTRUCTIONS — the save and finalize contract — unread. The last
 # sentence names the one set of further Reads a briefing may ask for: the
-# exact calls a cut scope lists.
+# exact calls a cut scope lists, paced as that block says.
 BRIEFING_STUB_GUIDANCE = (
     "Read the BRIEFING file in full: one Read call, no offset/limit. "
     "It is your complete briefing: review rules, review scope, and output "
@@ -1536,8 +1582,8 @@ BRIEFING_STUB_GUIDANCE = (
     "offset reads to the end of the file — the output instructions are the "
     "last section, and you cannot save a review without them. "
     "Follow it; do not read run artifacts by hand. "
-    "If the briefing ends its scope with SCOPE CONTINUES IN FILE, make exactly "
-    "the Read calls it lists before reviewing."
+    "If the briefing ends its scope with SCOPE CONTINUES IN FILE, make the "
+    "Read calls it lists, as it says."
 )
 
 # What a reviewer with an empty scope is told instead. Bootstrap has already
