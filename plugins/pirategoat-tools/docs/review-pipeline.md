@@ -139,7 +139,7 @@ Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/`; an 
         │   ├── review.json
         │   ├── review.md
         │   ├── scope-summary.json                             # plus scope-summary-<domain>.json
-        │   ├── scoped-diff.patch
+        │   ├── scoped-diff.patch                              # the whole scoped diff, always written; the briefing inlines all of it when the briefing fits one Read, else lists the exact Read calls for the rest
         │   └── started
         ├── synthesis/
         │   ├── reconciliation-context.json                    # schema 4; carries orchestrator_notes

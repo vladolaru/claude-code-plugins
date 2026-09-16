@@ -78,7 +78,7 @@ Each rule names the test that holds it where one exists. One clause of why; the 
 
 **Shared protocols.** Bootstrap includes `reviewer-protocol.md` by a skip-list of the sections it replaces with concrete values (`## Step 0`, `## Scope Discovery`, `## Output Directory`, `## ReviewOutputBuilder API`, `## File-Based Output`). Text in a skipped section reaches no reviewer, so behavioral policy never goes there; policy about what an agent does with a scope result belongs in `bootstrap.build_output()`, or, for a status that ends the review before the briefing is read, in bootstrap's stdout (`deliver_briefing()`'s stub, or the error output) and the agent definition's setup paragraph. `TestReviewClaimableContractIsDelivered`, `TestBriefingFileDelivery` and `TestEveryReviewerMandatesBootstrap` guard this.
 
-**Bootstrap facts arrive as parameters.** `build_output()` never re-derives a fact from the rendered `scope_output` text; every fact it needs (`review_claimable_count`, `has_php`, and whatever comes next) is a required parameter computed from a structured source, so a reformat of scope.py's text cannot flip a reviewer's briefing. `TestDynamicDispatchRisk` guards this.
+**Bootstrap facts arrive as parameters.** `build_output()` never re-derives a fact from the rendered `scope_section` text; every fact it needs (`review_claimable_count`, `has_php`, and whatever comes next) is a required parameter computed from a structured source, so a reformat of scope.py's text cannot flip a reviewer's briefing. `TestDynamicDispatchRisk` guards this.
 
 **Prompt order.** Bootstrap's prompt is REVIEW RULES, context sections, REVIEW CONTENT, OUTPUT INSTRUCTIONS, in that order (primacy for rules, recency for output). Keep it when editing `bootstrap.py` or the protocols.
 

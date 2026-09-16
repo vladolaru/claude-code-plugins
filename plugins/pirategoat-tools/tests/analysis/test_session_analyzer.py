@@ -52,7 +52,7 @@ def _real_bootstrap_builder_command(tmp_path, *, plugin_version=""):
         status="OK",
         review_rules="",
         domain_rules=None,
-        scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+        scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
         exploration_scope=None,
         output_dir=str(tmp_path),
         pr_number="42",

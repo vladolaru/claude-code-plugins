@@ -157,7 +157,7 @@ def test_build_output_includes_host_section_when_provided():
     output = bootstrap.build_output(
         agent_name="test", plugin_root="/tmp/plugin", status="OK",
         review_rules="rules", domain_rules=None,
-        scope_output="=== REVIEW SCOPE ===\n(empty)",
+        scope_section="=== REVIEW SCOPE ===\n(empty)",
         exploration_scope=None, output_dir="/tmp",
         pr_number=None, reviewer_name="test",
         review_claimable_count=0,

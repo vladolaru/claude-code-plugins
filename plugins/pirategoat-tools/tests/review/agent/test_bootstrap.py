@@ -910,7 +910,7 @@ class TestChangePurposeInjection:
             status="OK",
             review_rules="Rules here",
             domain_rules=None,
-            scope_output="scope",
+            scope_section="scope",
             exploration_scope=None,
             output_dir="/tmp/test",
             pr_number="1",
@@ -929,7 +929,7 @@ class TestChangePurposeInjection:
         )
         output = build_output(
             agent_name="security-reviewer", plugin_root="/fake", status="OK",
-            review_rules="Rules here", domain_rules=None, scope_output="scope",
+            review_rules="Rules here", domain_rules=None, scope_section="scope",
             exploration_scope=None, output_dir="/tmp/test", pr_number="1",
             reviewer_name="security", review_claimable_count=0, has_php=False,
             change_purpose=purpose,
@@ -944,7 +944,7 @@ class TestChangePurposeInjection:
         )
         output = build_output(
             agent_name="security-reviewer", plugin_root="/fake", status="OK",
-            review_rules="Rules here", domain_rules=None, scope_output="scope",
+            review_rules="Rules here", domain_rules=None, scope_section="scope",
             exploration_scope=None, output_dir="/tmp/test", pr_number="1",
             reviewer_name="security", review_claimable_count=0, has_php=False,
             change_purpose=purpose,
@@ -956,7 +956,7 @@ class TestChangePurposeInjection:
     def test_an_unstructured_purpose_gets_no_tier_sentence(self):
         output = build_output(
             agent_name="security-reviewer", plugin_root="/fake", status="OK",
-            review_rules="Rules here", domain_rules=None, scope_output="scope",
+            review_rules="Rules here", domain_rules=None, scope_section="scope",
             exploration_scope=None, output_dir="/tmp/test", pr_number="1",
             reviewer_name="security", review_claimable_count=0, has_php=False,
             change_purpose="Adds retry logic to the payment gateway.",
@@ -1006,7 +1006,7 @@ class TestCoverageNoteInjection:
             status="OK",
             review_rules="Rules here",
             domain_rules=None,
-            scope_output="scope",
+            scope_section="scope",
             exploration_scope=None,
             output_dir="/tmp/test",
             pr_number="1",
@@ -1026,7 +1026,7 @@ class TestCoverageNoteInjection:
             status="OK",
             review_rules="Rules here",
             domain_rules=None,
-            scope_output="scope",
+            scope_section="scope",
             exploration_scope=None,
             output_dir="/tmp/test",
             pr_number="1",
@@ -1143,7 +1143,7 @@ class TestBudgetBriefingText:
             status="OK",
             review_rules="Rules here",
             domain_rules=None,
-            scope_output=scope_output,
+            scope_section=scope_output,
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="1",
@@ -1185,6 +1185,268 @@ class TestBudgetBriefingText:
         output = self._output(tmp_path, scope_output="=== FILES ===\nsrc/a.ts  (+10 -2)\n",
                               budget=40, capped=False)
         assert "coverage gap, not efficiency" not in output
+
+
+# =============================================================================
+# Scope section: the whole scope when the briefing fits one Read, else an
+# inline prefix plus the exact Read calls that fetch the rest
+# =============================================================================
+
+SCOPE_FILE = "/run/reviewers/code/scoped-diff.patch"
+
+
+def _read_tool_lines(text):
+    """`text` split the way the Read tool numbers lines: on "\\n" only."""
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _assert_reads_fetch_exactly_the_rest(section, scope, kept, scope_file=SCOPE_FILE):
+    """The named reads start at the first scope line the briefing did not
+    inline, run contiguously to the file's last line, and each is one the
+    Read tool returns whole: at most the line limit and, unless it is a
+    single line, at most the character limit."""
+    file_lines = _read_tool_lines(_mod.READ_LINE_NUMBER_WARNING + scope)
+    listed = section.text.split("\n")
+    expected_offset = _mod.READ_LINE_NUMBER_WARNING.count("\n") + kept + 1
+    for offset, limit in section.remaining_reads:
+        assert offset == expected_offset
+        chunk = file_lines[offset - 1 : offset - 1 + limit]
+        assert len(chunk) == limit
+        assert limit <= _mod.BRIEFING_READ_LINE_LIMIT
+        assert limit == 1 or sum(len(line) + 1 for line in chunk) <= _mod.BRIEFING_READ_CHAR_LIMIT
+        assert f"  Read {scope_file} offset={offset} limit={limit}" in listed
+        expected_offset += limit
+    assert expected_offset == len(file_lines) + 1
+
+
+class TestRenderScopeSection:
+    """The briefing carries the whole scope when allowed, or a prefix plus
+    the exact Read calls that fetch the rest. Counts are hunk lines
+    (`^[+-]`, not `+++`/`---`), the same rule scope.py's sidecar uses, so
+    the carried count and the sidecar's fetched count are comparable.
+    Offsets are 1-based line numbers, as the Read tool counts them."""
+
+    SCOPE = (
+        "=== REVIEW SCOPE ===\n"
+        "STATUS: OK\n"
+        "=== FILES ===\n"
+        "src/a.py  (+3 -1)\n"
+        "=== DIFFS ===\n"
+        "--- src/a.py ---\n"
+        "@@ -1,2 +1,4 @@\n"
+        "+one\n"
+        "+two\n"
+        "-gone\n"
+        "+three\n"
+    )
+
+    def test_whole_scope_when_no_allowance(self):
+        section = _mod.render_scope_section(self.SCOPE, SCOPE_FILE)
+        assert section.text == self.SCOPE
+        assert section.carried_lines == 4
+        assert section.total_lines == 4
+        assert section.remaining_reads == []
+
+    def test_whole_scope_when_it_fits_the_allowance(self):
+        section = _mod.render_scope_section(
+            self.SCOPE, SCOPE_FILE, line_allowance=11, char_allowance=10_000
+        )
+        assert section.text == self.SCOPE
+        assert section.remaining_reads == []
+
+    def test_line_allowance_cuts_and_names_the_rest(self):
+        section = _mod.render_scope_section(
+            self.SCOPE, SCOPE_FILE, line_allowance=8, char_allowance=10_000
+        )
+        kept = self.SCOPE.split("\n")[:8]
+        assert section.text.startswith("\n".join(kept) + "\n\n=== SCOPE CONTINUES IN FILE ===\n")
+        assert "Inlined above: 8 of 11 scope lines (1 of 4 diff lines)." in section.text
+        assert section.carried_lines == 1          # only "+one" among the first 8 lines
+        assert section.total_lines == 4
+        warning_lines = _mod.READ_LINE_NUMBER_WARNING.count("\n")
+        # The scoped-diff file starts with the line-number warning, and the
+        # 9th scope line is the first not inlined: file line warning + 9.
+        assert section.remaining_reads == [(warning_lines + 9, 3)]
+        assert f"  Read {SCOPE_FILE} offset={warning_lines + 9} limit=3" in section.text.split("\n")
+        _assert_reads_fetch_exactly_the_rest(section, self.SCOPE, kept=8)
+
+    def test_char_allowance_cuts_on_whole_lines(self):
+        section = _mod.render_scope_section(
+            self.SCOPE, SCOPE_FILE, line_allowance=100, char_allowance=40
+        )
+        assert section.text.startswith("=== REVIEW SCOPE ===\nSTATUS: OK\n\n=== SCOPE CONTINUES IN FILE ===")
+        assert section.remaining_reads[0][0] == 2 + _mod.READ_LINE_NUMBER_WARNING.count("\n") + 1
+        _assert_reads_fetch_exactly_the_rest(section, self.SCOPE, kept=2)
+
+    def test_remaining_reads_are_chunked_at_the_read_limit(self):
+        big = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(4500)) + "\n"
+        section = _mod.render_scope_section(
+            big, SCOPE_FILE, line_allowance=100, char_allowance=10**9
+        )
+        assert [limit for _, limit in section.remaining_reads] == [2000, 2000, 402]
+        _assert_reads_fetch_exactly_the_rest(section, big, kept=100)
+
+    def test_remaining_reads_are_chunked_by_characters_too(self, monkeypatch):
+        """The Read tool returns a partial page past its token cap long before
+        2,000 lines of diff, so a read is also held to the character limit,
+        and a line longer than that limit is a read of its own."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 100)
+        lines = [f"+line {i:03d}" for i in range(30)]   # 10 characters with the newline
+        lines.insert(12, "+" + "x" * 249)
+        scope = "=== REVIEW SCOPE ===\n" + "\n".join(lines) + "\n"
+        section = _mod.render_scope_section(scope, SCOPE_FILE, line_allowance=0, char_allowance=0)
+        # The 21-character header plus 7 lines; the 5 lines before the long
+        # one; the long line alone; then 10 lines per 100 characters.
+        assert [limit for _, limit in section.remaining_reads] == [8, 5, 1, 10, 8]
+        long_offset = section.remaining_reads[2][0]
+        assert _read_tool_lines(_mod.READ_LINE_NUMBER_WARNING + scope)[long_offset - 1] == lines[12]
+        _assert_reads_fetch_exactly_the_rest(section, scope, kept=0)
+
+    @pytest.mark.parametrize("separator", ["\x0c", " ", "\x85", "\r"])
+    def test_offsets_count_only_newlines_as_line_ends(self, separator):
+        """str.splitlines() also breaks on form feed, U+2028, NEL and a bare
+        CR, which the Read tool does not; one such character in a diff line
+        must not shift the offsets named after it."""
+        scope = (
+            "=== REVIEW SCOPE ===\n"
+            f"+page one{separator}page two\n"
+            "+kept\n"
+            "+first not inlined\n"
+            "+last\n"
+        )
+        section = _mod.render_scope_section(scope, SCOPE_FILE, line_allowance=3, char_allowance=10_000)
+        offset = section.remaining_reads[0][0]
+        assert _read_tool_lines(_mod.READ_LINE_NUMBER_WARNING + scope)[offset - 1] == "+first not inlined"
+        _assert_reads_fetch_exactly_the_rest(section, scope, kept=3)
+
+    def test_zero_allowance_inlines_nothing_but_the_reads(self):
+        section = _mod.render_scope_section(
+            self.SCOPE, SCOPE_FILE, line_allowance=0, char_allowance=0
+        )
+        assert section.carried_lines == 0
+        assert section.text.startswith("=== SCOPE CONTINUES IN FILE ===\n")
+        assert "Inlined above: 0 of 11 scope lines (0 of 4 diff lines)." in section.text
+        _assert_reads_fetch_exactly_the_rest(section, self.SCOPE, kept=0)
+
+    def test_no_scoped_diff_file_means_nothing_is_cut(self):
+        """With no file written there is nothing a cut could name."""
+        section = _mod.render_scope_section(self.SCOPE, None, line_allowance=0, char_allowance=0)
+        assert section.text == self.SCOPE
+        assert section.carried_lines == 4
+        assert section.remaining_reads == []
+
+
+class TestFitScopeToOneRead:
+    """The briefing is built with the whole scope and cut only when the Read
+    tool would not return it whole, to what the rest of the briefing leaves."""
+
+    @staticmethod
+    def _build_like_build_output(section):
+        """The shape build_output() gives the section: text around it and a
+        last line with no newline."""
+        return "\n".join(["RULES"] * 20 + [section, "", "OUTPUT"])
+
+    def test_whole_scope_when_the_briefing_fits(self):
+        build = lambda section: "RULES\n" + section + "\nOUTPUT\n"
+        output, section = _mod.fit_scope_to_one_read(build, TestRenderScopeSection.SCOPE, "/f")
+        assert section.remaining_reads == []
+        assert output == build(TestRenderScopeSection.SCOPE)
+
+    def test_scope_is_cut_to_what_the_rest_of_the_briefing_leaves(self, monkeypatch):
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 40)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 10**6)
+        rest = "\n".join(f"rule {i}" for i in range(20)) + "\n"
+        build = lambda section: rest + section + "OUTPUT\n"
+        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(60)) + "\n"
+        output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+        assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
+        assert section.remaining_reads, "the scope did not fit, so reads must be named"
+        assert output == build(section.text)
+        kept = section.text.split("\n\n=== SCOPE CONTINUES IN FILE ===")[0].split("\n")
+        assert 0 < len(kept) < 62
+        assert section.carried_lines == len(kept) - 2
+        _assert_reads_fetch_exactly_the_rest(section, scope, kept=len(kept), scope_file="/f")
+
+    def test_the_cut_is_by_size_too(self, monkeypatch):
+        # The whole briefing here is about 1,840 characters with the warning
+        # header; 1,500 leaves room for the continuation block and part of
+        # the scope.
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 10**6)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 1500)
+        build = lambda section: ("r" * 200) + "\n" + section + "OUTPUT\n"
+        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join("+" + ("x" * 30) for _ in range(40)) + "\n"
+        output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+        assert len(_mod.READ_LINE_NUMBER_WARNING + output) <= 1500
+        assert 0 < section.carried_lines < 40
+        assert section.remaining_reads
+        _assert_reads_fetch_exactly_the_rest(
+            section, scope, kept=section.carried_lines + 2, scope_file="/f"
+        )
+
+    @pytest.mark.parametrize(
+        ("scope", "line_limits", "char_limits", "min_reads"),
+        [
+            # Diff-like lines over a coarse grid of both limits: pins the
+            # line reserve.
+            pytest.param(
+                "=== REVIEW SCOPE ===\n=== DIFFS ===\n"
+                + "\n".join(f"+{i:04d} " + "y" * (30 + i % 17) for i in range(1000)) + "\n",
+                range(40, 700, 23),
+                range(4000, 40000, 1700),
+                10,
+                id="diff-lines-both-limits",
+            ),
+            # One-character hunk lines under every character limit in a
+            # range: a cut can then end on any character, which pins the
+            # reserve for the block's numbers growing wider than the widest
+            # block's.
+            pytest.param(
+                "\n".join("+" if i % 3 else "-" for i in range(1200)) + "\n",
+                [10**6],
+                range(1500, 4000),
+                1,
+                id="short-lines-every-char-limit",
+            ),
+        ],
+    )
+    def test_the_cut_fits_whenever_the_rest_and_the_widest_block_do(
+        self, monkeypatch, scope, line_limits, char_limits, min_reads
+    ):
+        """The continuation block is reserved at its widest, the one naming
+        every read, so however many reads a long scope-file path and a large
+        scope need, the cut briefing still comes back in one Read."""
+        scope_file = "/" + "a-deeply-nested-run-directory/" * 8 + "reviewers/code/scoped-diff.patch"
+        build = self._build_like_build_output
+        checked_cuts = 0
+        for line_limit in line_limits:
+            for char_limit in char_limits:
+                monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", line_limit)
+                monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", char_limit)
+                widest = _mod.render_scope_section(scope, scope_file, line_allowance=0, char_allowance=0)
+                if not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text)):
+                    continue
+                output, section = _mod.fit_scope_to_one_read(build, scope, scope_file)
+                where = f"line limit {line_limit}, char limit {char_limit}"
+                assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output), where
+                assert output == build(section.text), where
+                if section.remaining_reads:
+                    inline = section.text.split("=== SCOPE CONTINUES IN FILE ===")[0]
+                    kept = len(inline[:-2].split("\n")) if inline else 0
+                    _assert_reads_fetch_exactly_the_rest(section, scope, kept=kept, scope_file=scope_file)
+                    if kept and len(widest.remaining_reads) >= min_reads:
+                        checked_cuts += 1
+        assert checked_cuts > 20, f"the sweep must exercise cuts that keep scope and name {min_reads}+ reads"
+
+    def test_no_scoped_diff_file_means_the_scope_rides_whole(self, monkeypatch):
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 5)
+        output, section = _mod.fit_scope_to_one_read(
+            self._build_like_build_output, "(No scope discovery)", None
+        )
+        assert section.text == "(No scope discovery)"
+        assert output == self._build_like_build_output("(No scope discovery)")
 
 
 class TestBuildErrorOutput:
@@ -1350,7 +1612,7 @@ class TestAdditionalInstructionsInjection:
             status="OK",
             review_rules="Rules here",
             domain_rules=None,
-            scope_output="scope",
+            scope_section="scope",
             exploration_scope=None,
             output_dir="/tmp/test",
             pr_number="1",
@@ -1370,7 +1632,7 @@ class TestAdditionalInstructionsInjection:
             status="OK",
             review_rules="Rules here",
             domain_rules=None,
-            scope_output="scope",
+            scope_section="scope",
             exploration_scope=None,
             output_dir="/tmp/test",
             pr_number="1",

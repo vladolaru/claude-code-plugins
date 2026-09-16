@@ -167,6 +167,8 @@ Direct contract tests preserve the three-owner boundary: pipeline config plus th
 
 Deterministic pytest suite. Tests `review/agent/bootstrap.py` pure functions by importing them directly — `extract_protocol_sections`, `build_output`, `compute_review_budget`, `load_pr_intent`, and others. No network or model calls.
 
+`TestRenderScopeSection` and `TestFitScopeToOneRead` pin how a briefing's scope is cut to what one Read call returns and the exact 1-based `offset`/`limit` reads named for the rest, and the integration suite's `TestBriefingFitsOneRead` pins the same path through `main()` (the scoped diff written, the Read calls matching the file, telemetry's carried count); `BRIEFING_READ_LINE_LIMIT` and `BRIEFING_READ_CHAR_LIMIT` rest on the live Read-tool measurements of 2026-09-16 recorded beside them in `bootstrap.py`.
+
 ### Bootstrap Integration Tests (`review/agent/test_bootstrap_integration.py`)
 
 Integration tests that run `review/agent/bootstrap.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7). Parameterized classes expand into more than one collected test per row (`TestSmokeAllAgents` is one method run over every registered agent) — run `pytest --collect-only` for real counts rather than trusting written numbers here.
@@ -178,7 +180,8 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestSmokeAllAgents` | Every registered agent exits 0 — the ONE legitimate ALL_AGENTS parameterization (validates registry correctness) |
 | `TestErrorCases` | Unknown agent exits 1 with structured error output |
 | `TestReviewOutputBuilderAPIExample` | Section 3 includes complete builder API usage example (direct `build_output()` call) |
-| `TestBootstrapOutputSizeCap` | Large scope truncated with file reference; small scope inline (direct `build_output()` call) |
+| `TestBriefingFitsOneRead` | A small scope rides whole and the scoped diff holds exactly it; a scope past one Read (line limit forced through `PIRATEGOAT_BRIEFING_READ_LINE_LIMIT`, sized from a real briefing) keeps an inline prefix and names contiguous Read calls from the first line left out to the file's end; `agent_start`'s `scope.inline_lines` is the hunk-line count the briefing carried |
+| `TestScopeSectionRidesVerbatim` | `build_output()` places a whole or cut scope section unchanged at the head of REVIEW CONTENT (direct `build_output()` call) |
 | `TestDynamicDispatchRisk` | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK from the caller's `has_php` fact (PHP → high, no PHP → low); rendered scope text can't drive the decision in either direction (direct `build_output()` call); 3 end-to-end subprocess tests cover `main()`'s own `has_php` derivation, which the direct calls can't reach — including that a domain-excluded PHP test file (under `=== SKIPPED ===`) must not force `high` |
 | `TestOutputFilenameConsistency` | `save_draft()` replaces `reviewers/<reviewer>/review.draft.json`, then finalization publishes immutable `reviewers/<reviewer>/review.json` that bootstrap `OUTPUT_FILES` and reconciliation expect; delivered guidance names final output, never the draft or derived Markdown |
 | `TestBootstrapImportDoesNotBreakTelemetry` | Importing `review.agent.bootstrap` first (package-qualified) must leave a working `ReviewTelemetry` — pins the exact import-cycle regression `derive_reviewer_name`'s extraction to `reviewer_names.py` fixed (a same-package caller importing the name FROM bootstrap re-entered bootstrap mid-initialization and silently broke the telemetry load). Runs in a fresh subprocess since in-process `sys.modules` caching from other tests would mask it. |
@@ -817,7 +820,7 @@ If a function is importable and deterministic, test it as a unit test — don't 
 
 **Right layer:** Running a subprocess to verify that `returncode == 0` for every registered agent — this exercises the full `main()` orchestration path, which unit tests can't cover.
 
-The `build_output()`-based test classes (`TestReviewOutputBuilderAPIExample`, `TestBootstrapOutputSizeCap`, `TestOutputFilenameConsistency`) demonstrate the right pattern: import the function, call it directly, assert on the result. Fast and focused.
+The `build_output()`-based test classes (`TestReviewOutputBuilderAPIExample`, `TestScopeSectionRidesVerbatim`, `TestOutputFilenameConsistency`) demonstrate the right pattern: import the function, call it directly, assert on the result. Fast and focused.
 
 `TestDynamicDispatchRisk` deliberately mixes both layers: its direct `build_output()` tests pin the rendering contract, and its three trailing subprocess tests pin `main()`'s own `has_php` derivation — a fact the direct tests structurally cannot reach, since they supply it as a parameter.
 

@@ -764,7 +764,7 @@ class TestCanonicalExecutableBuilderSource:
             status="OK",
             review_rules=review_rules,
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -815,7 +815,7 @@ class TestCanonicalExecutableBuilderSource:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -874,7 +874,7 @@ class TestCanonicalExecutableBuilderSource:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -894,7 +894,7 @@ class TestCanonicalExecutableBuilderSource:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -918,7 +918,7 @@ class TestCanonicalExecutableBuilderSource:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -946,7 +946,7 @@ class TestCanonicalExecutableBuilderSource:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -977,7 +977,7 @@ class TestNotApplicableCompletionContract:
             status="OK",
             review_rules=review_rules,
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number=None,
@@ -1000,7 +1000,7 @@ class TestNotApplicableCompletionContract:
             status="OK",
             review_rules="",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number=None,
@@ -1051,7 +1051,7 @@ class TestNotApplicableCompletionContract:
                 status="OK",
                 review_rules="",
                 domain_rules=None,
-                scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+                scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
                 exploration_scope=None,
                 output_dir=str(output_dir),
                 pr_number="42",
@@ -1147,7 +1147,7 @@ class TestNotApplicableCompletionContract:
             status="OK",
             review_rules="",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(output_dir),
             pr_number="42",
@@ -1262,7 +1262,7 @@ class TestReviewOutputBuilderAPIExample:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="scope",
+            scope_section="scope",
             exploration_scope=None,
             output_dir=str(output_dir),
             pr_number="42",
@@ -1333,8 +1333,8 @@ class TestBriefingFileDelivery:
     def test_a_truncated_read_has_a_way_to_reach_the_output_contract(
         self, tmp_path
     ):
-        """Only the scope section is capped (`SCOPE_INLINE_CAP`); the PR
-        body and the repository's own rules ride in whole, on purpose. A
+        """The scope is cut by fit_scope_to_one_read() to what one Read
+        returns; the PR body and the repository's rules ride in whole. A
         briefing big enough for Read to answer partially would otherwise
         strand the reviewer before OUTPUT INSTRUCTIONS — the last section,
         and the only place the save and finalize contract is stated — with
@@ -1476,40 +1476,146 @@ class TestBriefingFileDelivery:
         assert "  COUNTS: critical: N, high: N, medium: N, low: N  (copied from DRAFT TOTALS)" in text
 
 
-class TestBootstrapOutputSizeCap:
-    """Bootstrap caps inline scope when output would exceed size threshold."""
+class TestBriefingFitsOneRead:
+    """The briefing either carries the whole scope or names the reads for
+    the rest, and telemetry records what it carried, not what scope
+    fetched. Run A, 2026-09-14: a 1,327-line scope was cut at 15 KB, and
+    the metric reported 487 inline diff lines where the briefing held 79."""
 
-    def _build_large_output(self, scope_size_kb=50, output_dir=None):
-        """Helper: build output with a scope of the given KB size."""
-        if output_dir is None:
-            import tempfile
-            output_dir = tempfile.mkdtemp()
-        large_scope = "x" * (scope_size_kb * 1024)
-        return build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules here",
-            domain_rules=None,
-            scope_output=large_scope,
-            exploration_scope=None,
-            output_dir=output_dir,
-            pr_number="42",
-            reviewer_name="security",
-            review_claimable_count=0,
-            has_php=False,
+    SECTION_2 = "--- Section 2: REVIEW CONTENT (what to review) ---"
+    # What build_output() can place after the scope section, in order.
+    AFTER_SCOPE = (
+        "\n=== EXPLORATION SCOPE ===",
+        "\n=== FILE HISTORY ===",
+        "\nDYNAMIC_DISPATCH_RISK:",
+        "\n--- Section 3: OUTPUT INSTRUCTIONS",
+    )
+
+    @staticmethod
+    def _hunk_lines(text):
+        return sum(
+            1 for line in text.splitlines()
+            if (line.startswith("+") and not line.startswith("+++"))
+            or (line.startswith("-") and not line.startswith("---"))
         )
 
-    def test_small_scope_included_inline(self, tmp_path):
-        """Scope under threshold is included inline (no change from current behavior)."""
-        small_scope = "diff content here\n" * 100  # ~2KB
+    @staticmethod
+    def _read_tool_lines(text):
+        """Lines as the Read tool numbers them: split on "\\n" only."""
+        lines = text.split("\n")
+        if lines[-1] == "":
+            lines.pop()
+        return lines
+
+    def _scope_block(self, briefing):
+        """The scope section alone: from the scope's own header, the first
+        after the REVIEW CONTENT marker, to the first thing build_output()
+        places after it."""
+        start = briefing.index("=== REVIEW SCOPE ===", briefing.index(self.SECTION_2))
+        ends = [briefing.find(marker, start) for marker in self.AFTER_SCOPE]
+        return briefing[start:min(end for end in ends if end != -1) + 1]
+
+    def _bootstrap(self, output_dir):
+        """Run performance-reviewer's bootstrap with a telemetry log; return
+        the result, the briefing file's text and the agent_start event."""
+        output_dir.mkdir(parents=True)
+        telemetry_log = output_dir / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        _write_telemetry_marker(output_dir, telemetry_log)
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(output_dir)
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        briefing = Path(stub_field(result.stdout, "BRIEFING")).read_text()
+        agent_start = next(
+            event
+            for event in map(json.loads, telemetry_log.read_text().splitlines())
+            if event.get("event") == "agent_start"
+        )
+        return result, briefing, agent_start
+
+    def test_a_small_scope_is_inlined_whole_and_counted(self, tmp_path):
+        _, briefing, agent_start = self._bootstrap(tmp_path / "out")
+
+        block = self._scope_block(briefing)
+        scoped = Path(scoped_diff_path(str(tmp_path / "out"), "performance"))
+        # Written for every reviewer whose scope ran, and here the briefing
+        # carries every line of it.
+        assert scoped.read_text().rstrip("\n") == (
+            _mod.READ_LINE_NUMBER_WARNING + block.rstrip("\n")
+        )
+        assert agent_start["scope"]["inline_lines"] == self._hunk_lines(block)
+        assert agent_start["scope"]["inline_lines"] > 0
+
+    def test_a_scope_past_one_read_names_the_exact_reads(self, tmp_path, monkeypatch):
+        # Size the line limit from a real briefing: everything outside the
+        # scope plus half of the scope, so the whole cannot fit and part of
+        # the scope still can.
+        _, probe, _ = self._bootstrap(tmp_path / "probe")
+        scope_lines = len(self._read_tool_lines(self._scope_block(probe)))
+        limit = len(self._read_tool_lines(probe)) - scope_lines + scope_lines // 2
+        monkeypatch.setenv("PIRATEGOAT_BRIEFING_READ_LINE_LIMIT", str(limit))
+
+        result, briefing, agent_start = self._bootstrap(tmp_path / "cut")
+
+        assert len(self._read_tool_lines(briefing)) <= limit
+        inline, continuation = self._scope_block(briefing).split(
+            "\n\n=== SCOPE CONTINUES IN FILE ===\n"
+        )
+        inline_lines = inline.split("\n")
+        assert inline_lines[0] == "=== REVIEW SCOPE ===" and len(inline_lines) > 1
+        reads = re.findall(r"^  Read (\S+) offset=(\d+) limit=(\d+)$", continuation, re.M)
+        assert reads
+        scoped = Path(scoped_diff_path(str(tmp_path / "cut"), "performance"))
+        assert {path for path, _, _ in reads} == {str(scoped)}
+        file_lines = self._read_tool_lines(scoped.read_text())
+        warning_lines = _mod.READ_LINE_NUMBER_WARNING.count("\n")
+        scope_in_file = file_lines[warning_lines:]
+        # The inline prefix is the file's scope, line for line, and the first
+        # named read (1-based offset) starts at the first line it left out...
+        assert inline_lines == scope_in_file[:len(inline_lines)]
+        first_offset = int(reads[0][1])
+        assert first_offset == len(inline_lines) + warning_lines + 1
+        assert file_lines[first_offset - 1] == scope_in_file[len(inline_lines)]
+        # ...and the reads run on without a gap to the file's last line.
+        next_offset = first_offset
+        for _, offset, count in reads:
+            assert int(offset) == next_offset
+            next_offset += int(count)
+        assert next_offset == len(file_lines) + 1
+        assert agent_start["scope"]["inline_lines"] == self._hunk_lines(inline)
+        assert 0 < agent_start["scope"]["inline_lines"] < self._hunk_lines(scoped.read_text())
+        # The stub tells the reviewer what the block asks of it.
+        assert "SCOPE CONTINUES IN FILE, make exactly the Read calls it lists" in result.stdout
+
+
+class TestScopeSectionRidesVerbatim:
+    """build_output() places the scope section it is given as it is, at the
+    head of REVIEW CONTENT's scope. Where the cut falls and which Read calls
+    it names are render_scope_section()'s and fit_scope_to_one_read()'s
+    (test_bootstrap.py::TestRenderScopeSection, ::TestFitScopeToOneRead);
+    that main() writes the scoped diff the cut names is
+    TestBriefingFitsOneRead's."""
+
+    @pytest.mark.parametrize("line_allowance", [None, 10], ids=["whole", "cut"])
+    def test_the_section_reaches_review_content_unchanged(self, tmp_path, line_allowance):
+        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "".join(f"+line {i}\n" for i in range(50))
+        section = _mod.render_scope_section(
+            scope, scoped_diff_path(tmp_path, "security"),
+            line_allowance=line_allowance, char_allowance=None,
+        )
         output = build_output(
             agent_name="security-reviewer",
             plugin_root="/fake/root",
             status="OK",
             review_rules="rules here",
             domain_rules=None,
-            scope_output=small_scope,
+            scope_section=section.text,
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -1517,56 +1623,9 @@ class TestBootstrapOutputSizeCap:
             review_claimable_count=0,
             has_php=False,
         )
-        assert small_scope in output
-
-    def test_large_scope_truncated(self):
-        """Scope over threshold is truncated with a file reference."""
-        output = self._build_large_output(scope_size_kb=50)
-        # The full 50KB scope should NOT be in the output
-        assert len(output) < 40 * 1024  # output should be well under 40KB total
-
-    def test_large_scope_has_file_reference(self, tmp_path):
-        """When scope is truncated, output tells agent where to read the full
-        scope and how to read it in slices."""
-        output = self._build_large_output(scope_size_kb=50, output_dir=str(tmp_path))
-        expected_path = Path(scoped_diff_path(tmp_path, "security"))
-        assert str(expected_path) in output
-        lower = output.lower()
-        assert "offset" in lower or "limit" in lower or "head" in lower
-
-    def test_large_scopes_are_namespaced_by_agent(self, tmp_path):
-        """Parallel reviewers retain distinct large scope files."""
-
-        def build(agent_name, reviewer_name, domain):
-            scope = f"DOMAIN: {domain}\n" + (f"{domain} diff line\n" * 2000)
-            return build_output(
-                agent_name=agent_name,
-                plugin_root="/fake/root",
-                status="OK",
-                review_rules="rules here",
-                domain_rules=None,
-                scope_output=scope,
-                exploration_scope=None,
-                output_dir=str(tmp_path),
-                pr_number="42",
-                reviewer_name=reviewer_name,
-                review_claimable_count=0,
-                has_php=False,
-            )
-
-        security_output = build("security-reviewer", "security", "security")
-        concurrency_output = build(
-            "concurrency-reviewer", "concurrency", "concurrency"
-        )
-        security_path = Path(scoped_diff_path(tmp_path, "security"))
-        concurrency_path = Path(scoped_diff_path(tmp_path, "concurrency"))
-
-        assert str(security_path) in security_output
-        assert str(concurrency_path) in concurrency_output
-        assert "DOMAIN: security" in security_path.read_text()
-        assert "DOMAIN: concurrency" not in security_path.read_text()
-        assert "DOMAIN: concurrency" in concurrency_path.read_text()
-        assert "DOMAIN: security" not in concurrency_path.read_text()
+        content = output.split("--- Section 2: REVIEW CONTENT (what to review) ---\n\n")[1]
+        assert content.startswith(section.text)
+        assert (section.remaining_reads == []) is (line_allowance is None)
 
 
 class TestDynamicDispatchRisk:
@@ -1575,7 +1634,7 @@ class TestDynamicDispatchRisk:
     has_php is a REQUIRED fact the caller supplies (main() derives it from
     telemetry_scope_paths — the same fact-based, sidecar-preferring path
     union used for scope telemetry and the review-claimable contract).
-    build_output() never parses scope_output for PHP filenames: the
+    build_output() never parses scope_section for PHP filenames: the
     text-inert rows below pin the failure mode that replaced, and the
     in-process main() rows pin the derivation itself.
     """
@@ -1588,7 +1647,7 @@ class TestDynamicDispatchRisk:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output=scope_output,
+            scope_section=scope_output,
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -1622,8 +1681,7 @@ class TestDynamicDispatchRisk:
             # not suppress high when the fact says PHP is in scope.
             pytest.param(
                 True,
-                "=== SCOPE TRUNCATED ===\n"
-                "Full scope written to external file; see it for details.\n",
+                "=== SCOPE CONTINUES IN FILE ===\nRead /x offset=9 limit=9\n",
                 "high",
                 id="garbled-text-cannot-suppress-high",
             ),
@@ -1905,7 +1963,7 @@ class TestOutputFilenameConsistency:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="scope",
+            scope_section="scope",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -1977,7 +2035,7 @@ class TestReviewClaimableContractIsDelivered:
     dropped the entire honesty contract, with no error and (because these
     tests hardcoded the same header text the regex expected) no test
     failure either. build_output() now receives review_claimable_count as
-    an explicit fact from the caller and never inspects scope_output for it.
+    an explicit fact from the caller and never inspects scope_section for it.
     """
 
     REVIEW_CLAIMABLE_SCOPE = (
@@ -1996,7 +2054,7 @@ class TestReviewClaimableContractIsDelivered:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output=scope_output,
+            scope_section=scope_output,
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
@@ -2028,7 +2086,7 @@ class TestReviewClaimableContractIsDelivered:
                 id="no-claimable-files",
             ),
             # Fix 606519ab: the count is the caller's fact, never a regex over
-            # scope_output. A renamed header cannot suppress a real count...
+            # scope_section. A renamed header cannot suppress a real count...
             pytest.param(
                 "=== REVIEW SCOPE ===\n"
                 "=== FILES ===\n"
@@ -2226,7 +2284,7 @@ class TestBuilderSnippetSignatures:
             status="OK",
             review_rules="rules",
             domain_rules=None,
-            scope_output="=== FILES ===\n=== DIFFS ===",
+            scope_section="=== FILES ===\n=== DIFFS ===",
             exploration_scope=None,
             output_dir=str(tmp_path),
             pr_number="42",
