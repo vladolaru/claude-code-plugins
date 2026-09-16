@@ -2843,6 +2843,9 @@ class TestLoadRuns:
         assert diagnostic["run"]["id"] != "duplicate-run"
         assert diagnostic["warnings"] == ["duplicate_run_id_conflict"]
         assert set(measured["metric_availability"].values()) == {"missing"}
+        # Neither agent join can vouch for which run its rows belong to.
+        assert measured["synthesis_agents"] is None
+        assert measured["reviewer_agents"] is None
         assert cohort["runs"] == 0
         assert cohort["availability"]["dispatch"]["missing"] == 0
         assert cohort["dispatch"]["planner_candidates"] is None
@@ -9916,6 +9919,30 @@ class TestOptionalSectionsReachMeasureRun:
         assert measured["availability"]["dependency_refresh"] is True
         assert measured["availability"]["reviewer_markdown"] is True
         assert measured["availability"]["findings_markdown"] is True
+
+
+class TestDispatchAttempts:
+    """The attempts predicate both joins share: only a positive integer
+    dispatch count is measured."""
+
+    @pytest.mark.parametrize(
+        ("count", "expected"),
+        [
+            pytest.param(1, 1, id="one"),
+            pytest.param(3, 3, id="several"),
+            # bool is an int subclass and was never a dispatch count.
+            pytest.param(True, None, id="true"),
+            pytest.param(False, None, id="false"),
+            pytest.param(0, None, id="zero"),
+            pytest.param(-1, None, id="negative"),
+            pytest.param(2.0, None, id="float"),
+            pytest.param("2", None, id="string"),
+            pytest.param(None, None, id="none"),
+        ],
+    )
+    def test_only_a_positive_integer_count_is_measured(self, count, expected):
+        result = measure._dispatch_attempts(count)
+        assert (result, type(result)) == (expected, type(expected))
 
 
 class TestSynthesisAttempts:

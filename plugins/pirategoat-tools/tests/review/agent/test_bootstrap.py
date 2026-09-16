@@ -1526,6 +1526,33 @@ class TestFitScopeToOneRead:
                 f"{pair[0]} reads and a cut of {pair[1]} reads; saw {dict(cuts)}"
             )
 
+    def test_the_blank_line_before_the_block_is_reserved_for(self, monkeypatch):
+        """A cut joins its inline lines with newlines and puts a blank line
+        before the block, one character more than the whole lines it kept.
+        With nothing else to spare, a cut whose kept lines fill the
+        allowance exactly comes out one character over the limit unless
+        that character is reserved. Four long lines under limits a
+        character apart reach such a cut; the scope stays under ten file
+        lines and a thousand characters, so every number the cut states is
+        as wide as the widest block's and no other reserve covers that
+        character."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 10**6)
+        build = self._build_like_build_output
+        exact_cuts = 0
+        for width in range(150, 250, 10):
+            scope = ("+" + "x" * (width - 1) + "\n") * 4
+            for char_limit in range(300, 1500):
+                monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", char_limit)
+                widest = _mod.render_scope_section(scope, "/f", line_allowance=0, char_allowance=0)
+                if not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text)):
+                    continue
+                output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+                briefing = _mod.READ_LINE_NUMBER_WARNING + output
+                assert _mod.fits_one_read(briefing), f"line width {width}, char limit {char_limit}"
+                if section.carried_lines and section.remaining_reads:
+                    exact_cuts += len(briefing) == char_limit
+        assert exact_cuts, "the sweep must reach a cut that fills the limit exactly"
+
     def test_diff_line_counts_wider_than_the_file_are_reserved_for(self, monkeypatch):
         """count_diff_lines() splits on bare CRs, which the Read tool does not,
         so the diff-line numbers the block states can have more digits than
