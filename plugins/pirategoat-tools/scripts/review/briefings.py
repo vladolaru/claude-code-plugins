@@ -1755,10 +1755,10 @@ def _render_file_review_section(file_review):
       own account — the mechanism working, recorded as a claim.
 
     They are never merged: "no one saw it" and "someone says they saw it"
-    are different facts, and so are "starved by a budget" and "routed to
-    nobody". Returning finished Markdown rather than a description is the
-    whole point — the orchestrator's job here is to paste, not to
-    summarize.
+    are different facts, and so are "starved by the diff line cap" and
+    "routed to nobody". Returning finished Markdown rather than a
+    description is the whole point — the orchestrator's job here is to
+    paste, not to summarize.
     """
     if not isinstance(file_review, dict):
         return ""
@@ -1835,9 +1835,8 @@ def _render_file_review_section(file_review):
         lines.append(
             f"{len(claims)} changed file(s) never received their diff "
             "inline: a reviewer read them from the review-claimable queue, "
-            "which is the designed path for files over the inline cap or "
-            "outside the inline budget. The pipeline records the claim, not "
-            "the read:"
+            "which is the designed path for files over the diff line cap. "
+            "The pipeline records the claim, not the read:"
         )
         lines.append("")
         for f_path, agents in sorted(claims.items()):

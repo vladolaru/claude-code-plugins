@@ -890,12 +890,12 @@ class TestSemanticFilterIntegration:
 
 
 # =============================================================================
-# Budget sort order tests — largest files first
+# Inline priority sort order tests — largest files first
 # =============================================================================
 
 
-def _mock_git_for_budget_test(cmd, check=True, cwd=None):
-    """Mock git commands for budget sort order testing."""
+def _mock_git_for_cap_test(cmd, check=True, cwd=None):
+    """Mock git commands for diff line cap sort order testing."""
     cmd_str = " ".join(cmd)
     if "rev-parse --git-dir" in cmd_str:
         return ".git"
@@ -920,21 +920,21 @@ def _mock_git_for_budget_test(cmd, check=True, cwd=None):
     return ""
 
 
-_OVERSIZED_BUDGET_FILE_LINES = {
+_OVERSIZED_CAP_FILE_LINES = {
     "oversized.php": 700,
     "later-medium.php": 400,
     "later-small.php": 200,
 }
 
-_RAW_EXACT_FIT_BUDGET_FILE_LINES = {
+_RAW_EXACT_FIT_CAP_FILE_LINES = {
     "oversized.php": 700,
     "exact-fit.php": 600,
     "later-small.php": 200,
 }
 
 
-def _make_mock_git_for_oversized_budget_test(file_lines):
-    """Mock an oversized leading diff plus later ordinary-budget candidates."""
+def _make_mock_git_for_oversized_cap_test(file_lines):
+    """Mock an oversized leading diff plus later ordinary-cap candidates."""
     def _mock(cmd, check=True, cwd=None):
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
@@ -964,22 +964,22 @@ def _make_mock_git_for_oversized_budget_test(file_lines):
     return _mock
 
 
-class TestBudgetSortOrder:
-    """Scope budgeting should sort files largest-first so large files get budget priority."""
+class TestInlinePrioritySortOrder:
+    """Scope inlining should sort files largest-first so large files get inline priority."""
 
-    def test_budget_includes_large_file_over_small(self, tmp_path):
-        """When budget is tight, large files should be included, small files excluded."""
-        # With descending sort and 600-line budget:
+    def test_cap_includes_large_file_over_small(self, tmp_path):
+        """When the cap is tight, large files should be included, small files excluded."""
+        # With descending sort and a 600-line cap:
         #   large(500) fits → 500 used
         #   medium(300) exceeds → skipped
-        #   small(100) would fit but budget is at 500
+        #   small(100) would fit but the cap is at 500
         # With ascending sort (old behavior):
         #   small(100) fits → 100 used
         #   medium(300) fits → 400 used
         #   large(500) exceeds → skipped  ← large file lost!
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = _mock_git_for_budget_test
+            mock_run.side_effect = _mock_git_for_cap_test
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=600,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
@@ -988,18 +988,18 @@ class TestBudgetSortOrder:
             scope = review_scope.build_scope(args)
             # large.php (500 lines) should be in the included files
             assert "large.php" in scope["files"], (
-                "Large file should be included when budget prioritizes largest first"
+                "Large file should be included when inline priority orders largest first"
             )
             assert "medium.php" in scope["skipped_files"]["review_claimable"]
             assert "small.php" in scope["files"]
 
-    def test_oversized_first_diff_preserves_normal_budget_for_later_files(self, tmp_path):
-        """One protected oversized diff must not consume the ordinary budget pool."""
+    def test_oversized_first_diff_preserves_normal_cap_for_later_files(self, tmp_path):
+        """One protected oversized diff must not consume the ordinary cap pool."""
         diff_line_cap = 600
         with patch.object(review_scope, "run_cmd") as mock_run, \
              patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
-                _OVERSIZED_BUDGET_FILE_LINES
+            mock_run.side_effect = _make_mock_git_for_oversized_cap_test(
+                _OVERSIZED_CAP_FILE_LINES
             )
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=diff_line_cap,
@@ -1008,7 +1008,7 @@ class TestBudgetSortOrder:
             )
             scope = review_scope.build_scope(args)
 
-        assert list(scope["diffs"]) == list(_OVERSIZED_BUDGET_FILE_LINES)
+        assert list(scope["diffs"]) == list(_OVERSIZED_CAP_FILE_LINES)
         assert "later-medium.php" in scope["diffs"]
         assert "later-small.php" in scope["diffs"]
 
@@ -1035,8 +1035,8 @@ class TestBudgetSortOrder:
         diff_line_cap = 600
         with patch.object(review_scope, "run_cmd") as mock_run, \
              patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
-                _RAW_EXACT_FIT_BUDGET_FILE_LINES
+            mock_run.side_effect = _make_mock_git_for_oversized_cap_test(
+                _RAW_EXACT_FIT_CAP_FILE_LINES
             )
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=diff_line_cap,
@@ -1060,13 +1060,13 @@ _PRODUCTION_FIRST_FILE_LINES = {
 }
 
 
-class TestProductionFirstBudget:
-    """Mixed domains must budget production files before test files."""
+class TestProductionFirstInlinePriority:
+    """Mixed domains must inline production files before test files."""
 
     def _build(self, domain, diff_line_cap, tmp_path):
         with patch.object(review_scope, "run_cmd") as mock_run, \
              patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
+            mock_run.side_effect = _make_mock_git_for_oversized_cap_test(
                 _PRODUCTION_FIRST_FILE_LINES
             )
             args = argparse.Namespace(
@@ -1076,7 +1076,7 @@ class TestProductionFirstBudget:
             )
             return review_scope.build_scope(args)
 
-    def test_security_budgets_production_before_tests(self, tmp_path):
+    def test_security_inlines_production_before_tests(self, tmp_path):
         scope = self._build("security", diff_line_cap=600, tmp_path=tmp_path)
         # Production files fill the ordinary pool first, largest-first.
         assert "src/service.php" in scope["diffs"]
@@ -1102,9 +1102,9 @@ class TestProductionFirstBudget:
         ]
 
     def test_oversized_leading_production_file_still_protected(self, tmp_path):
-        # When the largest PRODUCTION file alone exceeds the budget, it is
+        # When the largest PRODUCTION file alone exceeds the cap, it is
         # the protected oversized diff and later files still get the
-        # ordinary pool (the two budget behaviors compose).
+        # ordinary pool (the two cap behaviors compose).
         scope = self._build("security", diff_line_cap=400, tmp_path=tmp_path)
         assert list(scope["diffs"])[0] == "src/service.php"
         assert "src/util.php" in scope["diffs"]
@@ -1191,7 +1191,7 @@ class TestScopeSummaryJson:
         }
 
     def test_base_ref_only_publishes_routing_without_diffs(self, tmp_path):
-        """Modes that fetch no diff contribute routing files and no budget."""
+        """Modes that fetch no diff contribute routing files and no diff line cap spend."""
         scope = {
             "status": "OK", "diffs": {}, "review_claimable_files": [],
             "list_only_files": [], "in_scope_files": ["src/a.php", "src/b.php"],
@@ -1208,7 +1208,7 @@ class TestScopeSummaryJson:
         assert data["inline_diff_lines"] == 0
 
     def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
-        # NO_DOMAIN_FILES scopes lack diffs/budget keys — must not raise.
+        # NO_DOMAIN_FILES scopes lack diffs/review_claimable keys — must not raise.
         path = tmp_path / "sub" / "summary.json"
         review_scope.write_scope_summary({"status": "NO_DOMAIN_FILES"}, str(path))
         data = json.loads(path.read_text())
@@ -1304,7 +1304,7 @@ def _make_mock_git_for_priority(files, sizes):
     --numstat are synthesized from `files`/`sizes`; a MULTI-file `--`
     diff (the single combined evidence scan) returns _combined_patch
     (full headers + hunk markers — the strict in-hunk scanner ignores
-    structurally invalid patches); a SINGLE-file `--` diff (the budget
+    structurally invalid patches); a SINGLE-file `--` diff (the cap
     loop's per-file fetch) returns that file's body from
     _PRIORITY_FILE_DIFFS. Tests asserting call counts or ordering rely
     on this multi-vs-single discrimination."""
@@ -1377,7 +1377,7 @@ class TestMarkupEvidenceInlinePriority:
         pytest.param(_TOKEN_FREE_TEMPLATE_CASE, "resources/views/card.blade.php", id="token_free_template"),
         pytest.param(_RAZOR_TEMPLATE_CASE, "Components/NavMenu.razor", id="razor"),
     ])
-    def test_a11y_budgets_evidence_file_before_large_backend_file(
+    def test_a11y_inlines_evidence_file_before_large_backend_file(
         self, tmp_path, case, evidence_file
     ):
         """A stylesheet-only change is dispatched via has_style_files, not
@@ -1391,7 +1391,7 @@ class TestMarkupEvidenceInlinePriority:
 
     def test_non_priority_domains_keep_largest_first(self, tmp_path):
         """Domains without markup priority keep the largest-first order —
-        the code domain still budgets the backend file."""
+        the code domain still inlines the backend file."""
         scope, _ = self._build(tmp_path, "code", *self._TEMPLATE_CASE)
         assert "includes/backend.php" in scope["files"]
 
@@ -1631,7 +1631,7 @@ def _docblock_heavy_diff(path, doc_lines, code_lines):
 
 
 _PRESKIP_FILES = {
-    # Both raw sizes exceed the 2,000-line budget; both filter down to code.
+    # Both raw sizes exceed the 2,000-line cap; both filter down to code.
     "includes/class-alpha.php": (2100, _docblock_heavy_diff("includes/class-alpha.php", 2050, 50)),
     "includes/class-beta.php": (2050, _docblock_heavy_diff("includes/class-beta.php", 2040, 10)),
 }
@@ -1678,7 +1678,7 @@ class TestRawSizePreSkip:
 
     def test_filtering_enabled_measures_before_rejecting(self, tmp_path):
         scope = self._build(tmp_path, no_semantic_filter=False)
-        # alpha filters to ~50 lines, beta to ~10 — both fit the 2,000 budget.
+        # alpha filters to ~50 lines, beta to ~10 — both fit the 2,000 cap.
         assert "includes/class-alpha.php" in scope["diffs"]
         assert "includes/class-beta.php" in scope["diffs"]
         assert scope["skipped_files"]["review_claimable"] == []
@@ -1686,7 +1686,7 @@ class TestRawSizePreSkip:
     def test_filtering_disabled_keeps_the_cheap_pre_skip(self, tmp_path):
         scope = self._build(tmp_path, no_semantic_filter=True)
         # Raw == effective size here: alpha (2,100) is included as the first
-        # file; beta's raw 2,050 >= the whole budget with diffs present —
+        # file; beta's raw 2,050 >= the whole cap with diffs present —
         # rejected without a fetch.
         assert "includes/class-beta.php" in scope["skipped_files"]["review_claimable"]
 
@@ -1787,8 +1787,8 @@ class TestListOnly:
             assert "pnpm-lock.yaml" in scope["skipped_files"]["noise"]
             assert "composer.lock" in scope["skipped_files"]["noise"]
 
-    def test_lock_files_dont_eat_diff_budget(self, tmp_path):
-        """List-only files should not consume any of the diff line budget."""
+    def test_lock_files_dont_eat_the_diff_line_cap(self, tmp_path):
+        """List-only files should not consume any of the diff line cap."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock_git_for_list_only_test
@@ -1798,9 +1798,9 @@ class TestListOnly:
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
-            # Even with a tiny budget, lock files don't consume it
+            # Even with a tiny cap, lock files don't consume it
             assert "pnpm-lock.yaml" in scope["list_only_files"]
-            # Config files should still get budget allocation
+            # Config files should still get cap allocation
             assert scope["files_with_diffs"] > 0
 
 

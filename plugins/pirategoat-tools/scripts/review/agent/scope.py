@@ -1820,7 +1820,7 @@ def write_scope_summary(scope: dict, path: str) -> None:
     The last two answer different questions and can disagree: the diffstat
     total counts every changed line of every reviewed file, while the
     inline count is the hunk lines this scope managed to fetch and inline.
-    A scope that fetched no diff at all reports a cap-sized
+    A scope that fetched no diff at all reports a nonzero
     ``in_scope_stat_lines`` beside a zero ``inline_diff_lines``.
 
     ``review_claimable_files`` is published largest-diffstat-first because
