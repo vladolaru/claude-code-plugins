@@ -1023,7 +1023,7 @@ def build_assignment_manifest(
             path for paths in by_agent_sets.values() for path in paths
         )
 
-        # Positive-claim/gap populations for NOT DIFFED files. A finalized
+        # Positive-claim/gap populations for review-claimable files. A finalized
         # agent answers both questions from its own review document — the
         # claim counts and the claimable list all come off that one read,
         # because finalization derived the claimable list from the

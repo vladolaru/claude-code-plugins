@@ -1030,9 +1030,9 @@ def build_output(
     nothing else, and a run without a readable one stops with a structured
     error rather than re-deriving them from rendered prose. Neither
     parameter has a default, so an omitted caller fails loudly (TypeError)
-    instead of silently dropping the NOT DIFFED contract or handing
+    instead of silently dropping the REVIEW-CLAIMABLE contract or handing
     dead-code-reviewer a wrong DYNAMIC_DISPATCH_RISK.
-    See TestNotDiffedContractIsDelivered and TestDynamicDispatchRisk in
+    See TestReviewClaimableContractIsDelivered and TestDynamicDispatchRisk in
     tests/review/agent/test_bootstrap_integration.py for the executable
     contracts and their regression history.
     """
@@ -1138,7 +1138,7 @@ def build_output(
         if review_claimable_count:
             lines.append(
                 f"Spend the budget: {review_claimable_count} in-scope files are listed "
-                "under NOT DIFFED. While under target with NOT DIFFED files "
+                "under REVIEW-CLAIMABLE. While under target with review-claimable files "
                 "unread, read the next one (largest first) — finishing early "
                 "with in-scope files unread is a coverage gap, not efficiency. "
                 "The budget is never a reason to skip a file you still have "
@@ -1149,7 +1149,7 @@ def build_output(
             # strips '## Scope Discovery', so policy placed there never reaches
             # a reviewer. See REVIEWER_PROTOCOL_SKIP_SECTIONS. The
             lines.append(
-                "Claim each NOT DIFFED file you actually "
+                "Claim each REVIEW-CLAIMABLE file you actually "
                 'read with builder.claim_files_reviewed("<path>"). '
                 "The builder validates those positive claims against the "
                 "authoritative review assignment, derives every unclaimed "
@@ -1313,7 +1313,7 @@ def build_output(
     else:
         lines.append('    result="hit counts and file:line evidence")')
     if review_claimable_count:
-        lines.append('# builder.claim_files_reviewed("path/read1.py", "path/read2.py")  # uncomment with actual NOT DIFFED paths you read')
+        lines.append('# builder.claim_files_reviewed("path/read1.py", "path/read2.py")  # uncomment with actual REVIEW-CLAIMABLE paths you read')
     else:
         lines.append("# No review-claimable files in this assignment: do not call claim_files_reviewed().")
     lines.append('builder.set_confidence(0.85)')
@@ -1972,7 +1972,7 @@ def main():
     # "repo-reviewer-adapter" with a null registry domain, so rules targeting
     # the synthetic instance name or its declared scope domains would never
     # match. Path rules match against the COMPLETE in-scope set (inline +
-    # review-claimable NOT DIFFED + list-only) — a rule about a claimable file
+    # review-claimable + list-only) — a rule about a claimable file
     # applies precisely when the reviewer must inspect that file.
     review_config = load_repo_review_config(output_dir)
     agent_domains = [

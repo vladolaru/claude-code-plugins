@@ -34,7 +34,7 @@ from review.reviewer_names import derive_reviewer_name
 
 
 def _write_summary(
-    output_dir, agent, files_with_diffs, budget_exceeded, *, domain=None,
+    output_dir, agent, files_with_diffs, review_claimable, *, domain=None,
     list_only=None, in_scope=None,
 ):
     """Write one agent's scope-summary sidecar under its real filename.
@@ -55,7 +55,7 @@ def _write_summary(
             # already stopped writing.
             "schema": SCOPE_SUMMARY_SCHEMA,
             "inline_diff_files": files_with_diffs,
-            "review_claimable_files": budget_exceeded,
+            "review_claimable_files": review_claimable,
             "list_only_files": list(list_only or []),
             # Real sidecars publish this in every mode; the helper defaults
             # it to the union of what was passed so ordinary-mode fixtures
@@ -64,7 +64,7 @@ def _write_summary(
                 list(in_scope) if in_scope is not None
                 else sorted(
                     set(files_with_diffs)
-                    | set(budget_exceeded)
+                    | set(review_claimable)
                     | set(list_only or [])
                 )
             ),
@@ -351,7 +351,7 @@ class TestUnscopedFiles:
     # `changed_files` to measure against, and the expected `unscoped_files`.
     UNSCOPED_FILES_CASES = (
         pytest.param(
-            [{"files_with_diffs": ["src/a.php"], "budget_exceeded": []}],
+            [{"files_with_diffs": ["src/a.php"], "review_claimable": []}],
             ["src/a.php", "package-lock.json", ".editorconfig"],
             [".editorconfig", "package-lock.json"],
             id="changed_files_matching_no_domain_are_reported",
@@ -359,7 +359,7 @@ class TestUnscopedFiles:
         pytest.param(
             [{
                 "files_with_diffs": ["src/inline.php"],
-                "budget_exceeded": ["src/claimable.php"],
+                "review_claimable": ["src/claimable.php"],
                 "list_only": ["src/listed.php"],
             }],
             [
@@ -370,28 +370,28 @@ class TestUnscopedFiles:
             id="union_covers_every_sidecar_file_list",
         ),
         pytest.param(
-            [{"files_with_diffs": ["src/a.php"], "budget_exceeded": []}],
+            [{"files_with_diffs": ["src/a.php"], "review_claimable": []}],
             ["src/a.php", r'"src/broken\3"'],
             None,
             id="unnormalizable_changed_path_leaves_the_population_unmeasured",
         ),
         pytest.param(
-            [{"files_with_diffs": ["./src//a.php"], "budget_exceeded": []}],
+            [{"files_with_diffs": ["./src//a.php"], "review_claimable": []}],
             ["src/a.php"],
             [],
             id="equivalent_spellings_of_one_path_are_one_file",
         ),
         pytest.param(
-            [{"files_with_diffs": ["src/a.php"], "budget_exceeded": []}],
+            [{"files_with_diffs": ["src/a.php"], "review_claimable": []}],
             ["src/a.php"],
             [],
             id="all_files_scoped_is_measured_empty",
         ),
         pytest.param(
             [
-                {"files_with_diffs": ["src/a.php"], "budget_exceeded": []},
+                {"files_with_diffs": ["src/a.php"], "review_claimable": []},
                 {
-                    "files_with_diffs": ["ci.yml"], "budget_exceeded": [],
+                    "files_with_diffs": ["ci.yml"], "review_claimable": [],
                     "domain": "config-ops",
                 },
             ],
@@ -410,7 +410,7 @@ class TestUnscopedFiles:
         for spec in sidecars:
             _write_summary(
                 str(tmp_path), spec.get("agent", "security-reviewer"),
-                spec["files_with_diffs"], spec["budget_exceeded"],
+                spec["files_with_diffs"], spec["review_claimable"],
                 domain=spec.get("domain"), list_only=spec.get("list_only"),
             )
         cov = aggregate_file_review(str(tmp_path), changed_files=changed_files)
@@ -468,7 +468,7 @@ class TestUnscopedFiles:
             "domain": "x",
             "status": "OK",
             "files_with_diffs": ["src/a.php"],
-            "budget_exceeded_files": [],
+            "review_claimable_files": [],
             "list_only_files": [],
         }))
         assert aggregate_file_review(

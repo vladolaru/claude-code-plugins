@@ -5,6 +5,14 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.120.0] - UNRELEASED
+
+### Changed
+
+- The scope script's words say what they mean: the diff-line allowance is `--diff-line-cap` (was `--max-lines`), files whose diffs were withheld are listed under `=== REVIEW-CLAIMABLE (N files, no diff inlined) ===` (was `NOT DIFFED (budget exceeded)`), and `budget` now means a reviewer's tool-call allowance and nothing else.
+
+### Added
+
 ## [1.119.7] - 2026-09-15
 
 ### Fixed

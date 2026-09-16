@@ -77,8 +77,8 @@ def scope_files_in_text(scope_output):
     return _files_in_sections(scope_output, "=== FILES ===")
 
 
-def not_diffed_files_in_text(scope_output):
-    return _files_in_sections(scope_output, "=== NOT DIFFED")
+def review_claimable_files_in_text(scope_output):
+    return _files_in_sections(scope_output, "=== REVIEW-CLAIMABLE")
 
 
 def list_only_files_in_text(scope_output):
@@ -269,13 +269,13 @@ class TestCategoryRepresentatives:
         # REVIEW SCOPE header not duplicated
         assert briefing.count("=== REVIEW SCOPE ===") <= 1
 
-        # The assignment persists the authoritative NOT DIFFED set so the
+        # The assignment persists the authoritative REVIEW-CLAIMABLE set so the
         # builder can reject claims that match no claimable file.
         data = json.loads(
             Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
         assert sorted(data["review_claimable_files"]) == sorted(
-            not_diffed_files_in_text(briefing)
+            review_claimable_files_in_text(briefing)
         )
         # Closes the main()->build_output() seam: review_claimable_count must be
         # derived from this exact claimable set, not a neighboring fact
@@ -506,12 +506,12 @@ class TestCategoryRepresentatives:
         )
         assert agent_start["model_tier"] == "sonnet"
         # Telemetry scope covers the full in-scope set: inline FILES entries,
-        # claimable NOT DIFFED paths (in-scope work whose diffs were withheld
-        # for context budget), and list-only CHANGED (no diff) paths the
-        # reviewer is told to inspect when relevant.
+        # claimable REVIEW-CLAIMABLE paths (in-scope work whose diffs were
+        # withheld for the diff line cap), and list-only CHANGED (no diff)
+        # paths the reviewer is told to inspect when relevant.
         expected_scope = sorted(set(
             scope_files_in_text(briefing_text(result))
-            + not_diffed_files_in_text(briefing_text(result))
+            + review_claimable_files_in_text(briefing_text(result))
             + list_only_files_in_text(briefing_text(result))
         ))
         assert expected_scope
@@ -621,9 +621,9 @@ class TestCategoryRepresentatives:
         assert "budget_capped" not in data
 
         diffed = scope_files_in_text(briefing)
-        not_diffed = not_diffed_files_in_text(briefing)
+        review_claimable = review_claimable_files_in_text(briefing)
         assert data["in_scope_review_file_count"] == len(
-            dict.fromkeys([*diffed, *not_diffed])
+            dict.fromkeys([*diffed, *review_claimable])
         )
         assert set(data["inline_diff_files"]) == set(diffed)
         assert len(data["inline_diff_files"]) == len(set(diffed))
@@ -1574,7 +1574,7 @@ class TestDynamicDispatchRisk:
 
     has_php is a REQUIRED fact the caller supplies (main() derives it from
     telemetry_scope_paths — the same fact-based, sidecar-preferring path
-    union used for scope telemetry and the NOT DIFFED contract).
+    union used for scope telemetry and the review-claimable contract).
     build_output() never parses scope_output for PHP filenames: the
     text-inert rows below pin the failure mode that replaced, and the
     in-process main() rows pin the derivation itself.
@@ -1824,8 +1824,8 @@ class TestRepoRuleAndRefModeSelection:
         )
         assert assignment["channels"] == ["blocking"]
 
-    def test_path_rule_matches_a_budget_claimable_file(self, tmp_path):
-        """A rule about a NOT DIFFED file applies precisely when the
+    def test_path_rule_matches_a_review_claimable_file(self, tmp_path):
+        """A rule about a REVIEW-CLAIMABLE file applies precisely when the
         reviewer must inspect that file — selection must see the complete
         in-scope set, not only the inline diff list."""
         repo = tmp_path / "repo"
@@ -1850,7 +1850,7 @@ class TestRepoRuleAndRefModeSelection:
             repo, "--agent", "code-reviewer", "--output-dir", str(outdir)
         )
         assert result.returncode == 0
-        assert "claimable_target.php" in not_diffed_files_in_text(briefing_text(result))
+        assert "claimable_target.php" in review_claimable_files_in_text(briefing_text(result))
         assert "CLAIMABLE FILE RULE MARKER" in briefing_text(result)
 
     def test_ref_mode_path_declaration_scopes_the_matching_file(
@@ -1962,8 +1962,8 @@ class TestBootstrapImportDoesNotBreakTelemetry:
         assert result.stdout.strip() == "OK"
 
 
-class TestNotDiffedContractIsDelivered:
-    """The NOT DIFFED handling contract must survive protocol stripping.
+class TestReviewClaimableContractIsDelivered:
+    """The REVIEW-CLAIMABLE handling contract must survive protocol stripping.
 
     Regression guard for 1.109.0: the contract originally lived in
     reviewer-protocol.md's '## Scope Discovery' section, which bootstrap strips,
@@ -1971,20 +1971,20 @@ class TestNotDiffedContractIsDelivered:
 
     Regression guard for the 1.114.0 fix: build_output() used to re-derive the
     claimable-file count by regexing its OWN rendered scope text for
-    '=== NOT DIFFED (budget exceeded, N files) ===' — a second text-parsing
-    path for a fact the caller already held. Any rename or reformat of that
-    header in scope.py silently zeroed the count and dropped the entire
-    honesty contract, with no error and (because these tests hardcoded the
-    same header text the regex expected) no test failure either.
-    build_output() now receives review_claimable_count as an explicit fact
-    from the caller and never inspects scope_output for it.
+    '=== REVIEW-CLAIMABLE (N files, no diff inlined) ===' — a second
+    text-parsing path for a fact the caller already held. Any rename or
+    reformat of that header in scope.py silently zeroed the count and
+    dropped the entire honesty contract, with no error and (because these
+    tests hardcoded the same header text the regex expected) no test
+    failure either. build_output() now receives review_claimable_count as
+    an explicit fact from the caller and never inspects scope_output for it.
     """
 
-    NOT_DIFFED_SCOPE = (
+    REVIEW_CLAIMABLE_SCOPE = (
         "=== REVIEW SCOPE ===\n"
         "=== FILES ===\n"
         "src/big.py  (+900 -10)\n"
-        "=== NOT DIFFED (budget exceeded, 3 files) ===\n"
+        "=== REVIEW-CLAIMABLE (3 files, no diff inlined) ===\n"
         "  src/big.py  (+900 -10)\n"
     )
 
@@ -2015,7 +2015,7 @@ class TestNotDiffedContractIsDelivered:
     )
     def test_contract_reaches_reviewer(self, tmp_path, phrase):
         """The claim call and the derived complement reach the briefing."""
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=1)
+        output = self._build(tmp_path, self.REVIEW_CLAIMABLE_SCOPE, review_claimable_count=1)
         assert phrase in output
 
     @pytest.mark.parametrize(
@@ -2041,7 +2041,7 @@ class TestNotDiffedContractIsDelivered:
             ),
             # ...and the header the old regex parsed cannot enable it alone.
             pytest.param(
-                NOT_DIFFED_SCOPE,
+                REVIEW_CLAIMABLE_SCOPE,
                 0,
                 False,
                 id="original-header-text-alone-cannot-enable-it",

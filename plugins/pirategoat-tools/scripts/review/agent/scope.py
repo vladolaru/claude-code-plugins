@@ -27,7 +27,7 @@ Usage:
     python3 scope.py --domain code --output-dir <output-dir>
     python3 scope.py --domain code --summary --output-dir <output-dir>
     python3 scope.py --domain php-tests --range main..feature-branch --output-dir <output-dir>
-    python3 scope.py --domain security --max-lines 3000 --output-dir <output-dir>
+    python3 scope.py --domain security --diff-line-cap 3000 --output-dir <output-dir>
     python3 scope.py --domain patterns --base-ref-only --output-dir <output-dir>
 
 Exit codes:
@@ -112,7 +112,7 @@ def apply_semantic_filter(diff_text: str) -> str:
 
 # =============================================================================
 # Markup-emission detection — SINGLE SOURCE, shared with plan_dispatch.py's
-# has_markup_changes triage check and the a11y domain's budget priority.
+# has_markup_changes triage check and the a11y domain's inline priority.
 # Interactive/semantic elements (opening AND closing tags — a moved </label>
 # changes associations too), a11y attributes (whitespace-tolerant around =),
 # focus management, speak() announcements, screen-reader classes.
@@ -139,7 +139,7 @@ MARKUP_CONTENT_TOKEN_PATTERNS = (
     re.compile(r"\baria-[a-z]+"),
     # Attribute assignments need attribute CONTEXT: `(?<![\w$])` rejects PHP
     # variables ('$role = ...' emits no markup and would otherwise let a big
-    # backend diff outrank genuine template evidence in budget priority),
+    # backend diff outrank genuine template evidence in inline priority),
     # and the value must open like an attribute value — quote, JSX brace,
     # or (tabindex) a number.
     re.compile(
@@ -287,7 +287,7 @@ def _line_has_markup_token(patch_line: str) -> bool:
 
     Strips the +/- diff marker, normalizes, and tests the shared content and
     code token vocabularies. Both the has_markup_changes triage check
-    (patch_has_markup_tokens) and the a11y budget-priority evidence scan
+    (patch_has_markup_tokens) and the a11y inline-priority evidence scan
     (classify_markup_evidence) call this function, so they cannot drift.
     """
     return _content_has_markup_token(patch_line[1:])
@@ -439,12 +439,12 @@ def classify_markup_evidence(
     ONE combined `git diff` for all files, scanned line-by-line while
     tracking the current file header — no per-file subprocess fan-out and no
     retained patch bodies (a large PR would otherwise mean hundreds of git
-    calls and every full diff held in memory before budgeting). The scan
-    runs on the raw (unfiltered) diff; that's a superset of the semantically
-    filtered text, which is fine for ORDERING evidence.
+    calls and every full diff held in memory before the diff line cap is
+    applied). The scan runs on the raw (unfiltered) diff; that's a superset
+    of the semantically filtered text, which is fine for ORDERING evidence.
 
     `line_predicate` swaps the vocabulary without re-implementing the scan:
-    budget priority asks the markup question, the a11y scope sniff asks the
+    inline priority asks the markup question, the a11y scope sniff asks the
     wider UI-surface one (_patch_line_has_ui_evidence). One walker, so a
     hunk-tracking fix can never land in only one of them.
     """
@@ -747,22 +747,22 @@ DOMAIN_CATALOG = {
         "description": "All code files (code-reviewer)",
         "include": _ext_re(_PROG_LANGS, _STYLE_LANGS, _QUERY_LANGS),
         "exclude": None,
-        # Matches production AND test files. Budget production first — on a
+        # Matches production AND test files. Inline production first — on a
         # test-heavy branch, pure largest-first hands the reviewer test
         # files and starves the code under review (2026-07-21 incident).
-        "budget_priority": "production_first",
+        "inline_priority": "production_first",
     },
     "security": {
         "description": "Security-relevant code files",
         "include": _ext_re(_PROG_LANGS),
         "exclude": None,
-        "budget_priority": "production_first",
+        "inline_priority": "production_first",
     },
     "performance": {
         "description": "Performance-relevant code files (incl. SQL)",
         "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": None,
-        "budget_priority": "production_first",
+        "inline_priority": "production_first",
     },
     "dead-code": {
         "description": "Production code only, excluding tests (dead-code-reviewer)",
@@ -778,7 +778,7 @@ DOMAIN_CATALOG = {
         "description": "WordPress PHP/JS/TS files",
         "include": r"\.(php|js|ts|jsx|tsx)$",
         "exclude": None,
-        "budget_priority": "production_first",
+        "inline_priority": "production_first",
     },
     "php-tests": {
         "description": "PHP test files only",
@@ -819,7 +819,7 @@ DOMAIN_CATALOG = {
         "description": "All code files for pattern analysis",
         "include": _ext_re(_PROG_LANGS, _STYLE_LANGS),
         "exclude": None,
-        "budget_priority": "production_first",
+        "inline_priority": "production_first",
     },
     "a11y": {
         "description": (
@@ -829,11 +829,11 @@ DOMAIN_CATALOG = {
         ),
         "include": _ext_re(_FRONTEND_LANGS, _STYLE_LANGS, _MARKUP_LANGS),
         "exclude": None,
-        # Budget markup-evidence-bearing files FIRST: the broad markup-language
+        # Inline markup-evidence-bearing files FIRST: the broad markup-language
         # match can pull a huge non-UI PHP diff into scope alongside the tiny
         # template change that actually triggered dispatch — largest-first
-        # budgeting would starve the evidence file out of the diff budget.
-        "budget_priority": "markup_evidence",
+        # inlining would starve the evidence file out of the diff line cap.
+        "inline_priority": "markup_evidence",
     },
     "reliability": {
         "description": "Production code for operational resilience review",
@@ -1451,36 +1451,36 @@ def build_scope(args: argparse.Namespace) -> dict:
     # Step 5: Get diffstat for all matched files (cheap — single git command)
     diffstat = get_diffstat(range_spec, domain_matched, repo_root)
 
-    # Largest files first — ensures big changes get budget priority
+    # Largest files first — ensures big changes get inline priority
     domain_matched_sorted = sorted(
         domain_matched,
         key=lambda f: sum(diffstat.get(f, (0, 0))),
         reverse=True,
     )
 
-    # Step 6: Get diffs with budget control (skip if --base-ref-only or --summary)
-    max_lines = args.max_lines
+    # Step 6: Get diffs against the diff line cap (skip if --base-ref-only or --summary)
+    diff_line_cap = args.diff_line_cap
     diffs = {}
     total_lines = 0
-    ordinary_budget_lines = 0
-    budget_exceeded_files = []
+    ordinary_cap_lines = 0
+    review_claimable_files = []
     list_only_files = []
 
     # Determine if semantic filtering is enabled
     use_semantic_filter = not getattr(args, "no_semantic_filter", False)
 
     if not args.base_ref_only and not args.summary:
-        # Markup-evidence budget priority (a11y): the broad markup-language
+        # Markup-evidence inline priority (a11y): the broad markup-language
         # match can put a huge non-UI file ahead of the tiny template or
         # stylesheet change that actually carries the review evidence —
-        # largest-first budgeting would then hand the reviewer everything
+        # largest-first inlining would then hand the reviewer everything
         # EXCEPT the file that triggered dispatch. Evidence = markup tokens
         # in the file's changed lines (classified in ONE combined git-diff
         # scan — see classify_markup_evidence), a stylesheet, OR an
         # inherently UI template. This mirrors the has_style_files and
-        # has_template_files dispatch signals. Evidence-bearing files budget
+        # has_template_files dispatch signals. Evidence-bearing files inline
         # first, largest-first within each tier.
-        if domain_spec.get("budget_priority") == "markup_evidence":
+        if domain_spec.get("inline_priority") == "markup_evidence":
             style_ext_re = re.compile(_ext_re(_STYLE_LANGS))
             scan_candidates = [
                 f for f in domain_matched_sorted
@@ -1507,13 +1507,13 @@ def build_scope(args: argparse.Namespace) -> dict:
                 ),
             )
 
-        # Production-first budget priority: domains that match both
+        # Production-first inline priority: domains that match both
         # production and test files would otherwise let a test-heavy branch
-        # spend the whole budget on test files, starving the code under
+        # spend the whole cap on test files, starving the code under
         # review. Non-test files (per the shared _TEST_EXCLUDE classifier)
-        # budget first, largest-first within each tier. Test-only domains
+        # inline first, largest-first within each tier. Test-only domains
         # keep pure largest-first — test files ARE their evidence.
-        elif domain_spec.get("budget_priority") == "production_first":
+        elif domain_spec.get("inline_priority") == "production_first":
             production_first_test_re = re.compile(_TEST_EXCLUDE)
             domain_matched_sorted = sorted(
                 domain_matched_sorted,
@@ -1531,21 +1531,21 @@ def build_scope(args: argparse.Namespace) -> dict:
                 list_only_files.append(filepath)
                 continue
 
-            if diffs and ordinary_budget_lines >= max_lines:
-                budget_exceeded_files.append(filepath)
+            if diffs and ordinary_cap_lines >= diff_line_cap:
+                review_claimable_files.append(filepath)
                 continue
 
             # Pre-skip without fetching when the RAW diffstat estimate alone
-            # exceeds the remaining ordinary budget — but ONLY when semantic
+            # exceeds the remaining ordinary allowance — but ONLY when semantic
             # filtering is off. With filtering enabled, raw size proves nothing: a
             # 2,050-line patch that is 2,040 docblock lines filters to 10
-            # reviewable lines and fits comfortably; the budget contract is
-            # on FILTERED lines, so the file must be measured, not guessed.
+            # reviewable lines and fits comfortably; the cap applies to
+            # FILTERED lines, so the file must be measured, not guessed.
             if not use_semantic_filter:
                 est_lines = sum(diffstat.get(filepath, (0, 0)))
-                remaining_ordinary_lines = max_lines - ordinary_budget_lines
+                remaining_ordinary_lines = diff_line_cap - ordinary_cap_lines
                 if diffs and est_lines > remaining_ordinary_lines:
-                    budget_exceeded_files.append(filepath)
+                    review_claimable_files.append(filepath)
                     continue
 
             diff_text = get_diff_for_file(range_spec, filepath, repo_root)
@@ -1566,21 +1566,21 @@ def build_scope(args: argparse.Namespace) -> dict:
                 diff_text = apply_semantic_filter(diff_text)
 
             diff_lines = count_diff_lines(diff_text)
-            is_protected_oversized_diff = not diffs and diff_lines > max_lines
+            is_protected_oversized_diff = not diffs and diff_lines > diff_line_cap
 
             if (
                 not is_protected_oversized_diff
-                and ordinary_budget_lines + diff_lines > max_lines
+                and ordinary_cap_lines + diff_lines > diff_line_cap
             ):
                 # Would exceed the ordinary pool. Keep scanning so a later,
                 # smaller diff may still fit.
-                budget_exceeded_files.append(filepath)
+                review_claimable_files.append(filepath)
                 continue
 
             diffs[filepath] = diff_text
             total_lines += diff_lines
             if not is_protected_oversized_diff:
-                ordinary_budget_lines += diff_lines
+                ordinary_cap_lines += diff_lines
 
     # Step 7: The dispatcher provides a durable per-run output directory.
     output_dir = args.output_dir
@@ -1601,8 +1601,8 @@ def build_scope(args: argparse.Namespace) -> dict:
         "files_with_diffs": len(diffs),
         "list_only_files": list_only_files,
         "total_diff_lines": total_lines,
-        "budget_max": max_lines,
-        "budget_exceeded_files": budget_exceeded_files,
+        "diff_line_cap": diff_line_cap,
+        "review_claimable_files": review_claimable_files,
         "files": domain_matched_sorted if (args.base_ref_only or args.summary) else list(diffs.keys()),
         # The reviewer's whole in-scope workload, in EVERY mode — unlike
         # "files" above, whose meaning flips with the mode. Run-level
@@ -1618,7 +1618,7 @@ def build_scope(args: argparse.Namespace) -> dict:
         "skipped_files": {
             "noise": noise_skipped,
             "domain": domain_excluded,
-            "budget": budget_exceeded_files,
+            "review_claimable": review_claimable_files,
             "list_only": list_only_files,
         },
         "branch_freshness": {
@@ -1666,10 +1666,10 @@ def format_text_output(scope: dict) -> str:
         lines.append(f"LIST_ONLY_FILES: {len(list_only)}")
     lines.append(f"TOTAL_DIFF_LINES: {scope.get('total_diff_lines', 0)}")
 
-    if scope.get("budget_exceeded_files"):
+    if scope.get("review_claimable_files"):
         lines.append(
-            f"BUDGET_EXCEEDED: {len(scope['budget_exceeded_files'])} files skipped "
-            f"(max {scope.get('budget_max', 'N/A')} lines)"
+            f"REVIEW_CLAIMABLE: {len(scope['review_claimable_files'])} files listed "
+            f"without a diff (diff line cap {scope.get('diff_line_cap', 'N/A')} lines)"
         )
 
     if scope["status"] == "NO_DOMAIN_FILES":
@@ -1736,28 +1736,28 @@ def format_text_output(scope: dict) -> str:
                 added, removed = diffstat.get(filepath, (0, 0))
                 lines.append(f"  {filepath}  (+{added} -{removed})")
 
-        # Budget-exceeded files with their diffstat so agent knows what it's missing
-        budget_files = scope.get("skipped_files", {}).get("budget", [])
-        if budget_files:
+        # Review-claimable files with their diffstat so agent knows what it's missing
+        claimable_files = scope.get("skipped_files", {}).get("review_claimable", [])
+        if claimable_files:
             lines.append("")
-            lines.append(f"=== NOT DIFFED (budget exceeded, {len(budget_files)} files) ===")
+            lines.append(f"=== REVIEW-CLAIMABLE ({len(claimable_files)} files, no diff inlined) ===")
             lines.append("These files ARE IN YOUR SCOPE — their diffs were withheld only to fit")
-            lines.append("the context budget. This list is your remaining work queue, largest")
+            lines.append("the diff line cap. This list is your remaining work queue, largest")
             lines.append(
                 f"first: review with 'git diff {scope.get('range', '')} -- <file>' "
                 "while tool budget"
             )
             lines.append(
-                "remains. Claim every NOT DIFFED file you actually read; "
+                "remains. Claim every REVIEW-CLAIMABLE file you actually read; "
                 "the builder derives the rest as unclaimed review files."
             )
-            # Sort budget-exceeded by size descending so agent sees biggest changes first
-            budget_sorted = sorted(
-                budget_files,
+            # Sort review-claimable by size descending so agent sees biggest changes first
+            claimable_sorted = sorted(
+                claimable_files,
                 key=lambda f: sum(diffstat.get(f, (0, 0))),
                 reverse=True,
             )
-            for filepath in budget_sorted:
+            for filepath in claimable_sorted:
                 added, removed = diffstat.get(filepath, (0, 0))
                 lines.append(f"  {filepath}  (+{added} -{removed})")
 
@@ -1820,7 +1820,7 @@ def write_scope_summary(scope: dict, path: str) -> None:
     The last two answer different questions and can disagree: the diffstat
     total counts every changed line of every reviewed file, while the
     inline count is the hunk lines this scope managed to fetch and inline.
-    A scope that fetched no diff at all reports a budget-sized
+    A scope that fetched no diff at all reports a cap-sized
     ``in_scope_stat_lines`` beside a zero ``inline_diff_lines``.
 
     ``review_claimable_files`` is published largest-diffstat-first because
@@ -1836,7 +1836,7 @@ def write_scope_summary(scope: dict, path: str) -> None:
     diffstat = scope.get("diffstat", {}) or {}
     inline_diff_files = sorted(scope.get("diffs", {}) or {})
     review_claimable_files = sorted(
-        dict.fromkeys(scope.get("budget_exceeded_files", []) or []),
+        dict.fromkeys(scope.get("review_claimable_files", []) or []),
         key=lambda f: sum(diffstat.get(f, (0, 0))),
         reverse=True,
     )
@@ -1894,10 +1894,10 @@ def main():
         help="Git range to diff (e.g., 'main..HEAD'). Auto-detected if omitted.",
     )
     parser.add_argument(
-        "--max-lines",
+        "--diff-line-cap",
         type=int,
         default=2000,
-        help="Max diff lines to include (default: 2000). Files beyond budget are listed but not diffed.",
+        help="Most diff hunk lines to inline (default: 2000). Files past the cap are listed as review-claimable, not diffed.",
     )
     parser.add_argument(
         "--format",

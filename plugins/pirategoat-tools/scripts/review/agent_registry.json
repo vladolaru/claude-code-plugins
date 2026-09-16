@@ -356,7 +356,7 @@
         "reviewer"
       ],
       "scope_flags": [
-        "--max-lines",
+        "--diff-line-cap",
         "500"
       ],
       "file_history": true,

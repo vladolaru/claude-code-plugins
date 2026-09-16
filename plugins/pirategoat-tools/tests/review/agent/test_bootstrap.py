@@ -193,9 +193,9 @@ class TestPersistReviewedFilesInput:
 
     def test_dedupes_claimable_files_order_preserving(self, tmp_path):
         """A multi-domain agent's secondary-domain scope render can repeat
-        a file already budget-exceeded in the primary domain's sidecar —
+        a file already review-claimable in the primary domain's sidecar —
         load_scope_facts() concatenates every summary's
-        budget_exceeded_files without deduping. persist_review_assignment
+        review_claimable_files without deduping. persist_review_assignment
         must not publish that duplicate: it inflates len(review_claimable_files),
         the total manifest_sections.build_assignment_manifest reconciles
         the agent's derived positive-claim/gap populations against."""
@@ -298,7 +298,7 @@ class TestPartitionScopePaths:
             "src/inline.py  (+10 -0)\n"
             "src/shared.py  (+10 -0)\n"
             "src/secondary.py  (+10 -0)\n"
-            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
+            "=== REVIEW-CLAIMABLE (2 files, no diff inlined) ===\n"
             "src/claimable-a.py  (+10 -0)\n"
             "src/claimable-b.py  (+20 -0)\n"
             "=== CHANGED (no diff — 2 lock/generated files) ===\n"
@@ -1163,7 +1163,7 @@ class TestBudgetBriefingText:
         assert "Calibrated to YOUR scope." not in output
         assert "effort floor" in output
 
-    def test_not_diffed_scope_gets_spend_down_instruction(self, tmp_path):
+    def test_review_claimable_scope_gets_spend_down_instruction(self, tmp_path):
         # The header text ("258 files") is deliberately NOT what the count is
         # sourced from anymore — review_claimable_count is a fact passed by the
         # caller (main() derives it from scope_facts), independent of how
@@ -1173,7 +1173,7 @@ class TestBudgetBriefingText:
             "=== FILES ===\n"
             "src/a.ts  (+10 -2)\n"
             "\n"
-            "=== NOT DIFFED (budget exceeded, 258 files) ===\n"
+            "=== REVIEW-CLAIMABLE (258 files, no diff inlined) ===\n"
             "  src/big.ts  (+862 -0)\n"
         )
         output = self._output(tmp_path, scope_output=scope, budget=80, capped=True,

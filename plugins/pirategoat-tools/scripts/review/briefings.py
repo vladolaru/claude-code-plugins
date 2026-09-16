@@ -1774,7 +1774,7 @@ def _render_file_review_section(file_review):
     if gaps:
         lines.append(
             f"{len(gaps)} changed file(s) were skipped by every matching "
-            "agent's diff budget and no reviewer reported reviewing them "
+            "agent's diff line cap and no reviewer reported reviewing them "
             "from the review-claimable queue:"
         )
         lines.append("")
@@ -2686,7 +2686,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     # Coverage. The measurement itself is already rendered, complete and
     # hedged, in the record — so the report quotes it rather than
     # re-deriving it. A field run once paraphrased "skipped by every
-    # matching agent's diff budget and no reviewer reported reviewing
+    # matching agent's diff line cap and no reviewer reported reviewing
     # them" into "read by nobody", false for 8 of 41 files.
     if record_usable and _has_file_review_content(state.get("file_review")):
         gap_clause = (

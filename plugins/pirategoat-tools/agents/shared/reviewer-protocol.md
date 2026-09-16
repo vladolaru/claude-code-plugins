@@ -29,7 +29,7 @@ Store `PLUGIN_ROOT` — you'll use it for:
 
 ## Scope Discovery (Do This FIRST)
 
-Use `scope.py` to efficiently determine your review scope. It handles range detection, noise filtering, domain filtering, context budgeting, and output directory detection in a single call.
+Use `scope.py` to efficiently determine your review scope. It handles range detection, noise filtering, domain filtering, the diff line cap, and output directory detection in a single call.
 
 ```bash
 # Your Scope section specifies which --domain to use
@@ -56,15 +56,15 @@ The script outputs structured text. Parse these key fields from the header:
 | `BASE_REF` | Base branch ref (for exploring preexisting code) |
 | `OUTPUT_DIR` | Where to write review output files |
 | `PR_NUMBER` | PR number (if detected) |
-| `BUDGET_EXCEEDED` | Files listed but not diffed due to context budget |
+| `REVIEW_CLAIMABLE` | Files listed but not diffed because the diff line cap was reached |
 
 **On `STATUS: ERROR`:** bootstrap prints the diagnosis and its ACTION and delivers no briefing. Each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
 **On `STATUS: NO_DOMAIN_FILES`:** bootstrap records and finalizes the `not_applicable` review itself. Its stdout stub delivers the return signal, and each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
-**On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted by budget priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal budget.
+**On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the diff line cap. Files are sorted by inline priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal cap.
 
-**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. Claim every file you actually read through the positive-claim API; the builder validates those claims and derives every remaining path as an unclaimed review file. Bootstrap's `=== REVIEW BUDGET ===` section delivers the executable contract because this section is stripped before you receive the protocol.
+**On `REVIEW_CLAIMABLE` / `=== REVIEW-CLAIMABLE ===`:** These files matched your domain but their diffs were NOT given to you. Claim every file you actually read through the positive-claim API; the builder validates those claims and derives every remaining path as an unclaimed review file. Bootstrap's `=== REVIEW BUDGET ===` section delivers the executable contract because this section is stripped before you receive the protocol.
 
 ### When You Need More Context
 
@@ -235,7 +235,7 @@ This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** bloc
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
 - `builder.record_check(question, method, result, verifies=["V2"])` - Record a material verification check with the exact question, searches/reads, and observed result. Required for material negative or blast-radius conclusions — see "Absence Claims" section — `verifies` is optional and names the REVIEW FOCUS Verify items the check settles
 - `builder.update_check(check_id, **fields)` / `builder.remove_check(check_id)` - Correct or remove a persisted check without recycling its stable ID
-- `builder.claim_files_reviewed(*files)` - Claim NOT DIFFED files you actually read from the review-claimable queue (a statement, not proof — surfaced as a claim downstream). The builder validates this entire batch against the authoritative review assignment, derives every unclaimed review file, and derives the reviewed-file count from inline files plus validated claims. Claiming an inline (diffed) file is harmless and records nothing — it is already counted.
+- `builder.claim_files_reviewed(*files)` - Claim REVIEW-CLAIMABLE files you actually read from the review-claimable queue (a statement, not proof — surfaced as a claim downstream). The builder validates this entire batch against the authoritative review assignment, derives every unclaimed review file, and derives the reviewed-file count from inline files plus validated claims. Claiming an inline (diffed) file is harmless and records nothing — it is already counted.
 - `builder.retract_reviewed_file_claims(*files)` - Retract reviewed-file claims that no longer reflect what you actually read before saving again.
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive_observation("observation")` - Note good patterns
