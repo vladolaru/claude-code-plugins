@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Run metrics carry a `reviewer_agents` section with each reviewer's dispatch count and finishing model, the same two facts the reconciliator and critic rows gained in 1.119.7.
+
 ## [1.119.7] - 2026-09-15
 
 ### Fixed

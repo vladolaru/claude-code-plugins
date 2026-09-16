@@ -682,6 +682,49 @@ def _apply_synthesis_dispatch_lag(measured: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def _dispatch_attempts(count: Any) -> int | None:
+    """The shared attempts predicate for both the synthesis and reviewer
+    joins: a positive, non-boolean dispatch count, else None (unmeasured
+    is not one). `bool` is rejected because `True`/`False` are `int`
+    subclasses in Python and were never a dispatch count."""
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 1:
+        return count
+    return None
+
+
+def _latest_dispatch_by_agent(
+    transcript: dict[str, Any] | None,
+) -> dict[str, tuple[datetime, str | None]]:
+    """The last `agent_usage` dispatch instant and model, per agent, that
+    both the synthesis and reviewer attempts joins read identically."""
+    transcript = transcript if isinstance(transcript, dict) else {}
+    usage_rows = transcript.get("agent_usage")
+    latest: dict[str, tuple[datetime, str | None]] = {}
+    for entry in usage_rows if isinstance(usage_rows, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        agent = entry.get("agent")
+        instant = _parse_time(entry.get("dispatched_at"))
+        if not isinstance(agent, str) or instant is None:
+            continue
+        model = entry.get("model")
+        if agent not in latest or instant >= latest[agent][0]:
+            latest[agent] = (instant, model if isinstance(model, str) else None)
+    return latest
+
+
+def _correlated_dispatch_counts(transcript: dict[str, Any] | None) -> dict[str, Any]:
+    """The transcript's correlated dispatch count per agent, both joins'
+    shared read of `transcript.correlation.correlated_by_agent`."""
+    transcript = transcript if isinstance(transcript, dict) else {}
+    correlation = transcript.get("correlation")
+    counts = (
+        correlation.get("correlated_by_agent")
+        if isinstance(correlation, dict) else None
+    )
+    return counts if isinstance(counts, dict) else {}
+
+
 def _apply_synthesis_attempts(measured: dict[str, Any]) -> None:
     """Join the transcript's dispatch count and finishing model onto each
     synthesis row.
@@ -700,32 +743,46 @@ def _apply_synthesis_attempts(measured: dict[str, Any]) -> None:
     if not isinstance(rows, list):
         return
     transcript = measured.get("transcript")
-    transcript = transcript if isinstance(transcript, dict) else {}
-    correlation = transcript.get("correlation")
-    counts = (
-        correlation.get("correlated_by_agent")
-        if isinstance(correlation, dict) else None
-    )
-    counts = counts if isinstance(counts, dict) else {}
-    usage_rows = transcript.get("agent_usage")
-    latest: dict[str, tuple[datetime, str | None]] = {}
-    for entry in usage_rows if isinstance(usage_rows, list) else []:
-        if not isinstance(entry, dict):
-            continue
-        agent = entry.get("agent")
-        instant = _parse_time(entry.get("dispatched_at"))
-        if not isinstance(agent, str) or instant is None:
-            continue
-        model = entry.get("model")
-        if agent not in latest or instant >= latest[agent][0]:
-            latest[agent] = (instant, model if isinstance(model, str) else None)
+    counts = _correlated_dispatch_counts(transcript)
+    latest = _latest_dispatch_by_agent(transcript)
     for row in rows:
         if not isinstance(row, dict):
             continue
         agent = row.get("agent")
         count = counts.get(agent) if isinstance(agent, str) else None
-        row["attempts"] = count if isinstance(count, int) and count >= 1 else None
+        row["attempts"] = _dispatch_attempts(count)
         row["final_model"] = latest[agent][1] if row["attempts"] is not None and agent in latest else None
+
+
+def _apply_reviewer_attempts(measured: dict[str, Any]) -> None:
+    """Per-reviewer dispatch count and finishing model, from the transcript.
+
+    Reviewer rows have no lifecycle row to hang these on the way synthesis
+    rows do, so they get their own section, one row per agent the
+    manifest's lifecycle started. `attempts` is the transcript's correlated
+    dispatch count for that agent: an Agent call that died before bootstrap
+    is still an attempt, so this can exceed `lifecycle.starts_by_agent`,
+    which counts bootstraps. `final_model` is the model of the last dispatch
+    by time. Both None when the transcript is unavailable or never
+    correlated the agent: unmeasured is not one. Decision D6, 2026-09-16.
+    """
+    lifecycle = measured.get("lifecycle")
+    starts = lifecycle.get("starts_by_agent") if isinstance(lifecycle, dict) else None
+    if not isinstance(starts, dict):
+        measured["reviewer_agents"] = None
+        return
+    transcript = measured.get("transcript")
+    counts = _correlated_dispatch_counts(transcript)
+    latest = _latest_dispatch_by_agent(transcript)
+    rows = []
+    for agent in sorted(a for a in starts if isinstance(a, str)):
+        attempts = _dispatch_attempts(counts.get(agent))
+        rows.append({
+            "agent": agent,
+            "attempts": attempts,
+            "final_model": latest[agent][1] if attempts is not None and agent in latest else None,
+        })
+    measured["reviewer_agents"] = {"agents": rows}
 
 
 def _lifecycle_summary(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -1261,6 +1318,7 @@ def measure_run(
         # cannot vouch for which run these durations belong to, so they
         # are withdrawn rather than attributed to the wrong one.
         measured["synthesis_agents"] = None
+        measured["reviewer_agents"] = None
         measured["evidence"] = None
         measured["transcript"] = _sanitize_transcript(
             _unavailable_transcript("duplicate_run_id_conflict")
@@ -1298,6 +1356,7 @@ def measure_run(
         if warning not in warnings:
             warnings.append(warning)
     _apply_synthesis_attempts(measured)
+    _apply_reviewer_attempts(measured)
     measured["warnings"] = _sanitize_warnings(warnings)
     measured["budget_utilization"] = _budget_utilization(measured)
     measured["usage_shares"] = _usage_shares(measured)

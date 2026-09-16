@@ -339,14 +339,6 @@ Changelog fragments (`scope.py` `CHANGELOG_FRAGMENT_PATTERN`, ~728) belong to th
 **Deferred because:** `_normalize_repo_path` is the read detector's core function; moving it onto containment is a refactor with its own test surface, not a docs-only fix.
 **Do when:** the next time `review_transcript.py`'s boundary logic is touched, or `test_containment_contract.py`'s drift guard is extended to catch `relative_to`.
 
-### 42. Reviewer rows still lack `attempts` and `final_model` (spec item 1.2 remainder)
-
-The reconciled priorities plan (`.claude/docs/analysis/2026-09-14-claude-review-pipeline-priorities-reconciled.md` § 4, Phase 1, item 1.2) asks that reviewer rows, not only synthesis rows, record `attempts`, and that every row record whether the agent saved. 1.119.7 joins `attempts`/`final_model` onto synthesis rows only (`_apply_synthesis_attempts` in `review_metrics/measure.py`). Reviewer dispatch counts already exist in `transcript.correlation.correlated_by_agent`, and saved state lives in lifecycle (`started`/`completed`/`incomplete`) and synthesis completion. Decided 2026-09-16: join `attempts` and `final_model` onto reviewer rows the way `_apply_synthesis_attempts` does for synthesis rows, and add no saved-state flag, because a reader derives it (not completed with `last_stop_reason: end_turn` is an agent that finished without saving; with an API error, an agent that died) and a producer-side flag would classify.
-
-**Evidence:** reconciled priorities plan § 4, Phase 1, item 1.2; `scripts/analysis/review_metrics/measure.py::_apply_synthesis_attempts`.
-**Deferred because:** the maintainer scoped 1.119.7 to synthesis rows, and the join is not worth its own release.
-**Do when:** Phase 2 of the reconciled priorities plan (1.120.0), the next change that touches the metrics reader.
-
 ### 43. The cohort table does not aggregate `reconciliation_verification`
 
 The metrics reader keeps `reconciliation_verification` (1.119.7), but `review_metrics/cohort.py` does not aggregate it, so the cohort table cannot yet count unverified runs even though the per-run data is now available.
@@ -361,7 +353,7 @@ Spec item 1.2 says to retire the `("api error", "api_error")` entry in `review_t
 
 **Evidence:** reconciled priorities plan § 4, Phase 1, item 1.2 ("Retires the `api_error` text mapping at `review_transcript.py:53`"); `scripts/analysis/review_transcript.py::_FAILURE_SIGNATURES`.
 **Deferred because:** retiring the entry needs a tool-result-level replacement signal decided first, or those calls silently stop being counted as failures.
-**Do when:** the maintainer decides the replacement signal for tool-result-level API errors, alongside or after item 42.
+**Do when:** the maintainer decides the replacement signal for tool-result-level API errors.
 
 ### 45. `code-reviewer.md`'s 0.75 boundary sits in two overlapping bands
 
