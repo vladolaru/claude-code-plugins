@@ -121,18 +121,21 @@ _REVIEW_DOMAINS = set(_scope_mod.DOMAIN_CATALOG.keys())
 
 # What one Read call returns whole. deliver_briefing() tells the reviewer to
 # Read its briefing in one call with no offset or limit, and
-# fit_scope_to_one_read() sizes the briefing for exactly that. Both numbers
-# are the harness's, measured on Claude Code 2.1.273 on 2026-09-16: past
-# 25,000 tokens the Read tool returns a partial page with a notice instead
-# of the file. The densest text measured, PHP/TS diff at 2.23 characters per
-# token, reaches that near 55,800 characters; 49,950 characters of it came
-# back whole, while 70,000 of briefing text and 75,000 of PHP/TS diff came
-# back partial. The line limit is the Read tool's documented default; the
-# token cap bound first in every measurement. A briefing past either limit
-# reaches the reviewer in part: on 2026-09-14 the 15 KB scope cap this
-# replaces cut 11 of 12 run-A briefings, and four run-C reviewers never read
-# the remainder. The overrides exist for the integration tests only; nothing
-# in the pipeline sets them.
+# fit_scope_to_one_read() sizes the briefing for exactly that. Both limits
+# and the `Read <file> offset=N limit=M` calls a cut names belong to Claude
+# Code's Read tool; a Codex reviewer reads through its shell, which
+# truncates output by rules of its own. Both numbers are the harness's,
+# measured on Claude Code 2.1.273 on 2026-09-16: past 25,000 tokens the Read
+# tool returns a partial page with a notice instead of the file. The densest
+# text measured, PHP/TS diff at 2.23 characters per token, reaches that near
+# 55,800 characters; 49,950 characters of it came back whole, while 70,000
+# of briefing text and 75,000 of PHP/TS diff came back partial. The line
+# limit is the Read tool's documented default; the token cap bound first in
+# every measurement. A briefing past either limit reaches the reviewer in
+# part: on 2026-09-14 the 15 KB scope cap this replaces cut 11 of 12 run-A
+# briefings, and four run-C reviewers never read the remainder. The
+# overrides exist for the integration tests only; nothing in the pipeline
+# sets them.
 BRIEFING_READ_LINE_LIMIT = int(os.environ.get("PIRATEGOAT_BRIEFING_READ_LINE_LIMIT", "2000"))
 BRIEFING_READ_CHAR_LIMIT = int(os.environ.get("PIRATEGOAT_BRIEFING_READ_CHAR_LIMIT", "50000"))
 
