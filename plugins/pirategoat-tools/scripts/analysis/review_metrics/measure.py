@@ -606,6 +606,9 @@ def _briefings_carried_no_diff(measured: dict[str, Any]) -> bool:
     every reviewer read a file list and no code. Both halves are required —
     a run whose reviewers genuinely had nothing to diff has a zero diffstat
     too, and flagging it would be a false alarm on an honest empty review.
+    Since 1.120.0 the count is what each briefing carried after the
+    fit-to-one-Read cut, so this also fires when every briefing's rest alone
+    filled one Read and its scope was cut to nothing inline.
     """
     lifecycle = measured.get("lifecycle")
     inline = lifecycle.get("inline_diff_lines") if isinstance(lifecycle, dict) else None
