@@ -2032,14 +2032,14 @@ class TestReviewClaimableContractIsDelivered:
     so it never reached a single reviewer. Policy belongs in build_output.
 
     Regression guard for the 1.114.0 fix: build_output() used to re-derive the
-    claimable-file count by regexing its OWN rendered scope text for
-    '=== REVIEW-CLAIMABLE (N files, no diff inlined) ===' — a second
-    text-parsing path for a fact the caller already held. Any rename or
-    reformat of that header in scope.py silently zeroed the count and
-    dropped the entire honesty contract, with no error and (because these
-    tests hardcoded the same header text the regex expected) no test
-    failure either. build_output() now receives review_claimable_count as
-    an explicit fact from the caller and never inspects scope_section for it.
+    claimable-file count by regexing its OWN rendered scope text for the
+    withheld-files header of that time — a second text-parsing path for a
+    fact the caller already held. Any rename or reformat of that header in
+    scope.py silently zeroed the count and dropped the entire honesty
+    contract, with no error and (because these tests hardcoded the same
+    header text the regex expected) no test failure either. build_output()
+    now receives review_claimable_count as an explicit fact from the caller
+    and never inspects scope_section for it.
     """
 
     REVIEW_CLAIMABLE_SCOPE = (
@@ -2101,12 +2101,12 @@ class TestReviewClaimableContractIsDelivered:
                 True,
                 id="renamed-header-cannot-suppress-a-real-count",
             ),
-            # ...and the header the old regex parsed cannot enable it alone.
+            # ...and the header scope.py writes today cannot enable it alone.
             pytest.param(
                 REVIEW_CLAIMABLE_SCOPE,
                 0,
                 False,
-                id="original-header-text-alone-cannot-enable-it",
+                id="current-header-text-alone-cannot-enable-it",
             ),
         ],
     )
