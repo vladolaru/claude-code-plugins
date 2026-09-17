@@ -787,7 +787,11 @@ DOMAIN_CATALOG = {
     },
     "js-tests": {
         "description": "JS/TS test files, excluding E2E",
-        "include": r"(\.(test|spec)\.(js|ts|tsx|jsx)$|__tests__/)",
+        # Suffix conventions (jest, vitest) and directory conventions (mocha,
+        # AVA, node:test, and the helpers and mocks beside them), the same
+        # directories _TEST_EXCLUDE treats as test code. A helper such as
+        # test/thunks.ts used to reach no test reviewer at all (2026-09-17).
+        "include": r"(\.(test|spec)\.(js|ts|tsx|jsx)$|(^|/)(tests?|__tests__|__mocks__|spec)/.*\.(js|ts|tsx|jsx)$)",
         "exclude": r"(^e2e/|/e2e/)",
     },
     "e2e-tests": {

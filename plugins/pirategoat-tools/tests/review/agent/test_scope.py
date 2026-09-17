@@ -203,6 +203,22 @@ class TestFilterDomain:
         assert "src/utils.spec.js" in matched
         assert "e2e/login.spec.ts" in excluded
 
+    def test_js_tests_domain_matches_test_directories_like_the_other_test_domains(self):
+        """php-tests takes tests/*.php and python-tests tests/*.py; js-tests
+        matched suffixes and __tests__/ only, so a mocha-style test or a
+        helper under test/ reached no test reviewer (test/thunks.ts,
+        2026-09-17). The directory list is _TEST_EXCLUDE's."""
+        files = [
+            "test/thunks.ts", "tests/setup.js", "src/__mocks__/api.ts",
+            "spec/helpers.tsx", "src/index.ts", "test/fixtures/data.json",
+            "e2e/tests/checkout.ts",
+        ]
+        matched, excluded = review_scope.filter_domain(files, "js-tests")
+        assert set(matched) == {"test/thunks.ts", "tests/setup.js", "src/__mocks__/api.ts", "spec/helpers.tsx"}
+        assert "src/index.ts" in excluded
+        assert "test/fixtures/data.json" in excluded
+        assert "e2e/tests/checkout.ts" in excluded
+
     def test_e2e_tests_domain_does_not_match_production_page_file(self):
         files = ["src/HomePage.ts", "e2e/pages/HomePage.ts"]
         matched, excluded = review_scope.filter_domain(files, "e2e-tests")

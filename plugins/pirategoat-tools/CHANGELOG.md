@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The scope script and reviewer reports say what they mean: the diff-line allowance is `--diff-line-cap` (was `--max-lines`), files whose diffs were withheld are listed under `=== REVIEW-CLAIMABLE (N files, no diff inlined) ===` (was `NOT DIFFED (budget exceeded)`), a reviewer's markdown lists the review files it left unclaimed as `Not reviewed (unclaimed)` (was `Not reviewed (budget)`), and `budget` now means a reviewer's tool-call allowance and nothing else.
 - A reviewer's briefing now carries its whole scoped diff whenever the briefing fits one Read call; when it does not, the briefing ends its scope with the exact `Read <file> offset=N limit=M` calls that fetch the rest and about how much they hold, read before reviewing when there are two or fewer and part by part past that, in place of the old 15 KB cut and "read with offset/limit to continue". The scoped diff file is written for every reviewer whose scope discovery ran.
 - Run metrics' `Inline diff lines` now counts the diff lines each briefing actually carried, taken from the briefing text after any cut, where it used to report the lines scope fetched before the cut.
+- js-tests-reviewer's domain now includes JS and TS files under `test/`, `tests/`, `__mocks__/` and `spec/` directories, as the PHP and Python test domains already did for theirs; a mocha-style test or a test helper without a `.test`/`.spec` suffix used to reach no test reviewer.
 
 ### Added
 
