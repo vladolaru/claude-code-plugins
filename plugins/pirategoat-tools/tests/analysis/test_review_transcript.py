@@ -1156,7 +1156,7 @@ class TestAnalyzeSubagent:
             status="OK",
             review_rules="",
             domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
             output_dir=str(output_dir),
             pr_number="42",

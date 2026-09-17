@@ -1509,7 +1509,7 @@ class TestAddObservation:
 
 
 class TestReviewedFileClaims:
-    """claim_files_reviewed claims NOT DIFFED files as actually reviewed.
+    """claim_files_reviewed claims REVIEW-CLAIMABLE files as actually reviewed.
 
     The positive-claim API validates one complete batch against the bound
     directory's authoritative assignment. Coverage gaps and reviewed
@@ -2079,7 +2079,7 @@ class TestBudgetTargetEcho:
     (schema 2), not an env var: the retired env-var budget transport
     silently died for any agent that rebuilt its save command, so the
     sidecar is now the only carrier — the same one output.py already reads
-    for derived NOT DIFFED coverage.
+    for derived review-claimable coverage.
     """
 
     @staticmethod

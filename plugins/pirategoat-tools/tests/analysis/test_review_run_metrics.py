@@ -2843,6 +2843,9 @@ class TestLoadRuns:
         assert diagnostic["run"]["id"] != "duplicate-run"
         assert diagnostic["warnings"] == ["duplicate_run_id_conflict"]
         assert set(measured["metric_availability"].values()) == {"missing"}
+        # Neither agent join can vouch for which run its rows belong to.
+        assert measured["synthesis_agents"] is None
+        assert measured["reviewer_agents"] is None
         assert cohort["runs"] == 0
         assert cohort["availability"]["dispatch"]["missing"] == 0
         assert cohort["dispatch"]["planner_candidates"] is None
@@ -9918,6 +9921,30 @@ class TestOptionalSectionsReachMeasureRun:
         assert measured["availability"]["findings_markdown"] is True
 
 
+class TestDispatchAttempts:
+    """The attempts predicate both joins share: only a positive integer
+    dispatch count is measured."""
+
+    @pytest.mark.parametrize(
+        ("count", "expected"),
+        [
+            pytest.param(1, 1, id="one"),
+            pytest.param(3, 3, id="several"),
+            # bool is an int subclass and was never a dispatch count.
+            pytest.param(True, None, id="true"),
+            pytest.param(False, None, id="false"),
+            pytest.param(0, None, id="zero"),
+            pytest.param(-1, None, id="negative"),
+            pytest.param(2.0, None, id="float"),
+            pytest.param("2", None, id="string"),
+            pytest.param(None, None, id="none"),
+        ],
+    )
+    def test_only_a_positive_integer_count_is_measured(self, count, expected):
+        result = measure._dispatch_attempts(count)
+        assert (result, type(result)) == (expected, type(expected))
+
+
 class TestSynthesisAttempts:
     """A retried critic is one lifecycle row spanning both executions
     (2026-09-14 run B: 551 s covering a failed Opus run, a gap and a Fable
@@ -9972,6 +9999,82 @@ class TestSynthesisAttempts:
 
     def test_no_synthesis_section_is_a_no_op(self):
         measure._apply_synthesis_attempts({"synthesis_agents": None, "transcript": {"available": True}})
+
+
+class TestReviewerAttempts:
+    """Decision D6 (2026-09-16): reviewer rows get the same join the
+    synthesis rows got in 1.119.7. `attempts` is the transcript's
+    correlated dispatch count, so an Agent call that died before bootstrap
+    still counts and the number can exceed lifecycle.starts_by_agent;
+    `final_model` is the model of the last dispatch by time. No saved
+    flag: a reader derives it from lifecycle plus termination."""
+
+    def _measured(self, transcript):
+        return {
+            "lifecycle": {"starts_by_agent": {"code-reviewer": 1, "security-reviewer": 1}},
+            "transcript": transcript,
+        }
+
+    def test_one_row_per_started_reviewer_with_count_and_model(self):
+        measured = self._measured({
+            "available": True,
+            "correlation": {"correlated_by_agent": {"code-reviewer": 2, "security-reviewer": 1, "decision-reviewer": 1}},
+            "agent_usage": [
+                {"agent": "code-reviewer", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:00:10+00:00"},
+                {"agent": "code-reviewer", "model": "claude-sonnet-5", "dispatched_at": "2026-09-14T10:04:00+00:00"},
+                {"agent": "security-reviewer", "model": "claude-sonnet-5", "dispatched_at": "2026-09-14T10:00:12+00:00"},
+            ],
+        })
+        measure._apply_reviewer_attempts(measured)
+        rows = {row["agent"]: row for row in measured["reviewer_agents"]["agents"]}
+        assert set(rows) == {"code-reviewer", "security-reviewer"}, "synthesis agents are not reviewer rows"
+        assert rows["code-reviewer"] == {"agent": "code-reviewer", "attempts": 2, "final_model": "claude-sonnet-5"}
+        assert rows["security-reviewer"]["attempts"] == 1
+
+    def test_unavailable_transcript_is_unmeasured_not_one(self):
+        measured = self._measured({"available": False, "correlation": None, "agent_usage": None})
+        measure._apply_reviewer_attempts(measured)
+        for row in measured["reviewer_agents"]["agents"]:
+            assert row["attempts"] is None and row["final_model"] is None
+
+    def test_a_reviewer_the_transcript_never_correlated_is_unmeasured(self):
+        measured = self._measured({
+            "available": True,
+            "correlation": {"correlated_by_agent": {"code-reviewer": 1}},
+            "agent_usage": [{"agent": "code-reviewer", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:00:10+00:00"}],
+        })
+        measure._apply_reviewer_attempts(measured)
+        rows = {row["agent"]: row for row in measured["reviewer_agents"]["agents"]}
+        assert rows["security-reviewer"] == {"agent": "security-reviewer", "attempts": None, "final_model": None}
+
+    def test_no_lifecycle_means_no_section(self):
+        measured = {"lifecycle": None, "transcript": {"available": True}}
+        measure._apply_reviewer_attempts(measured)
+        assert measured["reviewer_agents"] is None
+
+    def test_measured_run_carries_the_section(self, tmp_path):
+        # Reuses TestLifecycleMeasurement's manifest/lifecycle fixture
+        # pattern (_manifest() + _agent_start()/_agent_complete()), the
+        # same shape test_normal_lifecycle_preserves_events_and_counts_
+        # execution_events uses, run through measure_run with
+        # include_transcripts=False so the transcript is unavailable and
+        # every row's attempts/final_model come back None: the expected
+        # shape here is the keys, not a count.
+        manifest = _manifest()
+        manifest["agents"] = {
+            "started": [_agent_start()],
+            "completed": [_agent_complete()],
+            "incomplete": [],
+        }
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        rows = measured["reviewer_agents"]["agents"]
+        assert rows, "expected at least one reviewer row"
+        for row in rows:
+            assert set(row) == {"agent", "attempts", "final_model"}
+            assert row["attempts"] is None
+            assert row["final_model"] is None
 
 
 class TestSynthesisCellAttempts:

@@ -138,7 +138,7 @@ class TestBuildOutputRepoRules:
             status="OK",
             review_rules="GENERIC RULES",
             domain_rules="DOMAIN RULES BODY",
-            scope_output="=== REVIEW SCOPE ===\nfoo",
+            scope_section="=== REVIEW SCOPE ===\nfoo",
             exploration_scope=None,
             output_dir="/tmp",
             pr_number=None,

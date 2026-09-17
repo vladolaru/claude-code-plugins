@@ -339,14 +339,6 @@ Changelog fragments (`scope.py` `CHANGELOG_FRAGMENT_PATTERN`, ~728) belong to th
 **Deferred because:** `_normalize_repo_path` is the read detector's core function; moving it onto containment is a refactor with its own test surface, not a docs-only fix.
 **Do when:** the next time `review_transcript.py`'s boundary logic is touched, or `test_containment_contract.py`'s drift guard is extended to catch `relative_to`.
 
-### 42. Reviewer rows still lack `attempts` and a saved-state signal (spec item 1.2 remainder)
-
-The reconciled priorities plan (`.claude/docs/analysis/2026-09-14-claude-review-pipeline-priorities-reconciled.md` § 4, Phase 1, item 1.2) asks that reviewer rows, not only synthesis rows, record `attempts`, and that every row record whether the agent saved. 1.119.7 joins `attempts`/`final_model` onto synthesis rows only (`_apply_synthesis_attempts` in `review_metrics/measure.py`). Reviewer dispatch counts already exist in `transcript.correlation.correlated_by_agent`, and saved state lives in lifecycle (`started`/`completed`/`incomplete`) and synthesis completion. Pending the maintainer's decision on whether to join them onto reviewer rows, and what "saved" means for a reviewer.
-
-**Evidence:** reconciled priorities plan § 4, Phase 1, item 1.2; `scripts/analysis/review_metrics/measure.py::_apply_synthesis_attempts`.
-**Deferred because:** the maintainer scoped 1.119.7 to synthesis rows; extending to reviewer rows needs a decision on what counts as "saved" for a reviewer (an artifact write vs. lifecycle completion).
-**Do when:** the maintainer decides reviewer rows should carry `attempts` and a saved-state signal.
-
 ### 43. The cohort table does not aggregate `reconciliation_verification`
 
 The metrics reader keeps `reconciliation_verification` (1.119.7), but `review_metrics/cohort.py` does not aggregate it, so the cohort table cannot yet count unverified runs even though the per-run data is now available.
@@ -361,7 +353,7 @@ Spec item 1.2 says to retire the `("api error", "api_error")` entry in `review_t
 
 **Evidence:** reconciled priorities plan § 4, Phase 1, item 1.2 ("Retires the `api_error` text mapping at `review_transcript.py:53`"); `scripts/analysis/review_transcript.py::_FAILURE_SIGNATURES`.
 **Deferred because:** retiring the entry needs a tool-result-level replacement signal decided first, or those calls silently stop being counted as failures.
-**Do when:** the maintainer decides the replacement signal for tool-result-level API errors, alongside or after item 42.
+**Do when:** the maintainer decides the replacement signal for tool-result-level API errors.
 
 ### 45. `code-reviewer.md`'s 0.75 boundary sits in two overlapping bands
 
@@ -370,4 +362,12 @@ The confidence table's `0.51–0.75` row is labeled **Note** ("DO NOT REPORT"), 
 **Evidence:** `plugins/pirategoat-tools/agents/code-reviewer.md:101` (`| 0.51–0.75 | **Note** | Valid but low-impact (DO NOT REPORT) |`) against `:104` (`**RULE: Only report issues with confidence >= 0.75**`).
 **Deferred because:** resolving it decides which findings code-reviewer reports, a behavior change outside a scale conversion.
 **Do when:** the next change to code-reviewer's confidence rules.
+
+### 46. The semantic filter drops hunk lines but keeps the `@@` headers, so counted line numbers drift
+
+`scope.py`'s `apply_semantic_filter()` runs each file's diff through `diff_noise_filter.filter_diff()`, whose `should_filter()` removes added and removed lines that are blank (`is_blank_line_change()`), bracket- or brace-only such as `)`, `}` or `{` (`is_formatting_only()`), or docblock and annotation lines, while every `@@ -a,b +c,d @@` header stays as git wrote it. A reviewer anchoring `add_finding(line=...)` counts forward from `+c` over the lines it sees, as `READ_LINE_NUMBER_WARNING` tells it to, so each dropped line above a finding shifts the reported source line by one. The fix is a design choice, not a one-liner: keep blank and bracket-only lines, split a hunk with a fresh `@@` header where lines were dropped, or number the kept lines.
+
+**Evidence:** `python3 plugins/pirategoat-tools/scripts/review/agent/scope.py --domain code --range f38d4e7e..a57d6c4d --output-dir <tmp>` prints `+_WARNING_LINE_COUNT = READ_LINE_NUMBER_WARNING.count("\n")` followed directly by `+class ScopeSection(NamedTuple):`, while `git diff f38d4e7e..a57d6c4d -- plugins/pirategoat-tools/scripts/review/agent/bootstrap.py` has two blank `+` lines between them, and the `+    )` that closes `fits_one_read` is missing from the scope output; found during the 1.120.0 final review.
+**Deferred because:** every choice changes the diff text all reviewers read and the lines `--diff-line-cap` counts, which belongs in its own change with the filter's noise-reduction trade-off measured, not in the reviewer-input-fidelity fixes.
+**Do when:** the next change to `diff_noise_filter.py` or to `scope.py`'s semantic-filter call, or the first reconciliation that finds a reviewer's finding off by the number of filtered lines above it.
 

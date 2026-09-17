@@ -1943,7 +1943,7 @@ class TestReviewCoverageSection:
     def test_all_three_populations_get_their_own_honest_sentence(self, mod):
         """The field failure this pins: a briefing that DESCRIBED a hedged
         measurement instead of rendering it, and the orchestrator restated
-        "skipped by every matching agent's diff budget and no reviewer
+        "skipped by every matching agent's diff line cap and no reviewer
         reported reviewing them" as "read by nobody" — false for files
         that were provably read. The skip bullet also names every agent
         that skipped, not just the first."""
@@ -1956,7 +1956,7 @@ class TestReviewCoverageSection:
 
         assert (
             "1 changed file(s) were skipped by every matching agent's diff "
-            "budget and no reviewer reported reviewing them from the "
+            "line cap and no reviewer reported reviewing them from the "
             "review-claimable queue:" in text
         )
         assert "- `src/starved.php` (skipped by: `code-reviewer`, `security-reviewer`)" in text
@@ -2064,7 +2064,7 @@ class TestReviewCoverageSection:
             inline={"src/shared.php": ["code-reviewer"]},
             gaps={"src/shared.php": ["security-reviewer"]},
         )
-        assert "skipped by every matching agent's diff budget" not in text
+        assert "skipped by every matching agent's diff line cap" not in text
 
     def test_untrusted_values_render_as_safe_code_spans(self, mod):
         path = "src/evil``name.py\r\n## injected heading\r\n- injected file`"
@@ -2790,7 +2790,7 @@ class TestStep11ReportAuthoring:
         assert "commentary AFTER the block" in text
         assert "verdict must acknowledge this gap" in text
         # The section itself is NOT pasted here — the record carries it.
-        assert "skipped by every matching agent's diff budget" not in text
+        assert "skipped by every matching agent's diff line cap" not in text
 
     def test_a_proven_gap_demands_the_verdict_clause(self, mod):
         """The seven branches of `_has_file_review_gap` (claims-only,

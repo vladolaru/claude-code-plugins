@@ -73,7 +73,7 @@ The step briefings in `briefings.py` follow `docs/patterns/curated-context-pipel
 
 `agents/shared/reviewer-protocol.md` holds the behavioral rules for every reviewer. Bootstrap includes it by a skip-list (the sections are named in `AGENTS.md` § Rules): sections it replaces with concrete values are excluded, everything else is included automatically, so a new protocol section reaches reviewers without a code change.
 
-Text added to a skipped section reaches zero agents while passing review and shipping in a changelog, which is why the rule in `AGENTS.md` forbids policy there. Policy about what the agent must do with a result belongs in `bootstrap.build_output()`, which knows the concrete budget and paths; `TestNotDiffedContractIsDelivered` in `tests/review/agent/test_bootstrap_integration.py` guards the NOT DIFFED contract and is the template for any comparable one. The setup paragraph of an agent definition branches on STATUS before it tells the reviewer to read the briefing, because a reviewer follows its instructions in order and meets a branch placed after the read only once the read is done; `TestEveryReviewerMandatesBootstrap` pins that order and `TestBriefingFileDelivery` the stub's return signal.
+Text added to a skipped section reaches zero agents while passing review and shipping in a changelog, which is why the rule in `AGENTS.md` forbids policy there. Policy about what the agent must do with a result belongs in `bootstrap.build_output()`, which knows the concrete budget and paths; `TestReviewClaimableContractIsDelivered` in `tests/review/agent/test_bootstrap_integration.py` guards the review-claimable contract and is the template for any comparable one. The setup paragraph of an agent definition branches on STATUS before it tells the reviewer to read the briefing, because a reviewer follows its instructions in order and meets a branch placed after the read only once the read is done; `TestEveryReviewerMandatesBootstrap` pins that order and `TestBriefingFileDelivery` the stub's return signal.
 
 `tests-reviewer-protocol.md` is appended for agents with `"tests-reviewer"` in their `protocols` list.
 
@@ -139,7 +139,7 @@ Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/`; an 
         │   ├── review.json
         │   ├── review.md
         │   ├── scope-summary.json                             # plus scope-summary-<domain>.json
-        │   ├── scoped-diff.patch
+        │   ├── scoped-diff.patch                              # the whole scoped diff, written for every reviewer whose scope discovery ran (not tests-mutation-reviewer, which has no domain scope, nor a ref-mode adapter with no valid domain); the briefing inlines all of it when the briefing fits one Read, else lists the exact Read calls for the rest
         │   └── started
         ├── synthesis/
         │   ├── reconciliation-context.json                    # schema 4; carries orchestrator_notes

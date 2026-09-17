@@ -1755,10 +1755,10 @@ def _render_file_review_section(file_review):
       own account — the mechanism working, recorded as a claim.
 
     They are never merged: "no one saw it" and "someone says they saw it"
-    are different facts, and so are "starved by a budget" and "routed to
-    nobody". Returning finished Markdown rather than a description is the
-    whole point — the orchestrator's job here is to paste, not to
-    summarize.
+    are different facts, and so are "starved by the diff line cap" and
+    "routed to nobody". Returning finished Markdown rather than a
+    description is the whole point — the orchestrator's job here is to
+    paste, not to summarize.
     """
     if not isinstance(file_review, dict):
         return ""
@@ -1774,7 +1774,7 @@ def _render_file_review_section(file_review):
     if gaps:
         lines.append(
             f"{len(gaps)} changed file(s) were skipped by every matching "
-            "agent's diff budget and no reviewer reported reviewing them "
+            "agent's diff line cap and no reviewer reported reviewing them "
             "from the review-claimable queue:"
         )
         lines.append("")
@@ -1835,9 +1835,8 @@ def _render_file_review_section(file_review):
         lines.append(
             f"{len(claims)} changed file(s) never received their diff "
             "inline: a reviewer read them from the review-claimable queue, "
-            "which is the designed path for files over the inline cap or "
-            "outside the inline budget. The pipeline records the claim, not "
-            "the read:"
+            "which is the designed path for files over the diff line cap. "
+            "The pipeline records the claim, not the read:"
         )
         lines.append("")
         for f_path, agents in sorted(claims.items()):
@@ -2686,7 +2685,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     # Coverage. The measurement itself is already rendered, complete and
     # hedged, in the record — so the report quotes it rather than
     # re-deriving it. A field run once paraphrased "skipped by every
-    # matching agent's diff budget and no reviewer reported reviewing
+    # matching agent's diff line cap and no reviewer reported reviewing
     # them" into "read by nobody", false for 8 of 41 files.
     if record_usable and _has_file_review_content(state.get("file_review")):
         gap_clause = (

@@ -267,6 +267,30 @@ def test_no_definition_teaches_a_percent_confidence_scale():
     assert not offenders, "\n".join(offenders)
 
 
+# One noun per fact (Phase 2, 2026-09-16): `budget` is the reviewer's
+# tool-call allowance and nothing else. The diff-line allowance is
+# `diff_line_cap`, the tier order is `inline_priority`, and a file whose
+# diff was withheld is `review_claimable`. CHANGELOG.md is history and
+# this file spells the old words on purpose.
+_OLD_SCOPE_WORDS = re.compile(
+    r"NOT DIFFED|budget_exceeded|BUDGET_EXCEEDED|budget_max|budget_priority"
+    r"|\bmax_lines\b|--max-lines|context budget|diff budget"
+)
+_OLD_SCOPE_WORDS_EXEMPT = {"CHANGELOG.md", "test_registry_docs.py", "BACKLOG.md"}
+
+
+def test_no_scope_text_calls_the_diff_line_cap_a_budget():
+    offenders = []
+    for pattern in ("*.py", "*.md", "*.json"):
+        for path in sorted(PLUGIN_ROOT.rglob(pattern)):
+            if path.name in _OLD_SCOPE_WORDS_EXEMPT or ".codex-plugin" in path.parts or "codex-skills" in path.parts:
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if _OLD_SCOPE_WORDS.search(line):
+                    offenders.append(f"{path.relative_to(PLUGIN_ROOT)}:{number}: {line.strip()[:90]}")
+    assert offenders == [], "\n".join(offenders)
+
+
 def _registry_tiers():
     registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
     return {agent["model_tier"] for agent in registry["agents"].values()}
