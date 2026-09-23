@@ -1397,31 +1397,98 @@ class TestRenderScopeSection:
 
 
 class TestFitScopeToOneRead:
-    """The briefing is built with the whole scope and cut only when the Read
-    tool would not return it whole, to what the rest of the briefing leaves."""
+    """The briefing is built with the whole purpose and the whole scope; if
+    the Read tool would not return it whole, the purpose leaves first as a
+    named read of its file, and only then is the scope cut to what the rest
+    of the briefing leaves. A cut scope never shares a briefing with an
+    inline purpose."""
+
+    PURPOSE = "\n".join(f"purpose line {i}" for i in range(30)) + "\n"
+    POINTER = "=== REVIEW FOCUS CONTINUES IN FILE ===\nRead /run/pipeline/change-purpose.md\n"
+
+    @classmethod
+    def _build_like_build_output(cls, section, purpose_inline=True):
+        """The shape build_output() gives the section: rules, the purpose
+        or its pointer, the section, and a last line with no newline."""
+        purpose = cls.PURPOSE if purpose_inline else cls.POINTER
+        return "\n".join(["RULES"] * 20 + [purpose, section, "", "OUTPUT"])
 
     @staticmethod
-    def _build_like_build_output(section):
-        """The shape build_output() gives the section: text around it and a
-        last line with no newline."""
+    def _build_without_purpose(section, purpose_inline=True):
+        """The 1.120.0 build shape, byte for byte: no purpose to evict, so
+        `purpose_inline` is accepted and ignored (with a default so a
+        pre-check can call `build(widest.text)` with one argument)."""
         return "\n".join(["RULES"] * 20 + [section, "", "OUTPUT"])
 
-    def test_whole_scope_when_the_briefing_fits(self):
-        build = lambda section: "RULES\n" + section + "\nOUTPUT\n"
-        output, section = _mod.fit_scope_to_one_read(build, TestRenderScopeSection.SCOPE, "/f")
+    def test_whole_scope_and_purpose_when_the_briefing_fits(self):
+        build = lambda section, purpose_inline: "RULES\n" + (self.PURPOSE if purpose_inline else self.POINTER) + section + "\nOUTPUT\n"
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(
+            build, TestRenderScopeSection.SCOPE, "/f", purpose_evictable=True
+        )
+        assert purpose_inline is True
         assert section.remaining_reads == []
-        assert output == build(TestRenderScopeSection.SCOPE)
+        assert output == build(TestRenderScopeSection.SCOPE, True)
+
+    def test_the_purpose_leaves_before_any_scope_line_is_cut(self, monkeypatch):
+        """Whole purpose + whole scope does not fit; pointer + whole scope
+        does. The scope rides whole and the purpose is the named read."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 10**6)
+        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(20)) + "\n"
+        # 20 rules + 30 purpose lines + 22 scope lines + 2 > 60; with the
+        # 2-line pointer it is 46 lines, under the limit with the warning.
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 60)
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(
+            self._build_like_build_output, scope, "/f", purpose_evictable=True
+        )
+        assert purpose_inline is False
+        assert section.remaining_reads == [], "the scope must ride whole once the purpose is out"
+        assert section.carried_lines == section.total_lines
+        assert output == self._build_like_build_output(section.text, False)
+        assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
+
+    def test_the_scope_is_cut_only_after_the_purpose_left(self, monkeypatch):
+        """Neither the whole nor the pointer build fits; the cut is computed
+        on the pointer build, so the cut briefing never carries the purpose."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 10**6)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 60)
+        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(200)) + "\n"
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(
+            self._build_like_build_output, scope, "/f", purpose_evictable=True
+        )
+        assert purpose_inline is False
+        assert section.remaining_reads, "the scope did not fit even without the purpose"
+        assert "purpose line 0" not in output
+        assert output == self._build_like_build_output(section.text, False)
+        assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
+        kept = section.text.split("\n\n=== SCOPE CONTINUES IN FILE ===")[0].split("\n")
+        _assert_reads_fetch_exactly_the_rest(section, scope, kept=len(kept), scope_file="/f")
+
+    def test_no_purpose_means_the_cut_is_the_only_stage(self, monkeypatch):
+        """Without a purpose to evict the fit is the 1.120.0 one, and the
+        flag comes back True because nothing was moved."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 10**6)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 40)
+        rest = "\n".join(f"rule {i}" for i in range(20)) + "\n"
+        build = lambda section, purpose_inline: rest + section + "OUTPUT\n"
+        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(60)) + "\n"
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(
+            build, scope, "/f", purpose_evictable=False
+        )
+        assert purpose_inline is True
+        assert section.remaining_reads
+        assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
 
     def test_scope_is_cut_to_what_the_rest_of_the_briefing_leaves(self, monkeypatch):
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 40)
         monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 10**6)
         rest = "\n".join(f"rule {i}" for i in range(20)) + "\n"
-        build = lambda section: rest + section + "OUTPUT\n"
+        build = lambda section, purpose_inline: rest + section + "OUTPUT\n"
         scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(60)) + "\n"
-        output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(build, scope, "/f", purpose_evictable=False)
+        assert purpose_inline is True
         assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
         assert section.remaining_reads, "the scope did not fit, so reads must be named"
-        assert output == build(section.text)
+        assert output == build(section.text, True)
         kept = section.text.split("\n\n=== SCOPE CONTINUES IN FILE ===")[0].split("\n")
         assert section.carried_lines > 0
         assert section.carried_lines == len(kept) - 2
@@ -1433,9 +1500,10 @@ class TestFitScopeToOneRead:
         # the scope.
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 10**6)
         monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 1500)
-        build = lambda section: ("r" * 200) + "\n" + section + "OUTPUT\n"
+        build = lambda section, purpose_inline: ("r" * 200) + "\n" + section + "OUTPUT\n"
         scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join("+" + ("x" * 30) for _ in range(40)) + "\n"
-        output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(build, scope, "/f", purpose_evictable=False)
+        assert purpose_inline is True
         assert len(_mod.READ_LINE_NUMBER_WARNING + output) <= 1500
         assert 0 < section.carried_lines < 40
         assert section.remaining_reads
@@ -1497,7 +1565,7 @@ class TestFitScopeToOneRead:
         if longer_wording == "read-first":
             monkeypatch.setattr(_mod, "_READ_FIRST_WORDING", _mod._PACED_WORDING)
             monkeypatch.setattr(_mod, "_PACED_WORDING", "Read these in order:")
-        build = self._build_like_build_output
+        build = self._build_without_purpose
         cuts = collections.Counter()
 
         def regime(section):
@@ -1510,10 +1578,13 @@ class TestFitScopeToOneRead:
                 widest = _mod.render_scope_section(scope, scope_file, line_allowance=0, char_allowance=0)
                 if not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text)):
                     continue
-                output, section = _mod.fit_scope_to_one_read(build, scope, scope_file)
+                output, section, purpose_inline = _mod.fit_scope_to_one_read(
+                    build, scope, scope_file, purpose_evictable=False
+                )
                 where = f"line limit {line_limit}, char limit {char_limit}"
+                assert purpose_inline is True, where
                 assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output), where
-                assert output == build(section.text), where
+                assert output == build(section.text, True), where
                 if section.remaining_reads:
                     inline = section.text.split("=== SCOPE CONTINUES IN FILE ===")[0]
                     kept = len(inline[:-2].split("\n")) if inline else 0
@@ -1537,7 +1608,7 @@ class TestFitScopeToOneRead:
         as wide as the widest block's and no other reserve covers that
         character."""
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 10**6)
-        build = self._build_like_build_output
+        build = self._build_without_purpose
         exact_cuts = 0
         for width in range(150, 250, 10):
             scope = ("+" + "x" * (width - 1) + "\n") * 4
@@ -1546,8 +1617,11 @@ class TestFitScopeToOneRead:
                 widest = _mod.render_scope_section(scope, "/f", line_allowance=0, char_allowance=0)
                 if not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text)):
                     continue
-                output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+                output, section, purpose_inline = _mod.fit_scope_to_one_read(
+                    build, scope, "/f", purpose_evictable=False
+                )
                 briefing = _mod.READ_LINE_NUMBER_WARNING + output
+                assert purpose_inline is True, f"line width {width}, char limit {char_limit}"
                 assert _mod.fits_one_read(briefing), f"line width {width}, char limit {char_limit}"
                 if section.carried_lines and section.remaining_reads:
                     exact_cuts += len(briefing) == char_limit
@@ -1560,7 +1634,7 @@ class TestFitScopeToOneRead:
         short ones counted 1,093 diff lines in a 98-line file, and the cut
         briefing came out one character over the limit."""
         scope = "+" + "\r-" * 1000 + "\n" + "\n".join(f"+{i}" for i in range(92)) + "\n"
-        build = self._build_like_build_output
+        build = self._build_without_purpose
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 10**6)
         checked_cuts = 0
         for char_limit in range(2000, 6000):
@@ -1568,7 +1642,10 @@ class TestFitScopeToOneRead:
             widest = _mod.render_scope_section(scope, "/f", line_allowance=0, char_allowance=0)
             if not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text)):
                 continue
-            output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+            output, section, purpose_inline = _mod.fit_scope_to_one_read(
+                build, scope, "/f", purpose_evictable=False
+            )
+            assert purpose_inline is True, f"char limit {char_limit}"
             assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output), f"char limit {char_limit}"
             checked_cuts += section.carried_lines > 999
         assert checked_cuts > 20, "the sweep must exercise cuts that carry the long line"
@@ -1581,25 +1658,27 @@ class TestFitScopeToOneRead:
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 30)
         monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", 10**6)
         scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "\n".join(f"+{i}" for i in range(60)) + "\n"
-        build = self._build_like_build_output
+        build = self._build_without_purpose
         widest = _mod.render_scope_section(scope, "/f", line_allowance=0, char_allowance=0)
         assert not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + build(widest.text))
 
-        output, section = _mod.fit_scope_to_one_read(build, scope, "/f")
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(build, scope, "/f", purpose_evictable=False)
 
+        assert purpose_inline is True
         assert section == widest
-        assert output == build(widest.text)
+        assert output == build(widest.text, True)
         assert section.carried_lines == 0
         _assert_reads_fetch_exactly_the_rest(section, scope, kept=0, scope_file="/f")
         assert not _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
 
     def test_no_scoped_diff_file_means_the_scope_rides_whole(self, monkeypatch):
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 5)
-        output, section = _mod.fit_scope_to_one_read(
-            self._build_like_build_output, "(No scope discovery)", None
+        output, section, purpose_inline = _mod.fit_scope_to_one_read(
+            self._build_without_purpose, "(No scope discovery)", None, purpose_evictable=False
         )
+        assert purpose_inline is True
         assert section.text == "(No scope discovery)"
-        assert output == self._build_like_build_output("(No scope discovery)")
+        assert output == self._build_without_purpose("(No scope discovery)", True)
 
 
 class TestBuildErrorOutput:

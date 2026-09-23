@@ -334,26 +334,43 @@ def _continuation_growth(widest: ScopeSection, scope_line_count: int) -> int:
 
 
 def fit_scope_to_one_read(
-    build: Callable[[str], str], scope_output: str, scope_file: Optional[str]
-) -> Tuple[str, ScopeSection]:
-    """Build the briefing with the whole scope; if the Read tool would not
-    return it in one call, rebuild once with the scope cut to what the rest
-    of the briefing leaves.
+    build: Callable[[str, bool], str],
+    scope_output: str,
+    scope_file: Optional[str],
+    *,
+    purpose_evictable: bool,
+) -> Tuple[str, ScopeSection, bool]:
+    """Build the briefing with the whole purpose and the whole scope; if the
+    Read tool would not return it in one call, rebuild with the purpose
+    evicted to its file, and only if that still does not fit, rebuild once
+    more with the scope cut to what the rest of the briefing leaves.
 
-    `build` must place the section verbatim and nothing else it renders may
-    depend on it. The cut is computed from measured sizes, not guessed: the
-    rest of the briefing from the first build, and the continuation block
-    reserved at its widest, so the cut briefing fits one Read whenever the
-    rest plus that widest block does; when even that exceeds a limit, the
-    cut inlines nothing and names every scope line as a read, the smallest
-    briefing possible, and the Read tool's partial-page notice takes over.
-    `scope_file` is None when no scoped-diff file was written, and the scope
-    then rides whole.
+    `build(scope_section, purpose_inline)` must place the section verbatim
+    and nothing else it renders may depend on it; with `purpose_inline`
+    False it renders the REVIEW FOCUS pointer block in place of the purpose
+    body. The order is the point: findings anchor to the diff, the purpose
+    is context, and on 2026-09-22 the purpose alone was 17K of a 50K
+    briefing while the diff got 5%. A cut scope never shares a briefing
+    with an inline purpose. `purpose_evictable` is False when there is no
+    purpose to move (then the flag returned is True and the fit is the
+    two-stage one). The cut is computed from measured sizes of the build
+    that ships: the rest of the briefing from the pointer build, and the
+    continuation block reserved at its widest; when even that exceeds a
+    limit, the cut inlines nothing and names every scope line as a read,
+    and the Read tool's partial-page notice takes over. `scope_file` is
+    None when no scoped-diff file was written, and the scope then rides
+    whole with the purpose inline.
     """
     section = render_scope_section(scope_output, scope_file)
-    output = build(section.text)
+    output = build(section.text, True)
     if scope_file is None or fits_one_read(READ_LINE_NUMBER_WARNING + output):
-        return output, section
+        return output, section, True
+    purpose_inline = True
+    if purpose_evictable:
+        purpose_inline = False
+        output = build(section.text, False)
+        if fits_one_read(READ_LINE_NUMBER_WARNING + output):
+            return output, section, False
     rest_newlines = output.count("\n") - section.text.count("\n")
     rest_chars = len(output) - len(section.text)
     widest = render_scope_section(scope_output, scope_file, line_allowance=0, char_allowance=0)
@@ -372,7 +389,7 @@ def fit_scope_to_one_read(
             0,
         ),
     )
-    return build(section.text), section
+    return build(section.text, purpose_inline), section, purpose_inline
 
 
 # Soft cap on host_context section size to keep prompt growth bounded.
@@ -2356,7 +2373,7 @@ def main():
 
     plugin_version = load_plugin_version(output_dir)
 
-    def _build(scope_section: str) -> str:
+    def _build(scope_section: str, purpose_inline: bool) -> str:
         return build_output(
             agent_name=effective_agent_name,
             plugin_root=plugin_root,
@@ -2384,7 +2401,9 @@ def main():
             plugin_version=plugin_version,
         )
 
-    output, scope_section = fit_scope_to_one_read(_build, scope_output, scope_file)
+    output, scope_section, _purpose_inline = fit_scope_to_one_read(
+        _build, scope_output, scope_file, purpose_evictable=False
+    )
 
     # Telemetry: log agent start (best-effort). Logged once the briefing is
     # built, so the carried count is measured from the text the reviewer
