@@ -1388,7 +1388,7 @@ class TestBriefingFileDelivery:
         ).stdout
 
         assert "offset" in stub
-        assert stub.index("one Read call") < stub.index("Only if")
+        assert stub.index("whole before doing anything else") < stub.index("Only if")
 
     def test_no_domain_files_run_records_the_review_and_still_writes_the_briefing(self, tmp_path):
         """An empty scope has nothing for a model to judge, so bootstrap

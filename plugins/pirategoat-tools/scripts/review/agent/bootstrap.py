@@ -1283,6 +1283,9 @@ def build_coverage_note(primary_domain: str, secondary_domains: List[str]) -> st
     )
 
 
+REVIEW_FOCUS_CONTINUES_HEADER = "=== REVIEW FOCUS CONTINUES IN FILE ==="
+
+
 def build_output(
     *,
     agent_name: str,
@@ -1300,6 +1303,7 @@ def build_output(
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
     change_purpose: Optional[str] = None,
+    change_purpose_inline: bool = True,
     additional_instructions: Optional[str] = None,
     review_budget: Optional[int] = None,
     budget_capped: bool = False,
@@ -1398,7 +1402,19 @@ def build_output(
                 "reason to drop it."
             )
         lines.append("")
-        lines.append(change_purpose)
+        if change_purpose_inline:
+            lines.append(change_purpose)
+        else:
+            # The purpose left so the diff could stay (fit_scope_to_one_read
+            # evicts it before cutting a scope line); the reviewer fetches it
+            # from the file the orchestrator wrote at step 3.
+            purpose_file = os.path.abspath(artifact_path(output_dir, "change_purpose"))
+            lines.append(REVIEW_FOCUS_CONTINUES_HEADER)
+            lines.append(
+                f"The purpose is {len(change_purpose):,} characters in {purpose_file}; "
+                "it left this briefing so the diff could stay. Read it whole before "
+                "reviewing."
+            )
         lines.append("")
 
     # Reviewer-Requested Focus — additional instructions from the requester.
@@ -1630,24 +1646,31 @@ def build_output(
     return "\n".join(lines)
 
 
-# One Read is the expected shape and the default the stub states first.
-# The continuation clause is conditional on the harness's own answer, not
-# on the reviewer's judgement, so it cannot bring back the three
-# speculative offset Reads inline delivery used to cost: fit_scope_to_one_read()
-# cuts only the scope section to what one Read returns, and a PR body long
+# Outcomes and the reason, never a tool: a shell read of a file this size
+# is cut off past about 30 KB and comes back as a stub, which is why the
+# briefing is read whole some other way — eleven of nineteen reviewers on
+# the 2026-09-22 elevator run tried the shell first and paid a wasted call
+# because the old sentence mandated a tool without saying why. The
+# continuation clause is conditional on the harness's own answer, not on
+# the reviewer's judgement, so it cannot bring back the three speculative
+# offset Reads inline delivery used to cost: fit_scope_to_one_read() cuts
+# only the scope section to what one Read returns, and a PR body long
 # enough to push the rest past Read's limit would otherwise leave the
 # OUTPUT INSTRUCTIONS — the save and finalize contract — unread. The last
-# sentence names the one set of further Reads a briefing may ask for: the
-# exact calls a cut scope lists, paced as that block says.
+# sentences name the only further reads a briefing may ask for: the exact
+# scope calls a cut lists, and the purpose file when REVIEW FOCUS points
+# to one.
 BRIEFING_STUB_GUIDANCE = (
-    "Read the BRIEFING file in full: one Read call, no offset/limit. "
-    "It is your complete briefing: review rules, review scope, and output "
-    "instructions. Only if that Read comes back partial, continue with "
-    "offset reads to the end of the file — the output instructions are the "
-    "last section, and you cannot save a review without them. "
-    "Follow it; do not read run artifacts by hand. "
+    "Read the BRIEFING file whole before doing anything else; a shell read "
+    "of a file this size is cut off past about 30 KB and comes back as a "
+    "stub. It is your complete briefing: review rules, review scope, and "
+    "output instructions. Only if the read comes back partial, continue "
+    "from the offset the notice names to the end of the file — the output "
+    "instructions are the last section, and you cannot save a review "
+    "without them. Follow it; do not read run artifacts by hand. "
     "If the briefing ends its scope with SCOPE CONTINUES IN FILE, make the "
-    "Read calls it lists, as it says."
+    "Read calls it lists, as it says. If its REVIEW FOCUS says the purpose "
+    "CONTINUES IN FILE, read the file it names, as it says."
 )
 
 # What a reviewer with an empty scope is told instead. Bootstrap has already

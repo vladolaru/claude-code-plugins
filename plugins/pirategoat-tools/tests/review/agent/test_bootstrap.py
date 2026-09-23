@@ -964,6 +964,56 @@ class TestChangePurposeInjection:
         )
         assert "verifies=" not in output
 
+
+class TestReviewFocusPointer:
+    """With change_purpose_inline=False the REVIEW FOCUS section keeps its
+    header, description line and two-tier sentence and names the purpose
+    file instead of carrying the body, so a reviewer still learns what
+    Verify and Context items are before it reads them. Pins the facts the
+    block carries (path, size, body absent, position), not its sentences:
+    wording is a rule in AGENTS.md, not a test."""
+
+    PURPOSE = (
+        "## Verify\nV1. The default slug comes from the site locale — source: PR description\n"
+        "## Context\nC1. Permalinks are read at init priority 5\n"
+        "## Author's description (extracted)\n> quoted\n"
+    )
+
+    def _build(self, tmp_path, inline):
+        return _mod.build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_section="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            review_claimable_count=0,
+            has_php=False,
+            change_purpose=self.PURPOSE,
+            change_purpose_inline=inline,
+        )
+
+    def test_inline_is_the_default_and_carries_the_body(self, tmp_path):
+        prompt = self._build(tmp_path, True)
+        assert "V1. The default slug" in prompt
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in prompt
+
+    def test_evicted_purpose_keeps_the_tiers_and_names_the_file(self, tmp_path):
+        prompt = self._build(tmp_path, False)
+        focus = prompt.split("=== REVIEW FOCUS (pipeline synthesis) ===", 1)[1].split("\n=== REVIEW", 1)[0]
+        assert "load-bearing claims" in focus
+        assert "V1. The default slug" not in prompt
+        pointer = prompt.split(_mod.REVIEW_FOCUS_CONTINUES_HEADER, 1)[1].split("\n=== ", 1)[0]
+        assert str(tmp_path / "pipeline" / "change-purpose.md") in pointer
+        assert f"{len(self.PURPOSE):,} characters" in pointer
+        # Still in the context position: after the rules, before the content.
+        assert prompt.index("=== REVIEW RULES ===") < prompt.index(_mod.REVIEW_FOCUS_CONTINUES_HEADER) < prompt.index("--- Section 2: REVIEW CONTENT")
+
+
 class TestResolveOverallStatus:
     """Defense-in-depth: primary NO_DOMAIN_FILES + secondary content → scoped OK."""
 
