@@ -1671,9 +1671,16 @@ class TestBriefingFitsOneRead:
         # BRIEFING_READ_LINE_LIMIT is read once at import time, so an env
         # var set after import has no effect.
         probe, purpose = self._in_process_with_purpose(tmp_path / "probe", monkeypatch, capsys, 400, 30)
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in probe, "the probe must fit whole at the default limit"
         purpose_body_lines = purpose.count("\n")
-        total = len(_mod._read_tool_lines(probe)) if _mod.REVIEW_FOCUS_CONTINUES_HEADER not in probe else None
-        assert total is not None, "the probe must fit whole at the default limit"
+        total = len(_mod._read_tool_lines(probe))
+        # Evicting the purpose costs it purpose_body_lines and gains back the
+        # 2-line pointer block, so the pointer+whole build lands at
+        # total - purpose_body_lines + 2. READ_LINE_NUMBER_WARNING's 5 lines
+        # are in both `total` (the probe already carries them) and that
+        # build's own measure, so they cancel out of the difference. The
+        # +20 margin here leaves ~18 lines of slack under the limit, while
+        # the whole+whole build below is over it by ~purpose_body_lines.
         monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", total - purpose_body_lines + 20)
         briefing, _ = self._in_process_with_purpose(tmp_path / "cut", monkeypatch, capsys, 400, 30)
         assert _mod.REVIEW_FOCUS_CONTINUES_HEADER in briefing
@@ -1685,6 +1692,8 @@ class TestBriefingFitsOneRead:
 
     def test_a_cut_scope_never_shares_a_briefing_with_an_inline_purpose(self, tmp_path, monkeypatch, capsys):
         probe, purpose = self._in_process_with_purpose(tmp_path / "probe", monkeypatch, capsys, 100, 400)
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in probe, "the probe must fit whole at the default limit"
+        assert "SCOPE CONTINUES IN FILE" not in probe, "the probe must fit whole at the default limit"
         # Below what pointer+whole scope needs: both stages fire.
         monkeypatch.setattr(
             _mod, "BRIEFING_READ_LINE_LIMIT",
