@@ -163,6 +163,16 @@ When uncertain, read the actual source file to confirm.
 
 **Preexisting-code agents** (patterns-reviewer, history-insights-reviewer): search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes.
 
+### Bounded Filesystem Discovery
+
+Host Context being non-exhaustive does not make the whole filesystem a valid search root.
+
+- Never run recursive discovery from `/` or `$HOME`.
+- Every recursive search must name a bounded root: the reviewed repository, an injected Host Context path, a declared dependency root, or a specific path named by repository configuration/imports.
+- For sibling discovery, list the repository parent one level deep, select a plausible sibling checkout, and search inside that specific sibling. Do not recursively scan the parent directory.
+- Prefer targeted Grep/Glob or `rg --files -g '<pattern>' <root>` over `find`.
+- When those roots are exhausted, stop discovery rather than widening the search root.
+
 ## Empirical Probes (Running Code)
 
 Reproducing a finding by running code is encouraged — never at the
@@ -267,13 +277,3 @@ The bootstrap may inject a **Host Context** section into your prompt with local 
 - If a host is marked **unresolved** or the **Banner** indicates degradation, you cannot verify upstream behavior. Two options: (1) downgrade severity and add a `verify locally` note in the recommendation, or (2) skip the finding if it depends entirely on the unverified host. Do not state absence ("function X doesn't exist") for unresolved hosts.
 - Don't recommend edits to Host Context library dependency roots — those are review aids, not editable code. Recommendations should target the reviewed repo.
 - When a resolved host covers the code you need, read it there and cite it as `<host>@<version, commit, or unknown>:<upstream-relative path>:<line>` (`wordpress@7.2-alpha-63166-src:src/wp-includes/post.php:1234`, or `wordpress@unknown:…` when the run recorded neither), so the reconciliator can verify against the same copy; cite any other source as `file:line`. Do not search for another copy: the Host Context line names the version and commit the run verified against, and a second copy at another version makes your finding unverifiable. If you read a different copy anyway, say so in the check's `method` with that copy's identity and version, never a local path.
-
-### Bounded Filesystem Discovery
-
-Host Context being non-exhaustive does not make the whole filesystem a valid search root.
-
-- Never run recursive discovery from `/` or `$HOME`.
-- Every recursive search must name a bounded root: the reviewed repository, an injected Host Context path, a declared dependency root, or a specific path named by repository configuration/imports.
-- For sibling discovery, list the repository parent one level deep, select a plausible sibling checkout, and search inside that specific sibling. Do not recursively scan the parent directory.
-- Prefer targeted Grep/Glob or `rg --files -g '<pattern>' <root>` over `find`.
-- When those roots are exhausted, stop discovery rather than widening the search root.

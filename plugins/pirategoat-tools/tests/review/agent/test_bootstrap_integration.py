@@ -965,6 +965,47 @@ class TestCanonicalExecutableBuilderSource:
         assert assignment_line.count("PIRATEGOAT_") == 5
 
 
+class TestHostContextUsageFollowsTheHosts:
+    """`## Host Context Usage` is the one protocol section delivered on a
+    condition. It governs the hosts the rendered Host Context lists, so a run
+    without hosts has nothing for it to govern; the 2026-09-22 elevator run
+    (a Tauri app, no hosts) still sent its ~3K chars to all 19 reviewers. It
+    leaves REVIEW RULES through the skip list and main() hands it to
+    build_output(), which renders it right after the Host Context section
+    when a manifest is present."""
+
+    MANIFEST = {
+        "version": 1,
+        "resolved": [{"name": "wordpress", "kind": "runtime-host",
+                      "path": "/x/wp", "source": "sibling", "version": None,
+                      "confidence": "medium", "notes": {}}],
+        "unresolved": [], "banner": None, "diagnostics": {},
+    }
+
+    def test_section_leaves_review_rules_through_the_skip_list(self):
+        assert "## Host Context Usage" in _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
+
+    def test_run_without_hosts_does_not_carry_the_rules(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        prompt = _main_in_process("code-reviewer", tmp_path, monkeypatch, capsys)
+        assert "## Host Context" not in prompt
+        assert "## Host Context Usage" not in prompt
+
+    def test_run_with_hosts_carries_the_rules_after_the_hosts(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "review-context.json").write_text(
+            json.dumps({"host_context": self.MANIFEST})
+        )
+        prompt = _main_in_process("code-reviewer", tmp_path, monkeypatch, capsys)
+        assert prompt.index("## Host Context\n") < prompt.index("## Host Context Usage")
+        usage = prompt.split("## Host Context Usage", 1)[1]
+        assert "downstream" in usage
+
+
 class TestNotApplicableCompletionContract:
     """The shared protocol is the sole executable abstention recipe."""
 

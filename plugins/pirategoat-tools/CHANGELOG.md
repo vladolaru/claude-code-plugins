@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.120.1] - UNRELEASED
+
+### Changed
+
+- The protocol's Host Context Usage rules now reach a reviewer only when its briefing lists hosts, placed right after that Host Context section; a run against a repository with no upstream hosts or dependency roots no longer carries about 3K characters of rules about reading them.
+
 ## [1.120.0] - UNRELEASED
 
 ### Changed
