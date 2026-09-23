@@ -371,3 +371,27 @@ The confidence table's `0.51–0.75` row is labeled **Note** ("DO NOT REPORT"), 
 **Deferred because:** every choice changes the diff text all reviewers read and the lines `--diff-line-cap` counts, which belongs in its own change with the filter's noise-reduction trade-off measured, not in the reviewer-input-fidelity fixes.
 **Do when:** the next change to `diff_noise_filter.py` or to `scope.py`'s semantic-filter call, or the first reconciliation that finds a reviewer's finding off by the number of filtered lines above it.
 
+### 47. The reviewer protocol reaches reviewers through the one capped channel
+
+REVIEW RULES (10,833 chars without hosts after 1.120.1) arrive inside the briefing, the one channel sized to a Read call, while the agent definition is a system prompt with no cap. A build step inlining `agents/shared/reviewer-protocol.md` into each `agents/*.md` (as `scripts/generate_codex_compat.py` already generates the Codex adapters) would free that much briefing for the diff at the same token cost, but makes the definitions generated files and rewires the skip-list tests (`TestArchitecturalInvariants`, `TestEmpiricalProbeContract`, `TestHostContextUsageFollowsTheHosts`).
+
+**Evidence:** `.claude/docs/analysis/2026-09-22-claude-1-120-0-release-gate-field-runs.md` § "Measured: what the budget actually carries"; `.claude/docs/analysis/2026-09-23-claude-briefing-eviction-order-design.md`.
+**Deferred because:** the purpose eviction (1.121.0) is the smaller change with the larger share of the budget; whether the diff is still cut often after it is what decides this one.
+**Do when:** the 1.121.0 field run shows scope cuts firing in most briefings with the purpose already evicted.
+
+### 48. The file list and diffstat scale with the change and count against the inline allowance
+
+On the 2026-09-22 elevator run the file list and diffstat came to about 12.9K chars for 341 files in `patterns`'s briefing, more than a quarter of the budget before a diff line. The list is the review-claimable work queue, so it cannot be cut; a top-N with the rest in `scope-summary.json` (which already holds every path) is the shape of a fix.
+
+**Evidence:** section sizes in `.claude/docs/analysis/2026-09-22-claude-1-120-0-release-gate-field-runs.md`.
+**Deferred because:** it changes what the reviewer sees of its queue; measure how often the list alone pushes a scope cut before choosing N.
+**Do when:** a field run shows a scope cut whose file list exceeds the diff it displaced.
+
+### 49. The step-3 change purpose has no size guidance
+
+The purpose was 8.7K–27.8K chars across the recorded runs and is copied into every reviewer's briefing (or, from 1.121.0, read by every reviewer from its file). The step-3 handoff (`briefings.py::_change_purpose_handoff`) asks for a "brief" summary and bounds nothing. A one-sentence ceiling in that handoff is the lever; the number should come from what reviewers cite (`verifies=`) against what the purpose held.
+
+**Evidence:** REVIEW FOCUS sizes per run in `.claude/docs/analysis/2026-09-23-claude-briefing-eviction-order-design.md`.
+**Deferred because:** the orchestrator writes it, so a ceiling is a briefing sentence with its own field run; decide after seeing how often eviction fires.
+**Do when:** the 1.121.0 field run's `verifies` citations drop against the baseline in the design record, or a purpose over 30K chars appears.
+
