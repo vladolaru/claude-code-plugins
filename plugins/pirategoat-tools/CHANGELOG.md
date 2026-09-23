@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The protocol's Host Context Usage rules now reach a reviewer only when its briefing lists hosts, placed right after that Host Context section; a run against a repository with no upstream hosts or dependency roots no longer carries about 3K characters of rules about reading them.
+- The shared reviewer protocol says each rule once: the line-less finding exception, the unchanged-caller clearance method and most of the draft lifecycle were restated from OUTPUT INSTRUCTIONS or Absence Claims, and three subsections under Scope Discovery reached no reviewer at all. A briefing's REVIEW RULES shrink by about a third on a run without hosts and a fifth with them, with every rule and every example kept.
 
 ## [1.120.0] - UNRELEASED
 
