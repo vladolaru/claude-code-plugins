@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.121.1] - UNRELEASED
+
+### Fixed
+
+- The Executive Summary of every rendered review, findings ledger and review record now lists low and info counts beside critical, high and medium, so the listed counts add up to the stated total.
+
 ## [1.121.0] - 2026-09-23
 
 ### Changed

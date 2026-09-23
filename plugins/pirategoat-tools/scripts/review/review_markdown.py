@@ -197,10 +197,12 @@ def render_review_body(data: Dict) -> str:
         md.append("\n\n")
 
     if data['summary']['total_findings'] > 0:
+        # One line per severity the total counts, so the list sums to
+        # `Total Findings`; a hand-picked subset once dropped low and info.
         counts = data['summary']['by_severity']
-        md.append(f"- Critical: {counts['critical']}\n")
-        md.append(f"- High: {counts['high']}\n")
-        md.append(f"- Medium: {counts['medium']}\n\n")
+        for severity in VALID_SEVERITIES:
+            md.append(f"- {severity.capitalize()}: {counts[severity]}\n")
+        md.append("\n")
 
     # Unclaimed review work derived from the reviewer's assignment.
     if data.get('unclaimed_review_files'):
