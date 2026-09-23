@@ -286,3 +286,37 @@ def test_host_section_says_unknown_when_identity_is_missing():
     section = bootstrap.render_host_context_section(manifest)
     assert '(via source="ecosystem-cache", version unknown, commit unknown)' in section
     assert "latest" not in section
+
+
+def test_build_output_delivers_host_usage_rules_only_beside_hosts():
+    """The protocol's Host Context Usage rules govern the hosts the rendered
+    Host Context lists, so they ride with that section and stay out of a run
+    that has no hosts."""
+    bootstrap = _import_bootstrap()
+    manifest = {
+        "version": 1,
+        "resolved": [{"name": "wordpress", "kind": "runtime-host",
+                      "path": "/x/wp", "source": "sibling", "version": None,
+                      "confidence": "medium", "notes": {}}],
+        "unresolved": [], "banner": None, "diagnostics": {},
+    }
+    rules = (
+        "## Host Context Usage\n\n"
+        "Read a listed host as upstream only when the reviewed code calls into it.\n"
+    )
+    common = dict(
+        agent_name="test", plugin_root="/tmp/plugin", status="OK",
+        review_rules="rules", domain_rules=None,
+        scope_section="=== REVIEW SCOPE ===\n(empty)",
+        exploration_scope=None, output_dir="/tmp",
+        pr_number=None, reviewer_name="test",
+        review_claimable_count=0, has_php=False,
+        host_usage_rules=rules,
+    )
+    with_hosts = bootstrap.build_output(host_context=manifest, **common)
+    assert with_hosts.index("## Host Context\n") < with_hosts.index("## Host Context Usage")
+    assert "calls into it" in with_hosts
+
+    without_hosts = bootstrap.build_output(host_context=None, **common)
+    assert "## Host Context Usage" not in without_hosts
+    assert "calls into it" not in without_hosts

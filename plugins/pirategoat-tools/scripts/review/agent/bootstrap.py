@@ -391,6 +391,10 @@ REVIEWER_PROTOCOL_SKIP_SECTIONS = [
     "## Output Directory",  # bootstrap resolves to concrete OUTPUT_DIR
     "## ReviewOutputBuilder API",  # bootstrap provides pre-filled snippet
     "## File-Based Output", # bootstrap provides concrete file paths
+    # Delivered on a condition, not dropped: main() extracts it with
+    # extract_protocol_section() and build_output() renders it right after
+    # the Host Context section, only when a host manifest is present.
+    "## Host Context Usage",
 ]
 
 
@@ -546,6 +550,39 @@ def extract_protocol_sections(content: str, skip_prefixes: List[str]) -> str:
 
     return "\n".join(extracted).strip()
 
+
+
+def extract_protocol_section(content: str, prefix: str) -> str:
+    """Return the one `## ` section whose heading starts with ``prefix``.
+
+    The heading line is included, `#` lines inside code fences are not
+    parsed, and the section ends at the next `## ` or `# ` heading. Empty
+    string when the protocol has no such section. This is the inverse of
+    extract_protocol_sections() for the sections the skip list holds back
+    so that build_output() can place them on a condition.
+    """
+    lines = content.splitlines()
+    kept = []
+    keeping = False
+    in_code_fence = False
+    for line in lines:
+        if line.startswith("```"):
+            in_code_fence = not in_code_fence
+            if keeping:
+                kept.append(line)
+            continue
+        if in_code_fence:
+            if keeping:
+                kept.append(line)
+            continue
+        heading_match = re.match(r'^(#{1,6})\s', line)
+        if heading_match and len(heading_match.group(1)) <= 2:
+            if keeping:
+                break
+            keeping = line.strip().startswith(prefix)
+        if keeping:
+            kept.append(line)
+    return "\n".join(kept).strip()
 
 def run_scope_discovery(
     plugin_root: str,
@@ -1249,6 +1286,7 @@ def build_output(
     review_budget: Optional[int] = None,
     budget_capped: bool = False,
     host_context: Optional[dict] = None,
+    host_usage_rules: Optional[str] = None,
     coverage_note: Optional[str] = None,
     repo_review_rules: Optional[str] = None,
     repo_reviewer_prompt: Optional[str] = None,
@@ -1363,6 +1401,11 @@ def build_output(
     if host_section:
         lines.append(host_section)
         lines.append("")
+        # The protocol's rules for reading those hosts ride with them; a run
+        # with no hosts has nothing for the rules to govern.
+        if host_usage_rules:
+            lines.append(host_usage_rules)
+            lines.append("")
 
     # Review Budget — scope-proportionate tool call calibration
     if review_budget is not None:
@@ -1926,6 +1969,9 @@ def main():
     review_rules = extract_protocol_sections(
         protocol_content, REVIEWER_PROTOCOL_SKIP_SECTIONS
     )
+    host_usage_rules = extract_protocol_section(
+        protocol_content, "## Host Context Usage"
+    )
 
     # Read domain-specific protocol for test agents
     domain_rules = None
@@ -2331,6 +2377,7 @@ def main():
             review_budget=review_budget,
             budget_capped=budget_capped,
             host_context=host_context,
+            host_usage_rules=host_usage_rules,
             coverage_note=coverage_note,
             repo_review_rules=repo_review_rules,
             repo_reviewer_prompt=repo_reviewer_prompt,
