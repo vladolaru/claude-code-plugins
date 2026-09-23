@@ -349,17 +349,18 @@ def fit_scope_to_one_read(
     and nothing else it renders may depend on it; with `purpose_inline`
     False it renders the REVIEW FOCUS pointer block in place of the purpose
     body. The order is the point: findings anchor to the diff, the purpose
-    is context, and on 2026-09-22 the purpose alone was 17K of a 50K
-    briefing while the diff got 5%. A cut scope never shares a briefing
-    with an inline purpose. `purpose_evictable` is False when there is no
-    purpose to move (then the flag returned is True and the fit is the
-    two-stage one). The cut is computed from measured sizes of the build
-    that ships: the rest of the briefing from the pointer build, and the
-    continuation block reserved at its widest; when even that exceeds a
-    limit, the cut inlines nothing and names every scope line as a read,
-    and the Read tool's partial-page notice takes over. `scope_file` is
-    None when no scoped-diff file was written, and the scope then rides
-    whole with the purpose inline.
+    is context, and in the elevator run's `security` briefing the purpose
+    was 17,066 of 49,960 characters; separately, a cut briefing gave the
+    diff 5% of the briefing (19% of an uncut one). A cut scope never
+    shares a briefing with an inline purpose. `purpose_evictable` is False
+    when there is no purpose to move (then the flag returned is True and
+    the fit is the two-stage one). The cut is computed from measured
+    sizes of the build that ships: the rest of the briefing from the
+    pointer build, and the continuation block reserved at its widest;
+    when even that exceeds a limit, the cut inlines nothing and names
+    every scope line as a read, and the Read tool's partial-page notice
+    takes over. `scope_file` is None when no scoped-diff file was
+    written, and the scope then rides whole with the purpose inline.
     """
     section = render_scope_section(scope_output, scope_file)
     output = build(section.text, True)

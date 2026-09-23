@@ -1457,11 +1457,25 @@ class TestFitScopeToOneRead:
         )
         assert purpose_inline is False
         assert section.remaining_reads, "the scope did not fit even without the purpose"
-        assert "purpose line 0" not in output
+        assert "purpose line" not in output
         assert output == self._build_like_build_output(section.text, False)
         assert _mod.fits_one_read(_mod.READ_LINE_NUMBER_WARNING + output)
         kept = section.text.split("\n\n=== SCOPE CONTINUES IN FILE ===")[0].split("\n")
         _assert_reads_fetch_exactly_the_rest(section, scope, kept=len(kept), scope_file="/f")
+
+        # Pin that the cut was sized from the pointer build's rest, not the
+        # whole-purpose build's: a build that renders only the pointer
+        # shape (ignoring `purpose_inline`), fit with `purpose_evictable=
+        # False` so it skips straight to the cut stage, reserves the same
+        # rest as the real cut did. The whole purpose is far larger than
+        # its pointer, so a cut sized from the whole-purpose build's rest
+        # would reserve too much and carry fewer scope lines; equal counts
+        # here pin the real cut to the pointer build without a magic number.
+        pointer_only_build = lambda text, purpose_inline: self._build_like_build_output(text, False)
+        _, pointer_sized_section, _ = _mod.fit_scope_to_one_read(
+            pointer_only_build, scope, "/f", purpose_evictable=False
+        )
+        assert section.carried_lines == pointer_sized_section.carried_lines
 
     def test_no_purpose_means_the_cut_is_the_only_stage(self, monkeypatch):
         """Without a purpose to evict the fit is the 1.120.0 one, and the
