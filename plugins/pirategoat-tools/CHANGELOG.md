@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- When a reviewer's briefing would not fit one Read call, the change purpose now leaves the briefing first, as a named read of the run's `pipeline/change-purpose.md` with its size; the REVIEW FOCUS header and its two-tier instruction stay inline, and the scoped diff is cut only if the briefing still does not fit.
+- When a reviewer's briefing would not fit one Read call, the change purpose now leaves the briefing first, as a named read of the run's `pipeline/change-purpose.md` with its size; the REVIEW FOCUS header and its two-tier instruction stay inline, and the scoped diff is cut only if the briefing still does not fit. The purpose now also leaves for a reviewer with no scoped-diff file to cut (only tests-mutation-reviewer), whose oversized briefing otherwise had no relief.
 - The bootstrap stub now says a briefing's REVIEW FOCUS may name a second file to read, and its read-the-briefing instruction states why a shell read of the briefing comes back short instead of naming a tool.
 
 ## [1.120.1] - 2026-09-23

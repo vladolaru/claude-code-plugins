@@ -359,18 +359,25 @@ def fit_scope_to_one_read(
     when even that exceeds a limit, the cut inlines nothing and names
     every scope line as a read, and the Read tool's partial-page notice
     takes over. `scope_file` is None when no scoped-diff file was
-    written, and the scope then rides whole with the purpose inline.
+    written: nothing can be cut, so the cut stage never runs, but
+    eviction still does — a purpose-carrying build that does not fit
+    still moves the purpose to its pointer, and that build ships whether
+    or not it then fits, since there is nothing further to try. With
+    `scope_file` None and `purpose_evictable` False, the whole build
+    ships regardless of fit, as before.
     """
     section = render_scope_section(scope_output, scope_file)
     output = build(section.text, True)
-    if scope_file is None or fits_one_read(READ_LINE_NUMBER_WARNING + output):
+    if fits_one_read(READ_LINE_NUMBER_WARNING + output):
         return output, section, True
     purpose_inline = True
     if purpose_evictable:
         purpose_inline = False
         output = build(section.text, False)
-        if fits_one_read(READ_LINE_NUMBER_WARNING + output):
+        if scope_file is None or fits_one_read(READ_LINE_NUMBER_WARNING + output):
             return output, section, False
+    elif scope_file is None:
+        return output, section, True
     rest_newlines = output.count("\n") - section.text.count("\n")
     rest_chars = len(output) - len(section.text)
     widest = render_scope_section(scope_output, scope_file, line_allowance=0, char_allowance=0)
