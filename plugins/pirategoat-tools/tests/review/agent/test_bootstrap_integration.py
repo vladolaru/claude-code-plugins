@@ -1388,7 +1388,7 @@ class TestBriefingFileDelivery:
         ).stdout
 
         assert "offset" in stub
-        assert stub.index("one Read call") < stub.index("Only if")
+        assert stub.index("whole before doing anything else") < stub.index("Only if")
 
     def test_no_domain_files_run_records_the_review_and_still_writes_the_briefing(self, tmp_path):
         """An empty scope has nothing for a model to judge, so bootstrap
@@ -1524,7 +1524,9 @@ class TestBriefingFitsOneRead:
     """The briefing either carries the whole scope or names the reads for
     the rest, and telemetry records what it carried, not what scope
     fetched. Run A, 2026-09-14: a 1,327-line scope was cut at 15 KB, and
-    the metric reported 487 inline diff lines where the briefing held 79."""
+    the metric reported 487 inline diff lines where the briefing held 79.
+    It also pins that main() evicts the change purpose to its file before
+    it ever cuts a scope line."""
 
     SECTION_2 = "--- Section 2: REVIEW CONTENT (what to review) ---"
     # What build_output() can place after the scope section, in order.
@@ -1637,6 +1639,72 @@ class TestBriefingFitsOneRead:
         # The stub defers to the block, which says how the reads are paced.
         assert "SCOPE CONTINUES IN FILE, make the Read calls it lists, as it says." in result.stdout
         assert "before reviewing" not in result.stdout
+
+    PURPOSE_HEAD = "## Verify\nV1. Something load-bearing — source: PR description\n## Context\nNone.\n## Author's description (extracted)\n> quoted\n"
+
+    def _in_process_with_purpose(self, tmp_path, monkeypatch, capsys, purpose_lines, scope_hunk_lines):
+        """Run bootstrap's real main() with a change-purpose file of
+        `purpose_lines` filler lines under the parsed headings and a stubbed
+        scope of `scope_hunk_lines` hunk lines; return the briefing."""
+        out = tmp_path / "out"
+        (out / "pipeline").mkdir(parents=True)
+        purpose = self.PURPOSE_HEAD + "\n".join(f"purpose filler {i}" for i in range(purpose_lines)) + "\n"
+        (out / "pipeline" / "change-purpose.md").write_text(purpose)
+        scope = (
+            "STATUS: OK\n=== FILES ===\nsrc/a.py  (+%d -0)\n=== DIFFS ===\n--- src/a.py ---\n" % scope_hunk_lines
+            + "\n".join(f"+line {i}" for i in range(scope_hunk_lines)) + "\n"
+        )
+        facts = dict(_IN_PROCESS_FACTS, in_scope_stat_lines=scope_hunk_lines, inline_diff_lines=scope_hunk_lines)
+        return _main_in_process("code-reviewer", tmp_path, monkeypatch, capsys, scope_output=scope, facts=facts), purpose
+
+    def test_a_briefing_that_fits_carries_the_purpose_inline(self, tmp_path, monkeypatch, capsys):
+        briefing, purpose = self._in_process_with_purpose(tmp_path, monkeypatch, capsys, 5, 5)
+        assert "purpose filler 0" in briefing
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in briefing
+        assert "SCOPE CONTINUES IN FILE" not in briefing
+
+    def test_the_purpose_leaves_first_and_the_scope_rides_whole(self, tmp_path, monkeypatch, capsys):
+        # Size the limit from a probe: everything except the purpose body,
+        # plus a margin smaller than the body, so whole+whole cannot fit and
+        # pointer+whole can. monkeypatch.setattr, not setenv: main() runs
+        # against the module the test already imported, and
+        # BRIEFING_READ_LINE_LIMIT is read once at import time, so an env
+        # var set after import has no effect.
+        probe, purpose = self._in_process_with_purpose(tmp_path / "probe", monkeypatch, capsys, 400, 30)
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in probe, "the probe must fit whole at the default limit"
+        purpose_body_lines = purpose.count("\n")
+        total = len(_mod._read_tool_lines(probe))
+        # Evicting the purpose costs it purpose_body_lines and gains back the
+        # 2-line pointer block, so the pointer+whole build lands at
+        # total - purpose_body_lines + 2. READ_LINE_NUMBER_WARNING's 5 lines
+        # are in both `total` (the probe already carries them) and that
+        # build's own measure, so they cancel out of the difference. The
+        # +20 margin here leaves ~18 lines of slack under the limit, while
+        # the whole+whole build below is over it by ~purpose_body_lines.
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", total - purpose_body_lines + 20)
+        briefing, _ = self._in_process_with_purpose(tmp_path / "cut", monkeypatch, capsys, 400, 30)
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER in briefing
+        assert "purpose filler 0" not in briefing
+        assert str(tmp_path / "cut" / "out" / "pipeline" / "change-purpose.md") in briefing
+        assert "SCOPE CONTINUES IN FILE" not in briefing
+        assert "+line 29" in briefing
+        assert "load-bearing claims" in briefing
+
+    def test_a_cut_scope_never_shares_a_briefing_with_an_inline_purpose(self, tmp_path, monkeypatch, capsys):
+        probe, purpose = self._in_process_with_purpose(tmp_path / "probe", monkeypatch, capsys, 100, 400)
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in probe, "the probe must fit whole at the default limit"
+        assert "SCOPE CONTINUES IN FILE" not in probe, "the probe must fit whole at the default limit"
+        # Below what pointer+whole scope needs: both stages fire.
+        monkeypatch.setattr(
+            _mod, "BRIEFING_READ_LINE_LIMIT",
+            len(_mod._read_tool_lines(probe)) - purpose.count("\n") - 200,
+        )
+        briefing, _ = self._in_process_with_purpose(tmp_path / "cut", monkeypatch, capsys, 100, 400)
+        assert "SCOPE CONTINUES IN FILE" in briefing
+        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER in briefing
+        assert "purpose filler 0" not in briefing
+        reads = re.findall(r"^  Read (\S+) offset=(\d+) limit=(\d+)$", briefing, re.M)
+        assert reads and all(path.endswith("scoped-diff.patch") for path, _, _ in reads)
 
 
 class TestScopeSectionRidesVerbatim:

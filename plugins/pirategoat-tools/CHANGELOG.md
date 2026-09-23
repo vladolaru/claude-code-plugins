@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.121.0] - UNRELEASED
+
+### Changed
+
+- When a reviewer's briefing would not fit one Read call, the change purpose now leaves the briefing first, as a named read of the run's `pipeline/change-purpose.md` with its size; the REVIEW FOCUS header and its two-tier instruction stay inline, and the scoped diff is cut only if the briefing still does not fit. The purpose also leaves when a reviewer has no scoped-diff file to cut.
+- The bootstrap stub now says a briefing's REVIEW FOCUS may name a second file to read, and its read-the-briefing instruction states why a shell read of the briefing comes back short instead of naming a tool.
+
 ## [1.120.1] - 2026-09-23
 
 ### Changed

@@ -119,20 +119,19 @@ _scope_mod = importlib.util.module_from_spec(_scope_spec)
 _scope_spec.loader.exec_module(_scope_mod)
 _REVIEW_DOMAINS = set(_scope_mod.DOMAIN_CATALOG.keys())
 
-# What one Read call returns whole. deliver_briefing() tells the reviewer to
-# Read its briefing in one call with no offset or limit, and
-# fit_scope_to_one_read() sizes the briefing for exactly that. Both limits
-# and the `Read <file> offset=N limit=M` calls a cut names belong to Claude
-# Code's Read tool; a Codex reviewer reads through its shell, which
-# truncates output by rules of its own. Both numbers are the harness's,
-# measured on Claude Code 2.1.273 on 2026-09-16: past 25,000 tokens the Read
-# tool returns a partial page with a notice instead of the file. The densest
-# text measured, PHP/TS diff at 2.23 characters per token, reaches that near
-# 55,800 characters; 49,950 characters of it came back whole, while 70,000
-# of briefing text and 75,000 of PHP/TS diff came back partial. The line
-# limit is the Read tool's documented default; the token cap bound first in
-# every measurement. A briefing past either limit reaches the reviewer in
-# part: on 2026-09-14 the 15 KB scope cap this replaces cut 11 of 12 run-A
+# What one Read call returns whole: the size fit_scope_to_one_read() sizes
+# the briefing for. Both limits and the `Read <file> offset=N limit=M`
+# calls a cut names belong to Claude Code's Read tool; a Codex reviewer
+# reads through its shell, which truncates output by rules of its own.
+# Both numbers are the harness's, measured on Claude Code 2.1.273 on
+# 2026-09-16: past 25,000 tokens the Read tool returns a partial page with
+# a notice instead of the file. The densest text measured, PHP/TS diff at
+# 2.23 characters per token, reaches that near 55,800 characters; 49,950
+# characters of it came back whole, while 70,000 of briefing text and
+# 75,000 of PHP/TS diff came back partial. The line limit is the Read
+# tool's documented default; the token cap bound first in every
+# measurement. A briefing past either limit reaches the reviewer in part:
+# on 2026-09-14 the 15 KB scope cap this replaces cut 11 of 12 run-A
 # briefings, and four run-C reviewers never read the remainder. The
 # overrides exist for the integration tests only; nothing in the pipeline
 # sets them.
@@ -334,26 +333,51 @@ def _continuation_growth(widest: ScopeSection, scope_line_count: int) -> int:
 
 
 def fit_scope_to_one_read(
-    build: Callable[[str], str], scope_output: str, scope_file: Optional[str]
-) -> Tuple[str, ScopeSection]:
-    """Build the briefing with the whole scope; if the Read tool would not
-    return it in one call, rebuild once with the scope cut to what the rest
-    of the briefing leaves.
+    build: Callable[[str, bool], str],
+    scope_output: str,
+    scope_file: Optional[str],
+    *,
+    purpose_evictable: bool,
+) -> Tuple[str, ScopeSection, bool]:
+    """Build the briefing with the whole purpose and the whole scope; if the
+    Read tool would not return it in one call, rebuild with the purpose
+    evicted to its file, and only if that still does not fit, rebuild once
+    more with the scope cut to what the rest of the briefing leaves.
 
-    `build` must place the section verbatim and nothing else it renders may
-    depend on it. The cut is computed from measured sizes, not guessed: the
-    rest of the briefing from the first build, and the continuation block
-    reserved at its widest, so the cut briefing fits one Read whenever the
-    rest plus that widest block does; when even that exceeds a limit, the
-    cut inlines nothing and names every scope line as a read, the smallest
-    briefing possible, and the Read tool's partial-page notice takes over.
-    `scope_file` is None when no scoped-diff file was written, and the scope
-    then rides whole.
+    `build(scope_section, purpose_inline)` must place the section verbatim
+    and nothing else it renders may depend on it; with `purpose_inline`
+    False it renders the REVIEW FOCUS pointer block in place of the purpose
+    body. The order is the point: findings anchor to the diff, the purpose
+    is context, and in the elevator run's `security` briefing the purpose
+    was 17,066 of 49,960 characters; separately, a cut briefing gave the
+    diff 5% of the briefing (19% of an uncut one). A cut scope never
+    shares a briefing with an inline purpose. `purpose_evictable` is False
+    when there is no purpose to move (then the flag returned is True and
+    the fit is the two-stage one). The cut is computed from measured
+    sizes of the build that ships: the rest of the briefing from the
+    pointer build, and the continuation block reserved at its widest;
+    when even that exceeds a limit, the cut inlines nothing and names
+    every scope line as a read, and the Read tool's partial-page notice
+    takes over. `scope_file` is None when no scoped-diff file was
+    written: nothing can be cut, so the cut stage never runs, but
+    eviction still does — a purpose-carrying build that does not fit
+    still moves the purpose to its pointer, and that build ships whether
+    or not it then fits, since there is nothing further to try. With
+    `scope_file` None and `purpose_evictable` False, the whole build
+    ships regardless of fit, as before.
     """
     section = render_scope_section(scope_output, scope_file)
-    output = build(section.text)
-    if scope_file is None or fits_one_read(READ_LINE_NUMBER_WARNING + output):
-        return output, section
+    output = build(section.text, True)
+    if fits_one_read(READ_LINE_NUMBER_WARNING + output):
+        return output, section, True
+    purpose_inline = True
+    if purpose_evictable:
+        purpose_inline = False
+        output = build(section.text, False)
+        if scope_file is None or fits_one_read(READ_LINE_NUMBER_WARNING + output):
+            return output, section, False
+    elif scope_file is None:
+        return output, section, True
     rest_newlines = output.count("\n") - section.text.count("\n")
     rest_chars = len(output) - len(section.text)
     widest = render_scope_section(scope_output, scope_file, line_allowance=0, char_allowance=0)
@@ -372,7 +396,7 @@ def fit_scope_to_one_read(
             0,
         ),
     )
-    return build(section.text), section
+    return build(section.text, purpose_inline), section, purpose_inline
 
 
 # Soft cap on host_context section size to keep prompt growth bounded.
@@ -1265,6 +1289,9 @@ def build_coverage_note(primary_domain: str, secondary_domains: List[str]) -> st
     )
 
 
+REVIEW_FOCUS_CONTINUES_HEADER = "=== REVIEW FOCUS CONTINUES IN FILE ==="
+
+
 def build_output(
     *,
     agent_name: str,
@@ -1282,6 +1309,7 @@ def build_output(
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
     change_purpose: Optional[str] = None,
+    change_purpose_inline: bool = True,
     additional_instructions: Optional[str] = None,
     review_budget: Optional[int] = None,
     budget_capped: bool = False,
@@ -1380,7 +1408,21 @@ def build_output(
                 "reason to drop it."
             )
         lines.append("")
-        lines.append(change_purpose)
+        if change_purpose_inline:
+            lines.append(change_purpose)
+        else:
+            # The purpose left so the rest could fit in one read
+            # (fit_scope_to_one_read evicts it before cutting a scope line,
+            # and evicts it outright when there is no scope line to cut); the
+            # reviewer fetches it from the file the orchestrator wrote at
+            # step 3.
+            purpose_file = os.path.abspath(artifact_path(output_dir, "change_purpose"))
+            lines.append(REVIEW_FOCUS_CONTINUES_HEADER)
+            lines.append(
+                f"The purpose is {len(change_purpose):,} characters in {purpose_file}; "
+                "it left this briefing so the rest could fit in one read. Read it "
+                "whole before reviewing."
+            )
         lines.append("")
 
     # Reviewer-Requested Focus — additional instructions from the requester.
@@ -1612,24 +1654,32 @@ def build_output(
     return "\n".join(lines)
 
 
-# One Read is the expected shape and the default the stub states first.
-# The continuation clause is conditional on the harness's own answer, not
-# on the reviewer's judgement, so it cannot bring back the three
-# speculative offset Reads inline delivery used to cost: fit_scope_to_one_read()
-# cuts only the scope section to what one Read returns, and a PR body long
-# enough to push the rest past Read's limit would otherwise leave the
-# OUTPUT INSTRUCTIONS — the save and finalize contract — unread. The last
-# sentence names the one set of further Reads a briefing may ask for: the
-# exact calls a cut scope lists, paced as that block says.
+# Outcomes and the reason, never a tool: a shell read of a file past
+# about 30 KB is cut off and comes back as a stub, which is why the
+# briefing is read whole some other way — eleven of nineteen reviewers on
+# the 2026-09-22 elevator run tried the shell first and paid a wasted
+# call. The continuation clause is conditional on the harness's own
+# answer, not on the reviewer's judgement, so it cannot bring back the
+# three speculative offset Reads inline delivery used to cost:
+# fit_scope_to_one_read() evicts the purpose to its file before cutting
+# the scope section, and only cuts the scope to what one Read returns
+# when eviction alone still does not fit; a PR body long enough to push
+# the rest past Read's limit would otherwise leave the OUTPUT
+# INSTRUCTIONS — the save and finalize contract — unread. The last
+# sentences name the only further reads a briefing may ask for: the exact
+# scope calls a cut lists, and the purpose file when REVIEW FOCUS points
+# to one.
 BRIEFING_STUB_GUIDANCE = (
-    "Read the BRIEFING file in full: one Read call, no offset/limit. "
-    "It is your complete briefing: review rules, review scope, and output "
-    "instructions. Only if that Read comes back partial, continue with "
-    "offset reads to the end of the file — the output instructions are the "
-    "last section, and you cannot save a review without them. "
-    "Follow it; do not read run artifacts by hand. "
+    "Read the BRIEFING file whole before doing anything else; a shell read "
+    "of a file past about 30 KB is cut off and comes back as a stub. It is "
+    "your complete briefing: review rules, review scope, and "
+    "output instructions. Only if the read comes back partial, continue "
+    "from the offset the notice names to the end of the file — the output "
+    "instructions are the last section, and you cannot save a review "
+    "without them. Follow it; do not read run artifacts by hand. "
     "If the briefing ends its scope with SCOPE CONTINUES IN FILE, make the "
-    "Read calls it lists, as it says."
+    "Read calls it lists, as it says. If its REVIEW FOCUS says the purpose "
+    "CONTINUES IN FILE, read the file it names, as it says."
 )
 
 # What a reviewer with an empty scope is told instead. Bootstrap has already
@@ -2356,7 +2406,7 @@ def main():
 
     plugin_version = load_plugin_version(output_dir)
 
-    def _build(scope_section: str) -> str:
+    def _build(scope_section: str, purpose_inline: bool) -> str:
         return build_output(
             agent_name=effective_agent_name,
             plugin_root=plugin_root,
@@ -2373,6 +2423,7 @@ def main():
             file_history=file_history_output,
             pr_intent=pr_intent,
             change_purpose=change_purpose,
+            change_purpose_inline=purpose_inline,
             additional_instructions=additional_instructions,
             review_budget=review_budget,
             budget_capped=budget_capped,
@@ -2384,7 +2435,9 @@ def main():
             plugin_version=plugin_version,
         )
 
-    output, scope_section = fit_scope_to_one_read(_build, scope_output, scope_file)
+    output, scope_section, _ = fit_scope_to_one_read(
+        _build, scope_output, scope_file, purpose_evictable=change_purpose is not None
+    )
 
     # Telemetry: log agent start (best-effort). Logged once the briefing is
     # built, so the carried count is measured from the text the reviewer

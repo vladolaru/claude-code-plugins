@@ -82,6 +82,8 @@ Each rule names the test that holds it where one exists. One clause of why; the 
 
 **Prompt order.** Bootstrap's prompt is REVIEW RULES, context sections, REVIEW CONTENT, OUTPUT INSTRUCTIONS, in that order (primacy for rules, recency for output). Keep it when editing `bootstrap.py` or the protocols.
 
+**Reviewer instructions name outcomes, not tools.** A briefing or stub says what to fetch and, where one exists, the mechanical reason (a shell read of a file past about 30 KB comes back as a persisted-output stub), never which tool to use, because a bare mandate is ignored by the reviewers who most need the reason. The scope block's `Read <file> offset=N limit=M` lines are line coordinates, not a tool choice. No test pins wording; this rule does.
+
 **The ledger has one write path.** `review-findings.json` is written only through `findings_save.py` (the reconciliator) and `critic_adjustments.write_findings()` (adjudication), never with a bare `atomic_write_json`. The critic never authors ids or adjudication state, and the orchestrator never edits the committed proposal.
 
 **The verdict ladder lives once.** `verdict_rules.verdict_for_counts()` is shared by `agent/output.py` and `critic_adjustments.py`, and `verdict_rules.publish_verdict()` maps the ledger verdict to the published one at step 11, so a second copy that drifts reaches GitHub.
