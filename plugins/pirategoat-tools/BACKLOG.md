@@ -395,3 +395,11 @@ The purpose was 8.7K–27.8K chars across the recorded runs and is copied into e
 **Deferred because:** the orchestrator writes it, so a ceiling is a briefing sentence with its own field run; decide after seeing how often eviction fires.
 **Do when:** the 1.121.0 field run's `verifies` citations drop against the baseline in the design record, or a purpose over 30K chars appears.
 
+### 50. The bootstrap stub's read-the-briefing reason is host-blind
+
+The stub the bootstrap prints to every reviewer is host-blind: its read-the-briefing reason ("a shell read of a file past about 30 KB is cut off and comes back as a stub") describes Claude Code's own persisted-output behavior, and the same stub goes unchanged to Codex reviewers, whose shell truncates by rules of its own — the comment above `BRIEFING_READ_LINE_LIMIT` in `bootstrap.py` says so — and who have no other whole-file read to fall back on. This is not new with this branch: the old stub was equally host-blind, naming Claude Code's Read tool directly to every reviewer regardless of host.
+
+**Evidence:** the `BRIEFING_STUB_GUIDANCE` constant and the comment above `BRIEFING_READ_LINE_LIMIT` in `plugins/pirategoat-tools/scripts/review/agent/bootstrap.py`; the final whole-branch review of the 1.121.0 purpose-eviction branch.
+**Deferred because:** a host-aware stub is a bootstrap design change — bootstrap would need to know the host it is briefing for — not a wording fix, and the gap predates this branch.
+**Do when:** the next change to the stub, or a Codex field run whose reviewers fail to read their briefing whole.
+
