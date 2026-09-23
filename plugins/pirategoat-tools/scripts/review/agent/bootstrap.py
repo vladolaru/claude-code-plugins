@@ -1646,24 +1646,25 @@ def build_output(
     return "\n".join(lines)
 
 
-# Outcomes and the reason, never a tool: a shell read of a file this size
-# is cut off past about 30 KB and comes back as a stub, which is why the
+# Outcomes and the reason, never a tool: a shell read of a file past
+# about 30 KB is cut off and comes back as a stub, which is why the
 # briefing is read whole some other way — eleven of nineteen reviewers on
-# the 2026-09-22 elevator run tried the shell first and paid a wasted call
-# because the old sentence mandated a tool without saying why. The
-# continuation clause is conditional on the harness's own answer, not on
-# the reviewer's judgement, so it cannot bring back the three speculative
-# offset Reads inline delivery used to cost: fit_scope_to_one_read() cuts
-# only the scope section to what one Read returns, and a PR body long
-# enough to push the rest past Read's limit would otherwise leave the
-# OUTPUT INSTRUCTIONS — the save and finalize contract — unread. The last
+# the 2026-09-22 elevator run tried the shell first and paid a wasted
+# call. The continuation clause is conditional on the harness's own
+# answer, not on the reviewer's judgement, so it cannot bring back the
+# three speculative offset Reads inline delivery used to cost:
+# fit_scope_to_one_read() evicts the purpose to its file before cutting
+# the scope section, and only cuts the scope to what one Read returns
+# when eviction alone still does not fit; a PR body long enough to push
+# the rest past Read's limit would otherwise leave the OUTPUT
+# INSTRUCTIONS — the save and finalize contract — unread. The last
 # sentences name the only further reads a briefing may ask for: the exact
 # scope calls a cut lists, and the purpose file when REVIEW FOCUS points
 # to one.
 BRIEFING_STUB_GUIDANCE = (
     "Read the BRIEFING file whole before doing anything else; a shell read "
-    "of a file this size is cut off past about 30 KB and comes back as a "
-    "stub. It is your complete briefing: review rules, review scope, and "
+    "of a file past about 30 KB is cut off and comes back as a stub. It is "
+    "your complete briefing: review rules, review scope, and "
     "output instructions. Only if the read comes back partial, continue "
     "from the offset the notice names to the end of the file — the output "
     "instructions are the last section, and you cannot save a review "

@@ -978,8 +978,9 @@ class TestReviewFocusPointer:
         "## Context\nC1. Permalinks are read at init priority 5\n"
         "## Author's description (extracted)\n> quoted\n"
     )
+    UNSTRUCTURED_PURPOSE = "Adds retry logic to the payment gateway."
 
-    def _build(self, tmp_path, inline):
+    def _build(self, tmp_path, inline, purpose=None):
         return _mod.build_output(
             agent_name="security-reviewer",
             plugin_root="/fake/root",
@@ -993,7 +994,7 @@ class TestReviewFocusPointer:
             reviewer_name="security",
             review_claimable_count=0,
             has_php=False,
-            change_purpose=self.PURPOSE,
+            change_purpose=self.PURPOSE if purpose is None else purpose,
             change_purpose_inline=inline,
         )
 
@@ -1005,6 +1006,7 @@ class TestReviewFocusPointer:
     def test_evicted_purpose_keeps_the_tiers_and_names_the_file(self, tmp_path):
         prompt = self._build(tmp_path, False)
         focus = prompt.split("=== REVIEW FOCUS (pipeline synthesis) ===", 1)[1].split("\n=== REVIEW", 1)[0]
+        assert "Pipeline-distilled summary" in focus
         assert "load-bearing claims" in focus
         assert "V1. The default slug" not in prompt
         pointer = prompt.split(_mod.REVIEW_FOCUS_CONTINUES_HEADER, 1)[1].split("\n=== ", 1)[0]
@@ -1012,6 +1014,17 @@ class TestReviewFocusPointer:
         assert f"{len(self.PURPOSE):,} characters" in pointer
         # Still in the context position: after the rules, before the content.
         assert prompt.index("=== REVIEW RULES ===") < prompt.index(_mod.REVIEW_FOCUS_CONTINUES_HEADER) < prompt.index("--- Section 2: REVIEW CONTENT")
+
+    def test_evicted_unstructured_purpose_has_no_tier_sentence_but_still_points_at_the_file(self, tmp_path):
+        prompt = self._build(tmp_path, False, purpose=self.UNSTRUCTURED_PURPOSE)
+        focus = prompt.split("=== REVIEW FOCUS (pipeline synthesis) ===", 1)[1].split("\n=== REVIEW", 1)[0]
+        assert "Pipeline-distilled summary" in focus
+        assert "load-bearing claims" not in focus
+        assert "Two tiers." not in focus
+        assert self.UNSTRUCTURED_PURPOSE not in prompt
+        pointer = prompt.split(_mod.REVIEW_FOCUS_CONTINUES_HEADER, 1)[1].split("\n=== ", 1)[0]
+        assert str(tmp_path / "pipeline" / "change-purpose.md") in pointer
+        assert f"{len(self.UNSTRUCTURED_PURPOSE):,} characters" in pointer
 
 
 class TestResolveOverallStatus:
