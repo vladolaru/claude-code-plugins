@@ -2415,6 +2415,7 @@ def main():
             file_history=file_history_output,
             pr_intent=pr_intent,
             change_purpose=change_purpose,
+            change_purpose_inline=purpose_inline,
             additional_instructions=additional_instructions,
             review_budget=review_budget,
             budget_capped=budget_capped,
@@ -2426,8 +2427,8 @@ def main():
             plugin_version=plugin_version,
         )
 
-    output, scope_section, _purpose_inline = fit_scope_to_one_read(
-        _build, scope_output, scope_file, purpose_evictable=False
+    output, scope_section, _ = fit_scope_to_one_read(
+        _build, scope_output, scope_file, purpose_evictable=change_purpose is not None
     )
 
     # Telemetry: log agent start (best-effort). Logged once the briefing is
