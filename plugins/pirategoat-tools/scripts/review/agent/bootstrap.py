@@ -1411,15 +1411,17 @@ def build_output(
         if change_purpose_inline:
             lines.append(change_purpose)
         else:
-            # The purpose left so the diff could stay (fit_scope_to_one_read
-            # evicts it before cutting a scope line); the reviewer fetches it
-            # from the file the orchestrator wrote at step 3.
+            # The purpose left so the rest could fit in one read
+            # (fit_scope_to_one_read evicts it before cutting a scope line,
+            # and evicts it outright when there is no scope line to cut); the
+            # reviewer fetches it from the file the orchestrator wrote at
+            # step 3.
             purpose_file = os.path.abspath(artifact_path(output_dir, "change_purpose"))
             lines.append(REVIEW_FOCUS_CONTINUES_HEADER)
             lines.append(
                 f"The purpose is {len(change_purpose):,} characters in {purpose_file}; "
-                "it left this briefing so the diff could stay. Read it whole before "
-                "reviewing."
+                "it left this briefing so the rest could fit in one read. Read it "
+                "whole before reviewing."
             )
         lines.append("")
 
