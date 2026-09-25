@@ -1605,6 +1605,10 @@ class TestStep8Reconcile:
         assert f'--output-dir "{tmp_path}" --note' in text
         assert "stated as a claim" in text
         assert "BEFORE dispatch" in text
+        # 12fa: notes saying "needs no re-derivation" asked the reconciliator
+        # to adopt rather than test; a note names what would settle it.
+        assert "path and line that would settle the claim" in text
+        assert "never say it needs no re-derivation" in text
         # b9c0: four Verify items the orchestrator settled by reading the
         # code stayed "unverified" because notes were described for
         # concerns only.

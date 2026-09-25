@@ -189,6 +189,18 @@ def test_the_taught_snippet_says_to_omit_method_without_an_own_probe():
     assert "ran no probe of your own" in text
 
 
+def test_note_evidence_must_say_where_each_fact_came_from():
+    """Three of five audited runs (b016 n4, 12fa n9, 35fa n1/n3) answered a
+    note with "Read <path>" for a file the reconciliator never opened — the
+    checks channel's Run C failure, surviving in the notes channel. The
+    definition makes evidence name its basis and leaves `not_checked` as
+    the honest answer when nothing settled the note."""
+    text = RECONCILIATOR_MD.read_text(encoding="utf-8")
+    assert "`read <path:lines>` only for a file you opened" in text
+    assert "`per <reviewer> cN`" in text
+    assert "never confirmed by its own words" in text
+
+
 def test_the_definition_states_what_the_builder_derives_and_accepts():
     """In all six field runs the reconciliator read `agent/output.py`,
     `findings_ledger.py` and `verdict_rules.py` for 10 s to 4 min 20 s
