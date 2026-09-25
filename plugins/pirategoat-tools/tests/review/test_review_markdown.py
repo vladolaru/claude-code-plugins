@@ -82,6 +82,20 @@ class TestRenderMarkdown:
         assert "## Info Findings" in md
         assert "Anchored info finding" in md
 
+    def test_executive_summary_counts_sum_to_total(self):
+        """Every severity the total counts gets a line, so the list sums to
+        `Total Findings` — the summary once listed critical, high and medium
+        only, and a 1-medium, 4-low ledger read `Total Findings: 5` over a
+        list adding up to 1."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        b.add_finding("medium", "Medium Issue", "a.py", "desc", "rec", line=1)
+        b.add_finding("low", "Low Issue", "b.py", "desc", "rec", line=2)
+        b.add_finding("info", "Info Note", "c.py", "desc", "rec", line=3)
+        summary = render_markdown(b.to_dict()).split("## Executive Summary", 1)[1]
+        for line in ("- Critical: 0", "- High: 0", "- Medium: 1", "- Low: 1", "- Info: 1"):
+            assert line in summary
+        assert "**Total Findings:** 3" in summary
+
     def test_non_empty_source_cited_renders_as_upstream_evidence(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="ecosystem")
         b.add_finding(

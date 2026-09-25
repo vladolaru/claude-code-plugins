@@ -1268,6 +1268,22 @@ class TestEmpiricalProbeContract:
         )
 
 
+    def test_section_embeds_in_a_fenced_prompt(self):
+        """Steps 9 and 10 embed the section's body, the critic's copy inside
+        its fenced dispatch prompt; a code fence in it would end that
+        prompt early."""
+        from review.protocol_sections import empirical_probe_rules
+
+        assert "```" not in empirical_probe_rules()
+
+    def test_the_critic_definition_holds_no_copy(self):
+        """Three hand copies (protocol, critic RULE 2, step-9 briefing) had
+        drifted apart; the critic now gets the protocol's own section."""
+        critic = (PLUGIN_ROOT / "agents" / "decision-reviewer.md").read_text(encoding="utf-8")
+        assert "pirategoat-probe" not in critic
+        assert "Probe rules for any code you run" in critic
+
+
 class TestSmokeAllAgents:
     """Every registered agent must run bootstrap without crashing.
 

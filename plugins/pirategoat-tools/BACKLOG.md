@@ -369,7 +369,9 @@ The confidence table's `0.51–0.75` row is labeled **Note** ("DO NOT REPORT"), 
 
 **Evidence:** `python3 plugins/pirategoat-tools/scripts/review/agent/scope.py --domain code --range f38d4e7e..a57d6c4d --output-dir <tmp>` prints `+_WARNING_LINE_COUNT = READ_LINE_NUMBER_WARNING.count("\n")` followed directly by `+class ScopeSection(NamedTuple):`, while `git diff f38d4e7e..a57d6c4d -- plugins/pirategoat-tools/scripts/review/agent/bootstrap.py` has two blank `+` lines between them, and the `+    )` that closes `fits_one_read` is missing from the scope output; found during the 1.120.0 final review.
 **Deferred because:** every choice changes the diff text all reviewers read and the lines `--diff-line-cap` counts, which belongs in its own change with the filter's noise-reduction trade-off measured, not in the reviewer-input-fidelity fixes.
-**Do when:** the next change to `diff_noise_filter.py` or to `scope.py`'s semantic-filter call, or the first reconciliation that finds a reviewer's finding off by the number of filtered lines above it.
+**Measured 2026-09-25:** removing the filter outright closes this item, and it is the recommended fix. It can't ship alone. The default `--diff-line-cap` (2000) counts filtered lines, so on PHP-heavy PRs removal alone moves files from inline to claimable: 46 across 12 reviewers on PR 66900, php-tests 16 → 7 inline. Raising the cap ×1.5 restores that parity. On the elevator branch, though, it shrinks inline scope: 93 → 73 files. The reason is that `is_protected_oversized_diff` exempts the first file from the pool only when it alone exceeds the cap, which makes the inline allowance non-monotonic in the cap. Order: make that exemption monotonic, remove the filter and its registry flag, then re-pick the cap with the six-run harness (`.claude/docs/analysis/2026-09-25-claude-p5-semantic-filter-measurement/`: `measure.py`, `summarize.py`, `runs.tsv`; `P5_ARMS` selects arms). The filter also strips docblocks and test annotations that code-clarity, api-contract, ecosystem-integration and the test reviewers need.
+**Evidence (measurement):** `.claude/docs/analysis/2026-09-25-claude-p5-semantic-filter-measurement.md`, including the second-opinion section and the cap-quirk response.
+**Do when:** the 1.122.0 release, as its own change with a field run and a reformat or docblock-sweep PR in the gate. Compare its telemetry within the release, since inline diff lines jump about 50% on PHP.
 
 ### 47. The reviewer protocol reaches reviewers through the one capped channel
 
@@ -403,3 +405,34 @@ The stub the bootstrap prints to every reviewer is host-blind: its read-the-brie
 **Deferred because:** a host-aware stub is a bootstrap design change — bootstrap would need to know the host it is briefing for — not a wording fix, and the gap predates this branch.
 **Do when:** the next change to the stub, or a Codex field run whose reviewers fail to read their briefing whole.
 
+### 51. Reviewers triage the claimable queue silently, and approve over what they skipped
+
+On the elevator run reviewers touched 623 of 1,833 claimable-queue files (34%) by any route. Claims are honest but conservative: 0 claimed files went untouched, and 102 touched files went unclaimed. Nothing delivers the rest another way: there were no whole-range or directory-scoped diffs. The reviewers read the "Spend the budget … read the next one (largest first)" rule and the save receipt's unclaimed count, and overruled both on relevance. Security stopped at 29 of 80 calls after "spot-check[ing] the highest-risk REVIEW-CLAIMABLE files"; concurrency and docs-drift said the same. The queue is the domain's extension match, broader than a concentrated concern, and the rule gives no reason to read a file judged irrelevant. The defect is not the sampling. It is that coverage cannot tell a judged skip from an abandoned one, and verdicts claim more than was read: security's "every SQL statement is parameterized, all filesystem paths are validated" over a 17% read, repeated in the report. Fix as one design: (A) `builder.skip_review_files(paths, reason=...)` beside `claim_files_reviewed()`, so coverage splits into read, skipped with a reason, and unaddressed, with the receipt naming the unaddressed count; (B) give the queue rule its reason ("read what your concern could touch; for the rest say why") and order the queue by domain relevance where a domain has a rule for it (docs-drift: instruction and decision files first); (C) render each reviewer verdict with its coverage in the record and the reconciliation context, so the reconciliator and the critic weigh it.
+
+**Evidence:** `.claude/docs/analysis/2026-09-25-claude-why-reviewers-skip-the-claimable-queue.md`; reach numbers in `2026-09-25-claude-p5-semantic-filter-measurement.md` § Correction.
+**Deferred because:** a builder API, an artifact schema bump and a record rendering change; it belongs with the Phase-4 coverage work (approve with unread files).
+**Do when:** the Phase-4 coverage work starts, or a field run's report repeats a universal claim a reviewer made over a sampled queue.
+
+### 52. rust-tests-reviewer on Haiku abandoned an all-in-domain queue
+
+On the elevator run rust-tests (`model: haiku`, registry `model_tier: haiku`) read the patch and 3 of its 28 claimable files, all Rust test files, stopped at 12 of 80 calls, and reported "a comprehensive review of the Rust tests … ~3.4k lines". Unlike security or concurrency, it had no relevance triage to make.
+
+**Evidence:** transcript in session `c157cff4` (elevator, run `20260922T092822Z-12fa`); `.claude/docs/analysis/2026-09-25-claude-why-reviewers-skip-the-claimable-queue.md` § cause 3.
+**Deferred because:** one run is thin evidence for a tier change.
+**Do when:** check rust-tests' other transcripts first. Re-tier to `sonnet` if the pattern repeats, or on the next Rust-heavy field run.
+
+### 53. Note evidence has no structured provenance
+
+1.121.1 made the reconciliator's note evidence name its basis in prose (`read <path:lines>` or `per <reviewer> cN`), after three of five audited runs recorded a relay as "Read <path>". Nothing checks it. The fuller fix is a `basis` on `resolve_note()`, either `read` with paths or `reviewer_check` with refs: the save validates the refs against the context and refuses a basis that is the note itself, and step 9 compares `read` paths with the transcript read detector, recording mismatches as facts. The Verify table would then credit the evidence's source, not the confirmer.
+
+**Evidence:** `.claude/docs/analysis/2026-09-25-claude-low-risk-fix-proposals.md` § P2, and its `22e5` update (honest in `ee06` and `22e5`).
+**Deferred because:** a ledger shape change, and the read detector does not credit piped reads, so the mismatch facts would be noisy until it does.
+**Do when:** the next two field runs still show a relayed "Read" after 1.121.1, or the read detector learns piped reads.
+
+### 54. Schema files (`.proto` and similar) reach no reviewer
+
+`scope.py` routes by extension allowlist, and `.proto` is in no `_*_LANGS` group and not in `plan_dispatch._SOURCE_EXTENSIONS`, so a changed `.proto` is unscoped and not even warned about. The coverage section does disclose it. A `_SCHEMA_LANGS` group (`proto`, `graphql`, `gql`, `thrift`, `avsc`, `fbs`) routed to code and api-contract is the shape of a fix.
+
+**Evidence:** `src-tauri/proto/scip.proto` unscoped in the elevator run; `.claude/docs/analysis/2026-09-25-claude-low-risk-fix-proposals.md` § P4.
+**Deferred because:** one occurrence, a vendored upstream schema, and a routing decision.
+**Do when:** a first-party schema file changes in a reviewed PR.

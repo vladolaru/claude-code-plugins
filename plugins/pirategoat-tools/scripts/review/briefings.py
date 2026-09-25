@@ -34,6 +34,8 @@ try:
     from .review_document import RECOMMENDATION_PRIORITIES
     from .run_paths import artifact_path, scratch_dir
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
+    from .verdict_rules import VALID_SEVERITIES
+    from .protocol_sections import empirical_probe_rules
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -65,6 +67,8 @@ except ImportError:
     from review.review_document import RECOMMENDATION_PRIORITIES
     from review.run_paths import artifact_path, scratch_dir
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
+    from review.verdict_rules import VALID_SEVERITIES
+    from review.protocol_sections import empirical_probe_rules
 
 
 
@@ -1610,7 +1614,10 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         "findings you believe describe one concern, or any fact you want "
         "weighed goes into the context as a note, BEFORE dispatch, stated as "
         "a claim, so the reconciliator must confirm or refute it with "
-        "evidence rather than adopt it. A Verify item you settled yourself by "
+        "evidence rather than adopt it. Name the path and line that would "
+        "settle the claim, and never say it needs no re-derivation: a note the "
+        "reconciliator may not test is a conclusion it would have to adopt. "
+        "A Verify item you settled yourself by "
         "reading the code is a note too, opening with its id (\"V3: wc-csv is "
         "registered only on admin_enqueue_scripts, WCAdminAssets.php:50\"); "
         "the reconciliator's confirmation then cites `verifies=[\"V3\"]` and "
@@ -1969,15 +1976,13 @@ def _step_9_review_record(mode, state, context, config, output_dir):
         )
 
     actions.append("")
+    # The reviewers' own §Empirical Probes, not a copy of it: the
+    # orchestrator spot-checks at steps 9 and 10 under the same rules.
     actions.append(
-        "**Empirical verification rules:** never create or modify tracked "
-        "files in the reviewed repo. If spot-checking a claim requires a "
-        "new file, put `pirategoat-probe` in its filename (not just a "
-        "directory name), keep it in a non-ignored path, and create+run+"
-        "delete it in a single command. Never use `git reset`/"
-        "`git checkout --`/`git clean` as cleanup — the tree may hold the "
-        "user's uncommitted work."
+        "**Empirical verification rules** (the ones every reviewer and the "
+        "decision critic follow) for any claim you spot-check by running code:"
     )
+    actions.append(empirical_probe_rules())
 
     return {
         "phase": "SYNTHESIS",
@@ -2158,6 +2163,10 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
             "verifications are not evidenced by an observed read."
         )
     actions.append(line)
+    # The critic runs code to verify claims, so it carries the reviewers'
+    # §Empirical Probes verbatim; its definition holds no copy to drift.
+    actions.append("Probe rules for any code you run:")
+    actions.append(empirical_probe_rules())
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(
         "Return STAND, REVISE, or ESCALATE. Author findings first at "
@@ -2376,6 +2385,18 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 # mode-appropriate default below. These live at step 11 because that is
 # where the report is authored — once, from the final post-critic state.
 # Default output instructions for PR mode
+# One grouping rule for both default voices, built from the ledger's own
+# severity vocabulary: the old hand-written "critical > important > consider"
+# mapped five severities onto three labels, one of them a real severity's
+# name, so a report headed two high findings "Critical".
+_SEVERITY_GROUPING = (
+    "by severity, each group headed by the ledger's own severity name, "
+    "highest first ("
+    + " > ".join(VALID_SEVERITIES)
+    + "); omit empty groups and never relabel a severity (a high finding "
+    "is never headed Critical)"
+)
+
 _DEFAULT_OUTPUT_INSTRUCTIONS_PR = """\
 Address the PR author by first name — use a warm, collegial tone.
 Be specific and actionable, not vague.
@@ -2387,7 +2408,7 @@ STRUCTURE:
 - Brief human recap (3-5 short bullets: what you noticed, what matters)
 - Below a ---, detailed findings in a collapsible <details> block
 - For each finding: the file/line, what's wrong, what to do about it
-- Group findings by severity (critical > important > consider)
+- Group findings """ + _SEVERITY_GROUPING + """
 
 Include a clear verdict recommendation and summary of key findings.
 Keep it actionable — every finding should have a concrete recommendation.
@@ -2403,7 +2424,7 @@ Frame suggestions collaboratively.
 
 STRUCTURE:
 - Brief summary of key findings
-- Detailed findings grouped by severity (critical > important > consider)
+- Detailed findings grouped """ + _SEVERITY_GROUPING + """
 - For each finding: the file/line, what's wrong, what to do about it
 
 Include a clear verdict recommendation and summary of key findings.

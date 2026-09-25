@@ -1605,6 +1605,10 @@ class TestStep8Reconcile:
         assert f'--output-dir "{tmp_path}" --note' in text
         assert "stated as a claim" in text
         assert "BEFORE dispatch" in text
+        # 12fa: notes saying "needs no re-derivation" asked the reconciliator
+        # to adopt rather than test; a note names what would settle it.
+        assert "path and line that would settle the claim" in text
+        assert "never say it needs no re-derivation" in text
         # b9c0: four Verify items the orchestrator settled by reading the
         # code stayed "unverified" because notes were described for
         # concerns only.
@@ -2239,11 +2243,16 @@ class TestStep9ReviewRecord:
         assert "Do not write it now" in text
 
     def test_keeps_the_empirical_verification_rules(self, mod, tmp_path):
+        """The orchestrator spot-checks under the reviewers' own
+        §Empirical Probes, delivered verbatim rather than restated."""
+        from review.protocol_sections import empirical_probe_rules
+
         text = "\n".join(mod.get_step_guidance(
             9, "full", {"completed_steps": []}, {}
         )["actions"])
+        assert empirical_probe_rules() in text
         assert "pirategoat-probe" in text
-        assert "git clean" in text
+        assert "Shared services are read-only" in text
 
     def test_points_at_the_change_purpose_instead_of_repeating_it(self, mod, tmp_path):
         """Run 3's orchestrator read its own 8.1 KB change purpose three
@@ -2297,6 +2306,18 @@ class TestStep10DecisionCritic:
                 collected.append(line)
         assert collected, "no REVISE block found in the step-10 briefing"
         return "\n".join(collected)
+
+    def test_prompt_carries_the_reviewers_probe_rules_whole(self, mod, tmp_path):
+        """The critic runs code; its probe rules are the reviewers'
+        §Empirical Probes, delivered in the prompt, not a copy in its
+        definition. _prompt_block() ends at the first fence, so the whole
+        section landing inside it also proves no fence broke the prompt."""
+        from review.protocol_sections import empirical_probe_rules
+
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        block = self._prompt_block(g)
+        assert empirical_probe_rules() in block
+        assert "Shared services are read-only" in block
 
     def test_prompt_names_the_checkout(self, mod, tmp_path):
         ctx = {"git": {"head_ref": "fix/topic", "head_sha": "a534276d" + "0" * 32}}
@@ -2752,6 +2773,21 @@ class TestStep11ReportAuthoring:
         assert "actionable" in text.lower()
         assert "first name" not in text.lower()
         assert "do not demote" in text.lower()
+
+    @pytest.mark.parametrize("mode", ["pr", "full"])
+    def test_default_groups_findings_by_the_ledgers_severity_names(
+        self, mod, mode
+    ):
+        """Both default voices group findings under the ledger's own
+        severity names, in ladder order. The old "critical > important >
+        consider" mapped five severities onto three labels, one of them a
+        real severity's name, and a report headed two high findings
+        "Critical"."""
+        from review.verdict_rules import VALID_SEVERITIES
+
+        text = "\n".join(self._guidance(mod, mode=mode)["actions"])
+        assert " > ".join(VALID_SEVERITIES) in text
+        assert "important > consider" not in text
 
     def test_what_held_is_sourced_from_the_ledger_not_memory(self, mod):
         text = "\n".join(self._guidance(mod)["actions"])

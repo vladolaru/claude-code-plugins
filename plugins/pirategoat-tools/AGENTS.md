@@ -40,6 +40,7 @@ This file holds the rules and the map. A fact about one module lives in that mod
 | `scripts/review/agent/scope.py` | Domain-filtered diff scoping; language recognition lives in its `_*_LANGS` groups only. |
 | `scripts/review/agent/output.py` | `ReviewOutputBuilder`: draft, finalize, and the `finalize-review` CLI. |
 | `scripts/review/review_document.py` | The review document's shape authority and validators. Leaf. |
+| `scripts/review/protocol_sections.py` | Section extraction from the shared protocols, used by bootstrap and by the briefings that embed `## Empirical Probes`. Stdlib-only leaf. |
 | `scripts/review/review_markdown.py` | The one JSON-to-Markdown projection (`render`, `materialize`). |
 | `scripts/review/reviewer_names.py` | `derive_reviewer_name()` and its inverse. Stdlib-only leaf every artifact name is built from. |
 | `scripts/review/reconciliation_context.py` | Builds `reconciliation-context.json`, the reconciliator's single input. |
