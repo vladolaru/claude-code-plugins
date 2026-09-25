@@ -130,12 +130,7 @@ Reproducing a finding by running code is encouraged, never at the reviewed repo'
 
 - **Never create or modify tracked files** in the repo under review. Mutation belongs to tests-mutation-reviewer alone, which runs solo and restores what it touches.
 - **A probe that needs a new file** creates it inside the repo with `pirategoat-probe` in the file's own name (`zz_pirategoat-probe_test.go`; matched literally, hyphen included, a parent directory's name does not count), in a path git does not ignore, since ignored paths are invisible to the pipeline's residue sweep. Leftovers with that marker are swept and reported at the end of the run.
-- **Create, run and delete in one command**, so an interrupted turn cannot orphan the file:
-
-  ```bash
-  cp "$TMPDIR/probe.go" pkg/zz_pirategoat-probe_test.go && go test ./pkg/ ; rm -f pkg/zz_pirategoat-probe_test.go
-  ```
-
+- **Create, run and delete in one command**, so an interrupted turn cannot orphan the file: `cp "$TMPDIR/probe.go" pkg/zz_pirategoat-probe_test.go && go test ./pkg/ ; rm -f pkg/zz_pirategoat-probe_test.go`.
 - **Never use `git reset`, `git checkout --` or `git clean` as cleanup.** The repo is the user's live working tree and may hold uncommitted work.
 
 ## Absence Claims (Clearing Blast Radius)

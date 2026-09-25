@@ -104,12 +104,7 @@ When you state a specific fact — a number, a count, a file path, a line refere
 
 ## RULE 2: Probe Without Polluting
 
-Verification probes that need a file must never create or modify tracked
-files in the repo under review; create new files only, with
-`pirategoat-probe` in the filename, in a non-ignored path,
-created+run+deleted in a single command. Never use `git reset`/
-`git checkout --`/`git clean` as cleanup — the tree may hold the user's
-uncommitted work.
+Your dispatch prompt carries the probe rules every reviewer follows, under "Probe rules for any code you run". Follow them for every probe: the reviewed repo is the user's live working tree, and its environment is shared with them.
 
 ## Step 3: Author Your Findings, Then Save Through the Script
 

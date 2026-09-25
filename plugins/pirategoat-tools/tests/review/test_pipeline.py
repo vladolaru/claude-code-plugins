@@ -2243,11 +2243,15 @@ class TestStep9ReviewRecord:
         assert "Do not write it now" in text
 
     def test_keeps_the_empirical_verification_rules(self, mod, tmp_path):
+        """The orchestrator spot-checks under the reviewers' own
+        §Empirical Probes, delivered verbatim rather than restated."""
+        from review.protocol_sections import empirical_probe_rules
+
         text = "\n".join(mod.get_step_guidance(
             9, "full", {"completed_steps": []}, {}
         )["actions"])
+        assert empirical_probe_rules() in text
         assert "pirategoat-probe" in text
-        assert "git clean" in text
 
     def test_points_at_the_change_purpose_instead_of_repeating_it(self, mod, tmp_path):
         """Run 3's orchestrator read its own 8.1 KB change purpose three
@@ -2301,6 +2305,17 @@ class TestStep10DecisionCritic:
                 collected.append(line)
         assert collected, "no REVISE block found in the step-10 briefing"
         return "\n".join(collected)
+
+    def test_prompt_carries_the_reviewers_probe_rules_whole(self, mod, tmp_path):
+        """The critic runs code; its probe rules are the reviewers'
+        §Empirical Probes, delivered in the prompt, not a copy in its
+        definition. _prompt_block() ends at the first fence, so the whole
+        section landing inside it also proves no fence broke the prompt."""
+        from review.protocol_sections import empirical_probe_rules
+
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        block = self._prompt_block(g)
+        assert empirical_probe_rules() in block
 
     def test_prompt_names_the_checkout(self, mod, tmp_path):
         ctx = {"git": {"head_ref": "fix/topic", "head_sha": "a534276d" + "0" * 32}}

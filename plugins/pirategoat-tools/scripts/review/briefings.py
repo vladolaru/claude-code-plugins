@@ -35,6 +35,7 @@ try:
     from .run_paths import artifact_path, scratch_dir
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
     from .verdict_rules import VALID_SEVERITIES
+    from .protocol_sections import empirical_probe_rules
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -67,6 +68,7 @@ except ImportError:
     from review.run_paths import artifact_path, scratch_dir
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
     from review.verdict_rules import VALID_SEVERITIES
+    from review.protocol_sections import empirical_probe_rules
 
 
 
@@ -1974,15 +1976,13 @@ def _step_9_review_record(mode, state, context, config, output_dir):
         )
 
     actions.append("")
+    # The reviewers' own §Empirical Probes, not a copy of it: the
+    # orchestrator spot-checks at steps 9 and 10 under the same rules.
     actions.append(
-        "**Empirical verification rules:** never create or modify tracked "
-        "files in the reviewed repo. If spot-checking a claim requires a "
-        "new file, put `pirategoat-probe` in its filename (not just a "
-        "directory name), keep it in a non-ignored path, and create+run+"
-        "delete it in a single command. Never use `git reset`/"
-        "`git checkout --`/`git clean` as cleanup — the tree may hold the "
-        "user's uncommitted work."
+        "**Empirical verification rules** (the ones every reviewer and the "
+        "decision critic follow) for any claim you spot-check by running code:"
     )
+    actions.append(empirical_probe_rules())
 
     return {
         "phase": "SYNTHESIS",
@@ -2163,6 +2163,10 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
             "verifications are not evidenced by an observed read."
         )
     actions.append(line)
+    # The critic runs code to verify claims, so it carries the reviewers'
+    # §Empirical Probes verbatim; its definition holds no copy to drift.
+    actions.append("Probe rules for any code you run:")
+    actions.append(empirical_probe_rules())
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(
         "Return STAND, REVISE, or ESCALATE. Author findings first at "
