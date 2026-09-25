@@ -2252,6 +2252,7 @@ class TestStep9ReviewRecord:
         )["actions"])
         assert empirical_probe_rules() in text
         assert "pirategoat-probe" in text
+        assert "Shared services are read-only" in text
 
     def test_points_at_the_change_purpose_instead_of_repeating_it(self, mod, tmp_path):
         """Run 3's orchestrator read its own 8.1 KB change purpose three
@@ -2316,6 +2317,7 @@ class TestStep10DecisionCritic:
         g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
         block = self._prompt_block(g)
         assert empirical_probe_rules() in block
+        assert "Shared services are read-only" in block
 
     def test_prompt_names_the_checkout(self, mod, tmp_path):
         ctx = {"git": {"head_ref": "fix/topic", "head_sha": "a534276d" + "0" * 32}}

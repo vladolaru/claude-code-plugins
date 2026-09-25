@@ -126,12 +126,13 @@ Host Context being non-exhaustive does not make the whole filesystem a search ro
 
 ## Empirical Probes (Running Code)
 
-Reproducing a finding by running code is encouraged, never at the reviewed repo's expense:
+Reproducing a finding by running code is encouraged, never at the expense of the reviewed repo or the environment it runs in:
 
 - **Never create or modify tracked files** in the repo under review. Mutation belongs to tests-mutation-reviewer alone, which runs solo and restores what it touches.
 - **A probe that needs a new file** creates it inside the repo with `pirategoat-probe` in the file's own name (`zz_pirategoat-probe_test.go`; matched literally, hyphen included, a parent directory's name does not count), in a path git does not ignore, since ignored paths are invisible to the pipeline's residue sweep. Leftovers with that marker are swept and reported at the end of the run.
 - **Create, run and delete in one command**, so an interrupted turn cannot orphan the file: `cp "$TMPDIR/probe.go" pkg/zz_pirategoat-probe_test.go && go test ./pkg/ ; rm -f pkg/zz_pirategoat-probe_test.go`.
 - **Never use `git reset`, `git checkout --` or `git clean` as cleanup.** The repo is the user's live working tree and may hold uncommitted work.
+- **Shared services are read-only.** A database, container or cache the repo's environment runs on is shared with every other participant probing at the same time, and with the user's own work; the run's hygiene check sees only git. Read it freely, never change its persistent state. A probe that needs data makes it where it cannot outlive the probe or collide with anyone: a temporary table, a transaction it rolls back, or a run of the project's own test framework, which isolates its fixtures.
 
 ## Absence Claims (Clearing Blast Radius)
 
