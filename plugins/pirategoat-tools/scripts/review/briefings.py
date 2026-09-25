@@ -34,6 +34,7 @@ try:
     from .review_document import RECOMMENDATION_PRIORITIES
     from .run_paths import artifact_path, scratch_dir
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
+    from .verdict_rules import VALID_SEVERITIES
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -65,6 +66,7 @@ except ImportError:
     from review.review_document import RECOMMENDATION_PRIORITIES
     from review.run_paths import artifact_path, scratch_dir
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
+    from review.verdict_rules import VALID_SEVERITIES
 
 
 
@@ -2376,6 +2378,18 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 # mode-appropriate default below. These live at step 11 because that is
 # where the report is authored — once, from the final post-critic state.
 # Default output instructions for PR mode
+# One grouping rule for both default voices, built from the ledger's own
+# severity vocabulary: the old hand-written "critical > important > consider"
+# mapped five severities onto three labels, one of them a real severity's
+# name, so a report headed two high findings "Critical".
+_SEVERITY_GROUPING = (
+    "by severity, each group headed by the ledger's own severity name, "
+    "highest first ("
+    + " > ".join(VALID_SEVERITIES)
+    + "); omit empty groups and never relabel a severity (a high finding "
+    "is never headed Critical)"
+)
+
 _DEFAULT_OUTPUT_INSTRUCTIONS_PR = """\
 Address the PR author by first name — use a warm, collegial tone.
 Be specific and actionable, not vague.
@@ -2387,7 +2401,7 @@ STRUCTURE:
 - Brief human recap (3-5 short bullets: what you noticed, what matters)
 - Below a ---, detailed findings in a collapsible <details> block
 - For each finding: the file/line, what's wrong, what to do about it
-- Group findings by severity (critical > important > consider)
+- Group findings """ + _SEVERITY_GROUPING + """
 
 Include a clear verdict recommendation and summary of key findings.
 Keep it actionable — every finding should have a concrete recommendation.
@@ -2403,7 +2417,7 @@ Frame suggestions collaboratively.
 
 STRUCTURE:
 - Brief summary of key findings
-- Detailed findings grouped by severity (critical > important > consider)
+- Detailed findings grouped """ + _SEVERITY_GROUPING + """
 - For each finding: the file/line, what's wrong, what to do about it
 
 Include a clear verdict recommendation and summary of key findings.

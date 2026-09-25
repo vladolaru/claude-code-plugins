@@ -2753,6 +2753,21 @@ class TestStep11ReportAuthoring:
         assert "first name" not in text.lower()
         assert "do not demote" in text.lower()
 
+    @pytest.mark.parametrize("mode", ["pr", "full"])
+    def test_default_groups_findings_by_the_ledgers_severity_names(
+        self, mod, mode
+    ):
+        """Both default voices group findings under the ledger's own
+        severity names, in ladder order. The old "critical > important >
+        consider" mapped five severities onto three labels, one of them a
+        real severity's name, and a report headed two high findings
+        "Critical"."""
+        from review.verdict_rules import VALID_SEVERITIES
+
+        text = "\n".join(self._guidance(mod, mode=mode)["actions"])
+        assert " > ".join(VALID_SEVERITIES) in text
+        assert "important > consider" not in text
+
     def test_what_held_is_sourced_from_the_ledger_not_memory(self, mod):
         text = "\n".join(self._guidance(mod)["actions"])
         assert "## Verified Checks" in text

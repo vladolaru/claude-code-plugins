@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Executive Summary of every rendered review, findings ledger and review record now lists low and info counts beside critical, high and medium, so the listed counts add up to the stated total.
+- The report's default instructions group findings under the ledger's own severity names in ladder order, where "critical > important > consider" let a report head two high findings "Critical".
 
 ## [1.121.0] - 2026-09-23
 
