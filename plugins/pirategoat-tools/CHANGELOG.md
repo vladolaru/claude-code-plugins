@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `scope.py`'s `--no-semantic-filter` flag and the agent registry's `no_semantic_filter` key.
 
+### Fixed
+
+- The review rules' STOP CHECK asks whether the change touched a file, instead of pointing at a `CHANGED_FILES` list that no briefing contains; code-clarity-reviewer and docs-drift-reviewer ask the same way.
+
 ## [1.121.1] - 2026-09-26
 
 ### Fixed

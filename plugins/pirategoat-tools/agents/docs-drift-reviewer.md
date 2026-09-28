@@ -148,7 +148,7 @@ For significant behavioral changes identified in Step 2, reason through this str
 
 Before reporting any finding:
 
-1. **STOP CHECK** — Is the documentation claim made stale by code in CHANGED_FILES? If the code change is in an unchanged file, it's pre-existing staleness.
+1. **STOP CHECK** — Is the documentation claim made stale by code this change touched? If the code change is in an unchanged file, it's pre-existing staleness.
 2. **Domain check** — Is this drift or something else?
    - Inline docblock contradiction → code-clarity-reviewer
    - API backwards compatibility → api-contract-reviewer

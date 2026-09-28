@@ -82,12 +82,12 @@ Small changes still warrant review: a one-line change in a security-sensitive fu
 Explore freely (conventions, call sites, similar patterns); exploration informs review but never produces findings.
 
 **STOP CHECK — before every `add_finding()` call**, state the file path and line number, then verify:
-1. Is this file in `CHANGED_FILES`? (NO → drop)
+1. Did this change touch this file? (NO → drop)
 2. Is this line in a diff hunk? (NO → drop)
 
 Both must be YES. Findings on unchanged code are false positives.
 
-**Exception — findings that are line-less by nature** (OUTPUT INSTRUCTIONS explains `line=None`): check 1 still applies; the file must be in `CHANGED_FILES`.
+**Exception — findings that are line-less by nature** (OUTPUT INSTRUCTIONS explains `line=None`): check 1 still applies; the change must have touched the file.
 
 **Exception — a changed hunk's new contract reaching an unchanged caller.** When a hunk changes what a function does (what it throws or returns on failure, its return shape, a side effect, an ordering or timing guarantee, a validation rule), every caller that relied on the old contract is in scope, even one in a file with no diff. Anchor the finding at the changed hunk, which passes both checks, and describe the unguarded caller as blast radius in the body; a finding anchored in a file outside the diff is dropped by the structural prefilter before anyone reads it. A caller's empty `git diff` proves it is unchanged, not that it is safe: clear callers the way §Absence Claims requires.
 
