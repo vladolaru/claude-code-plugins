@@ -1376,6 +1376,9 @@ def _sanitize_usage_snapshot(value: object) -> dict[str, Any] | None:
                 "repository_reads": _nonnegative_int(
                     row.get("repository_reads")
                 ),
+                "patch_lines": _nonnegative_int(row.get("patch_lines")),
+                "patch_lines_read": _nonnegative_int(row.get("patch_lines_read")),
+                "in_scope_reads": _nonnegative_int(row.get("in_scope_reads")),
             })
 
     captured_at = value.get("captured_at")

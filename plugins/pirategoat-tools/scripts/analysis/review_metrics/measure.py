@@ -157,11 +157,15 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
             safe["usage"] = usage
             safe["tool_calls"] = tool_calls
             safe["repository_reads"] = _nonnegative_exact_int(item.get("repository_reads"))
+            for name in ("patch_lines", "patch_lines_read", "in_scope_reads"):
+                safe[name] = _nonnegative_exact_int(item.get(name))
             safe["termination"] = _sanitize_termination(item.get("termination"))
         else:
             safe["usage"] = None
             safe["tool_calls"] = None
             safe["repository_reads"] = None
+            for name in ("patch_lines", "patch_lines_read", "in_scope_reads"):
+                safe[name] = None
             safe["termination"] = None
         result.append(safe)
     return result

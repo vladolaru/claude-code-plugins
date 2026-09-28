@@ -21,6 +21,8 @@ sys.path.insert(0, _ANALYSIS_DIR)
 # turn every contractual poll back into a recorded tool failure.
 sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
 from review.agents_status import STATUS_ENVELOPE_PREFIX  # noqa: E402
+from review.reviewer_lifecycle import scoped_diff_path  # noqa: E402
+from review.reviewer_names import derive_reviewer_name  # noqa: E402
 from containment import contains  # noqa: E402
 
 
@@ -167,6 +169,10 @@ _NON_SCOPE_COMPARABLE_READ_AGENTS = (
     _NON_SCOPE_COMPARABLE_AGENTS | _SCOPE_EXEMPT_REVIEWERS
 )
 _OBSERVED_READS_SCHEMA = 2
+
+# The Read tool's line count when a call names no limit: its documented
+# default, the same number bootstrap's BRIEFING_READ_LINE_LIMIT holds.
+_READ_TOOL_DEFAULT_LIMIT = 2000
 
 
 def _read_jsonl(path: str | Path) -> tuple[list[dict[str, Any]], bool]:
@@ -2103,6 +2109,76 @@ def _entry_cwd(entry: dict[str, Any], repo_root: Path) -> str | None:
     return "" if text == "." else text
 
 
+def _reviewer_patch(output_dir: str, agent: str) -> tuple[str, int] | None:
+    """The reviewer's scoped-diff file and its line count as the Read tool
+    numbers lines, or None when it has none: no output directory, an agent
+    with no scope of its own, or a scope that fetched no diff."""
+    if not output_dir or agent in _NON_SCOPE_COMPARABLE_READ_AGENTS:
+        return None
+    path = os.path.abspath(scoped_diff_path(output_dir, derive_reviewer_name(agent)))
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return path, len(lines)
+
+
+def _patch_lines_read(
+    analyzed_calls: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
+    repo: Path,
+    patch: tuple[str, int] | None,
+) -> int | None:
+    """How many of the scoped diff's lines the agent's successful reads
+    covered, by any route.
+
+    A Read call covers its `offset`/`limit` range (1-based; no limit is the
+    tool's default). A certified shell read of the file (the read detector's
+    `_bash_read_paths`) covers all of it, the detector's own convention for
+    repository files. A Read that came back partial is counted in full: the
+    ranges bootstrap names are sized to come back whole.
+    """
+    if patch is None:
+        return None
+    path, line_count = patch
+    target = os.path.realpath(path)
+    covered: set[int] = set()
+    for item in analyzed_calls:
+        if item["state"] != "success":
+            continue
+        call = item["call"]
+        if call["name"] == "Read":
+            file_path = call["input"].get("file_path")
+            if not isinstance(file_path, str) or os.path.realpath(file_path) != target:
+                continue
+            offset = call["input"].get("offset")
+            limit = call["input"].get("limit")
+            start = offset if type(offset) is int and offset > 1 else 1
+            count = limit if type(limit) is int and limit > 0 else _READ_TOOL_DEFAULT_LIMIT
+            covered.update(range(start, min(start + count, line_count + 1)))
+        elif call["name"] == "Bash":
+            operands = _bash_read_paths(
+                call["input"].get("command"), repo, _entry_cwd(entries[call["index"]], repo)
+            )
+            # `_bash_read_paths` returns an absolute operand unchanged, but
+            # resolves a relative one only against the shell's repo-relative
+            # cwd, not against the filesystem — the same resolution
+            # `_normalize_repo_path` applies to a Read's own candidates, so
+            # a scoped-diff patch living inside the repo (the common case)
+            # is matched the same way a repository read is.
+            for operand in operands:
+                resolved = os.path.realpath(
+                    operand if os.path.isabs(operand) else repo / operand
+                )
+                if resolved == target:
+                    covered.update(range(1, line_count + 1))
+                    break
+    return len(covered)
+
+
 def _simple_bash_read_paths(tokens: list[str]) -> list[str]:
     """Paths the simple commands the detector knew first read: `git diff --`,
     `git show <rev>:<path>`, and the cat/head/tail/wc family."""
@@ -2133,6 +2209,7 @@ def _analyze_entries(
     entries: Iterable[dict[str, Any]],
     repo_root: str | Path,
     scope_paths: Iterable[str],
+    patch: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
     """Measure transcript entries without retaining prompts, bodies, or commands."""
     entries = list(entries)
@@ -2302,6 +2379,7 @@ def _analyze_entries(
         "tool_failures": failures,
         "artifact_writes": artifact_writes,
         "observed_reads": observed_reads,
+        "patch_lines_read": _patch_lines_read(analyzed_calls, entries, repo, patch),
     }
 
 
@@ -2667,6 +2745,9 @@ def enrich_run_transcript(
                     "usage_by_model": None,
                     "tool_calls": None,
                     "repository_reads": None,
+                    "patch_lines": None,
+                    "patch_lines_read": None,
+                    "in_scope_reads": None,
                     "termination": None,
                 }
             )
@@ -2707,10 +2788,12 @@ def enrich_run_transcript(
                     "agent": dispatch["agent"],
                 }
             )
+        patch = _reviewer_patch(output_dir, dispatch["agent"])
         analysis = _analyze_entries(
             entries,
             repo_path,
             agent_scope or [],
+            patch,
         )
         if not analysis["usage_valid"] and dispatch["agent"] not in (
             agent_transcript_parse_gaps
@@ -2757,6 +2840,14 @@ def enrich_run_transcript(
                 "tool_calls": analysis["tool_calls"],
                 # Count distinct repository files in normalized read evidence.
                 "repository_reads": len(analysis["observed_reads"]["all"]),
+                "patch_lines": patch[1] if patch else None,
+                "patch_lines_read": analysis["patch_lines_read"],
+                "in_scope_reads": (
+                    None
+                    if agent_scope is None
+                    or dispatch["agent"] in _NON_SCOPE_COMPARABLE_READ_AGENTS
+                    else len(analysis["observed_reads"]["in_scope"])
+                ),
                 "termination": termination,
             }
         )
@@ -2798,6 +2889,8 @@ def enrich_run_transcript(
     for row in agent_usage:
         if row["agent"] in incomplete_read_agents:
             row["repository_reads"] = None
+            row["patch_lines_read"] = None
+            row["in_scope_reads"] = None
     # A row's termination was computed from the same bounded entry stream a
     # parse gap or a timestamp gap truncated (agent_transcript_parse_gaps
     # covers both — _bounded_jsonl_entries drops an undecodable line and an

@@ -3786,6 +3786,9 @@ class TestEnrichRunTranscript:
                 "usage_by_model": None,
                 "tool_calls": None,
                 "repository_reads": None,
+                "patch_lines": None,
+                "patch_lines_read": None,
+                "in_scope_reads": None,
                 "termination": None,
             }
         ]
@@ -5177,6 +5180,76 @@ class TestBudgetAndEvidenceCounts:
         assert entry["repository_reads"] == 1
         assert result["completeness"]["agent_data"] is True
 
+    @staticmethod
+    def _patch(tmp_path, lines=10):
+        patch = tmp_path / "run" / "reviewers" / "security" / "scoped-diff.patch"
+        patch.parent.mkdir(parents=True, exist_ok=True)
+        patch.write_text("".join(f"line {i}\n" for i in range(lines)))
+        return patch
+
+    def test_agent_usage_measures_how_much_of_the_scoped_diff_was_read(self, tmp_path):
+        patch = self._patch(tmp_path)
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(_call("r1", "Read", file_path=str(patch), offset=1, limit=4), usage=_usage(1, 2)),
+                _result("r1"),
+                _assistant(_call("r2", "Read", file_path=str(patch), offset=3, limit=5)),
+                _result("r2"),
+                _assistant(_call("r3", "Read", file_path="src/in.py")),
+                _result("r3"),
+                _assistant(_call("r4", "Read", file_path="src/other.py")),
+                _result("r4"),
+            ],
+        )
+
+        [entry] = result["agent_usage"]
+        assert entry["patch_lines"] == 10
+        assert entry["patch_lines_read"] == 7
+        assert entry["in_scope_reads"] == 1
+
+    def test_a_read_with_no_limit_covers_the_file(self, tmp_path):
+        patch = self._patch(tmp_path)
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(_call("r1", "Read", file_path=str(patch)), usage=_usage(1, 2)),
+                _result("r1"),
+            ],
+        )
+
+        [entry] = result["agent_usage"]
+        assert entry["patch_lines_read"] == 10
+
+    def test_a_shell_read_of_the_scoped_diff_counts_the_whole_file(self, tmp_path):
+        """The read detector's own convention for repository files: a
+        certified shell read of a path is a read of that file."""
+        patch = self._patch(tmp_path)
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(_call("sh", "Bash", command=f"cat {patch}"), usage=_usage(1, 2)),
+                _result("sh"),
+            ],
+        )
+
+        [entry] = result["agent_usage"]
+        assert entry["patch_lines_read"] == 10
+
+    def test_no_scoped_diff_means_no_patch_counts(self, tmp_path):
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(_call("r1", "Read", file_path="src/in.py"), usage=_usage(1, 2)),
+                _result("r1"),
+            ],
+        )
+
+        [entry] = result["agent_usage"]
+        assert entry["patch_lines"] is None
+        assert entry["patch_lines_read"] is None
+        assert entry["in_scope_reads"] == 1
+
     def test_unresolved_tool_call_marks_agent_evidence_incomplete(
         self, tmp_path
     ):
@@ -5205,6 +5278,8 @@ class TestBudgetAndEvidenceCounts:
         assert entry["available"] is True
         assert entry["usage"]["output_tokens"] == 2
         assert entry["repository_reads"] is None
+        assert entry["patch_lines_read"] is None
+        assert entry["in_scope_reads"] is None
 
     def test_malformed_tool_use_blocks_count_as_unresolved_calls(
         self, tmp_path

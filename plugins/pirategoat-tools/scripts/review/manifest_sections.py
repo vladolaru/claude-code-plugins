@@ -1414,6 +1414,9 @@ def build_usage_manifest(output_dir: str) -> Optional[dict]:
                 "repository_reads": safe_nonnegative_int(
                     row.get("repository_reads")
                 ),
+                "patch_lines": safe_nonnegative_int(row.get("patch_lines")),
+                "patch_lines_read": safe_nonnegative_int(row.get("patch_lines_read")),
+                "in_scope_reads": safe_nonnegative_int(row.get("in_scope_reads")),
             })
 
     counts = data.get("agents_measured")

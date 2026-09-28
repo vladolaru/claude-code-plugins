@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The rule for turning a patch line into a source line is stated once, in that note, where the Read tool's numbers can mislead; the briefing's copy of the old header, the review rules' CRITICAL paragraph and the output instructions' repeat are gone.
 - Run metrics' `Inline diff lines` counts the diff lines in each reviewer's scoped diff, unfiltered, so it is not comparable with runs before 1.122.0.
 
+### Added
+
+- Each agent's usage row in run metrics and shared telemetry carries `patch_lines`, `patch_lines_read` and `in_scope_reads`: how long its scoped diff was, how much of it the reviewer read, and how many of its in-scope files it read by any route; the telemetry consent disclosure names them.
+
 ### Removed
 
 - `scope.py`'s `--no-semantic-filter` flag and the agent registry's `no_semantic_filter` key.
