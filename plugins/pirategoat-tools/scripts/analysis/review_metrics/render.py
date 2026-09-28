@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import unicodedata
-from typing import Any, Iterable
+from typing import Any
 
 from .contracts import (
     _ASSIGNMENT_TABLE_FIELDS,
@@ -123,12 +123,12 @@ def _budget_utilization_cell(value: object) -> str:
 
 
 def _inline_diff_lines_cell(lifecycle: object) -> str:
-    """The diff lines this run's reviewer briefings carried.
+    """The diff lines this run's reviewers were handed in their scoped diffs.
 
     "—" is unmeasured and covers every run written before the count
     existed, plus any run where only some reviewers carry it. A measured
-    `0` is the alarm the column exists for: briefings that arrived with a
-    file list and no code, which no other cell in this table can show.
+    `0` is the alarm the column exists for: reviewers handed a file list and
+    no code, which no other cell in this table can show.
     """
     inline = (
         lifecycle.get("inline_diff_lines") if isinstance(lifecycle, dict) else None
@@ -249,8 +249,8 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         return "No review runs found.\n"
     shared = any(run.get("uploaded_by") is not None for run in runs)
     # Labels name the population: "Inline diff lines" is the sum over
-    # dispatched reviewers of the diff lines their briefings carried, not
-    # the PR's diff size; "Eff In/Out (all actors)" includes the
+    # dispatched reviewers of the diff lines in their scoped diffs, not the
+    # PR's diff size; "Eff In/Out (all actors)" includes the
     # orchestrator, where the pipeline result's usage block is subagents
     # only (run A, 2026-09-14: 25.09M here against 17.21M there).
     headers = [

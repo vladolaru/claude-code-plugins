@@ -95,8 +95,6 @@ Both must be YES. Findings on unchanged code are false positives.
 A PR changed a method from "fails silently, callers unaffected" to "throws and caches the exception". Two of its three call sites gained a try/catch in the same PR; the third, in a file with zero diff, did not. The reviewer traced all three, identified the third as unguarded, then discarded the finding because `git diff` on that file was empty ("pre-existing, out of scope"). An independent reviewer found the same call site and blocked the PR on it. The finding was right and already made; it was cleared by checking the wrong file's diff.
 </example>
 
-**CRITICAL — use SOURCE FILE line numbers only.** The Read tool's display numbers (`227→+class Foo`) are positions within the patch file. Take source lines from the `@@ ... @@` hunk headers: `@@ -0,0 +1,116 @@` starts a new file at source line 1; `@@ -20,6 +20,11 @@` starts a changed section at source line 20; count forward from `+N` through `+` and ` ` (context) lines. When uncertain, read the source file to confirm.
-
 **Finding quality gates** (before every `add_finding()`):
 1. **Changed code only.** Report issues this change introduced; evaluate this change, not the codebase.
 2. **Bet your reputation.** Uncertain: verify deeper or drop.

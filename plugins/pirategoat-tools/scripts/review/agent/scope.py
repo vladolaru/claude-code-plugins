@@ -1570,7 +1570,13 @@ def build_scope(args: argparse.Namespace) -> dict:
 
 
 def format_text_output(scope: dict) -> str:
-    """Format scope as structured text for agent consumption."""
+    """Format scope as structured text for agent consumption.
+
+    The DIFFS section is always the last one and holds git's own output,
+    whose diff --git header names each file: bootstrap's split_scope_diffs()
+    moves it out of the briefing by reading from its header to the end of
+    the scope.
+    """
     lines = []
 
     # Header — always present, agents parse this
@@ -1678,7 +1684,7 @@ def format_text_output(scope: dict) -> str:
         claimable_files = scope.get("skipped_files", {}).get("review_claimable", [])
         if claimable_files:
             lines.append("")
-            lines.append(f"=== REVIEW-CLAIMABLE ({len(claimable_files)} files, no diff inlined) ===")
+            lines.append(f"=== REVIEW-CLAIMABLE ({len(claimable_files)} files, diff withheld) ===")
             lines.append("These files ARE IN YOUR SCOPE — their diffs were withheld only to fit")
             lines.append("the diff line cap. This list is your remaining work queue, largest")
             lines.append(
@@ -1721,8 +1727,7 @@ def format_text_output(scope: dict) -> str:
         if scope.get("diffs"):
             lines.append("")
             lines.append("=== DIFFS ===")
-            for filepath, diff_text in scope["diffs"].items():
-                lines.append(f"--- {filepath} ---")
+            for diff_text in scope["diffs"].values():
                 lines.append(diff_text)
                 lines.append("")
 
@@ -1752,13 +1757,13 @@ def write_scope_summary(scope: dict, path: str) -> None:
     scope; ``routing_files`` is the every-mode population the run-level file
     review subtracts from the changed set; ``in_scope_stat_lines`` sizes the
     tool-call budget; ``inline_diff_lines`` is how many hunk lines this
-    scope fetched and inlined into its own output, before bootstrap cuts the
-    briefing to fit one Read. Telemetry records bootstrap's carried count,
-    not this one; this fetched count is the point it is compared against.
+    scope fetched into its DIFFS section, which bootstrap writes whole to
+    the reviewer's scoped diff; telemetry counts the same lines from that
+    file.
 
     The last two answer different questions and can disagree: the diffstat
     total counts every changed line of every reviewed file, while the
-    inline count is the hunk lines this scope managed to fetch and inline.
+    inline count is the hunk lines this scope managed to fetch.
     A scope that fetched no diff at all reports a nonzero
     ``in_scope_stat_lines`` beside a zero ``inline_diff_lines``.
 
@@ -1836,7 +1841,7 @@ def main():
         "--diff-line-cap",
         type=int,
         default=2000,
-        help="Most diff hunk lines to inline (default: 2000). Files past the cap are listed as review-claimable, not diffed.",
+        help="Most diff lines to fetch into the reviewer's scoped diff (default: 2000). Files past the cap are listed as review-claimable, not diffed.",
     )
     parser.add_argument(
         "--format",

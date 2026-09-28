@@ -1665,8 +1665,36 @@ class TestReviewClaimableWorkQueueFraming:
             "skipped_files": {"review_claimable": ["src/big.ts"]},
         }
         text = review_scope.format_text_output(scope)
-        assert "=== REVIEW-CLAIMABLE (1 files, no diff inlined) ===" in text
+        assert "=== REVIEW-CLAIMABLE (1 files, diff withheld) ===" in text
         assert "ARE IN YOUR SCOPE" in text
+
+    def test_diffs_is_the_last_section(self):
+        """bootstrap.split_scope_diffs() moves a scope's DIFFS section out of
+        the briefing by reading from its header to the end of the scope."""
+        scope = {
+            "status": "OK", "range": "a..b", "domain": "code",
+            "files": ["src/a.py"], "diffstat": {"src/a.py": (1, 0), "src/b.py": (900, 0), "yarn.lock": (5, 5)},
+            "diffs": {"src/a.py": "@@ -0,0 +1 @@\n+one"},
+            "list_only_files": ["yarn.lock"],
+            "skipped_files": {"review_claimable": ["src/b.py"], "noise": ["dist/x.js"], "domain": ["README.md"]},
+        }
+        lines = review_scope.format_text_output(scope).split("\n")
+        headers = [line for line in lines if line.startswith("=== ")]
+        assert headers[-1] == "=== DIFFS ==="
+
+    def test_the_diffs_section_is_gits_own_output(self):
+        """No per-file `--- <path> ---` marker: git's `diff --git` header
+        already names the file, and the marker read like a unified-diff
+        `---` line without being one."""
+        diff = "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -0,0 +1 @@\n+one"
+        scope = {
+            "status": "OK", "range": "a..b", "domain": "code",
+            "files": ["src/a.py"], "diffstat": {"src/a.py": (1, 0)},
+            "diffs": {"src/a.py": diff}, "list_only_files": [], "skipped_files": {},
+        }
+        text = review_scope.format_text_output(scope)
+        assert "=== DIFFS ===\n" + diff in text
+        assert "--- src/a.py ---" not in text
 
 
 def _mock_git_include_path(files_and_diffs):

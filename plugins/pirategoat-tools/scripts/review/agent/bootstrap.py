@@ -120,9 +120,10 @@ _scope_mod = importlib.util.module_from_spec(_scope_spec)
 _scope_spec.loader.exec_module(_scope_mod)
 _REVIEW_DOMAINS = set(_scope_mod.DOMAIN_CATALOG.keys())
 
-# What one Read call returns whole: the size fit_scope_to_one_read() sizes
-# the briefing for. Both limits and the `Read <file> offset=N limit=M`
-# calls a cut names belong to Claude Code's Read tool; a Codex reviewer
+# What one Read call returns whole: the size fit_briefing_to_one_read()
+# sizes the briefing for, and _chunk_reads() each read of the scoped diff.
+# Both limits and the `Read <file> offset=N limit=M` calls the scoped-diff
+# block names belong to Claude Code's Read tool; a Codex reviewer
 # reads through its shell, which truncates output by rules of its own.
 # Both numbers are the harness's, measured on Claude Code 2.1.273 on
 # 2026-09-16: past 25,000 tokens the Read tool returns a partial page with
@@ -139,36 +140,38 @@ _REVIEW_DOMAINS = set(_scope_mod.DOMAIN_CATALOG.keys())
 BRIEFING_READ_LINE_LIMIT = int(os.environ.get("PIRATEGOAT_BRIEFING_READ_LINE_LIMIT", "2000"))
 BRIEFING_READ_CHAR_LIMIT = int(os.environ.get("PIRATEGOAT_BRIEFING_READ_CHAR_LIMIT", "50000"))
 
-# Header for every file bootstrap tells a reviewer to Read whole: the Read
-# tool numbers the lines it displays, and a finding anchored to those
-# numbers points at the wrong source line. Shared by the briefing and the
-# scoped-diff writers so one wording covers both.
+# The rule for turning a patch line into a source line, stated once, at the
+# top of the one file where it applies: the Read tool numbers the lines of
+# the scoped diff, and on PR 3756 (2026-03) reviewers cited those display
+# numbers as source lines (line=227 in a 116-line file), so valid findings
+# were dropped as out of scope. A source file read with the Read tool shows
+# its own line numbers, and the briefing holds no hunk line.
 READ_LINE_NUMBER_WARNING = (
-    "# WARNING: When you read this file, the Read tool adds display line numbers\n"
-    "# (e.g., 227→...). These are line numbers WITHIN THIS FILE, NOT source\n"
-    "# file line numbers. For add_finding(line=...), use the source file line numbers\n"
-    "# from the @@ hunk headers (e.g., @@ -0,0 +1,116 @@ means source starts at line 1).\n"
-    "#\n"
+    "# Line numbers: the Read tool numbers the lines of THIS file (227→…), not source lines.\n"
+    "# For add_finding(line=...), a hunk's first line is the number after + in its @@ header\n"
+    "# (@@ -18,6 +20,11 @@ starts at source line 20); count forward through + and context lines.\n"
 )
-_WARNING_LINE_COUNT = READ_LINE_NUMBER_WARNING.count("\n")
+
+
+DIFFS_HEADER = "=== DIFFS ==="
+SCOPED_DIFF_HEADER = "=== SCOPED DIFF IN FILE ==="
+_SECONDARY_SCOPE_PREFIX = "=== SECONDARY SCOPE: "
 
 
 class ScopeSection(NamedTuple):
-    """What the briefing carries of the scope, and how to fetch the rest.
+    """The briefing's scope block, and the reads that fetch the diff it names.
 
-    `carried_lines` and `total_lines` are hunk lines (`^[+-]`, not
-    `+++`/`---`), counted with scope.py's own count_diff_lines so they are
-    comparable with the sidecar's fetched count. `remaining_reads` are
-    (offset, limit) pairs for the Read tool against the scoped-diff file,
-    offsets 1-based line numbers as the Read tool counts them, each read one
-    the tool returns whole unless one line alone exceeds the character limit;
-    empty when the whole scope is inline.
+    `diff_lines` is the scoped diff's hunk-line count (`^[+-]`, not
+    `+++`/`---`), counted with scope.py's own count_diff_lines, so it equals
+    the sidecar's fetched count; nothing is cut, so it is what the reviewer
+    is handed. `reads` are (offset, limit) pairs for the Read tool against
+    the scoped-diff file, 1-based line numbers as the Read tool counts them,
+    covering the whole file; empty when the scope fetched no diff.
     """
 
     text: str
-    carried_lines: int
-    total_lines: int
-    remaining_reads: List[Tuple[int, int]]
+    diff_lines: int
+    reads: List[Tuple[int, int]]
 
 
 def _read_tool_lines(text: str) -> List[str]:
@@ -214,190 +217,93 @@ def _chunk_reads(lines: List[str], first_line: int) -> List[Tuple[int, int]]:
     return reads
 
 
-# Up to this many named reads, the reviewer reads the rest before reviewing:
-# two reads is about 45K tokens on top of a ~22K-token briefing. Past it the
-# reads are paced, each part reviewed before the next, since the old unpaced
-# hint left most of the file unread in run C.
-READ_FIRST_MAX_READS = 2
-
-_READ_FIRST_WORDING = "Read the rest now, with exactly these calls, before reviewing:"
-_PACED_WORDING = "Make these calls in order, reviewing each part before the next, and skip none:"
-# Text that tokenizes densely can pass the Read tool's token cap under the
-# character limit a read is chunked to, so a named read can still come back
-# partial.
-_PARTIAL_READ_WORDING = (
-    "If one of these reads comes back partial, continue from the offset "
-    "the Read tool's notice names before the next listed call."
-)
-
-
-def _read_instruction(read_count: int) -> str:
-    """How the continuation block asks for its `read_count` named reads."""
-    return _READ_FIRST_WORDING if read_count <= READ_FIRST_MAX_READS else _PACED_WORDING
-
-
 def _about(chars: int) -> int:
     """`chars` as the block states it: exact under a thousand, else to the
-    nearest thousand. Never smaller for a larger count, so a cut's stated
-    size is never wider than the widest block's."""
+    nearest thousand."""
     return chars if chars < 1000 else (chars + 500) // 1000 * 1000
 
 
-def render_scope_section(
-    scope_output: str,
-    scope_file: Optional[str],
-    *,
-    line_allowance: Optional[int] = None,
-    char_allowance: Optional[int] = None,
-) -> ScopeSection:
-    """The scope block for the briefing.
+def split_scope_diffs(scope_output: str) -> Tuple[str, str]:
+    """`scope_output` as (listing, diffs): every `=== DIFFS ===` section
+    moves to `diffs`, the rest is the listing the briefing carries.
 
-    With no allowance the whole scope goes inline. With one, whole lines
-    are kept while both allowances hold, and the block ends with the exact
-    Read calls that fetch the remainder from `scope_file`, whose first
-    _WARNING_LINE_COUNT lines are the line-number warning. The reviewer's
-    next action is then a specific call, not a guess: run C's reviewers
-    left 69 to 100 % of the file unread when the old block said only
-    "Read with offset/limit to continue". The block states how many reads
-    the rest is and about how many characters they hold, asks for them
-    before reviewing up to READ_FIRST_MAX_READS and paced past it, and says
-    how to resume a read that comes back partial. `scope_file` is None when
-    no scoped-diff file was written; nothing is cut then, since a cut would
-    name a file that is not there.
+    scope.py's format_text_output() ends each scope with its DIFFS section,
+    and main() appends each further domain's scope under a
+    `=== SECONDARY SCOPE: <domain> ===` line, so a DIFFS section runs from
+    its header to the next such line or to the end. `diffs` is git's own
+    output: the DIFFS header is dropped, and a further domain's section is
+    preceded by the line that names its domain. The markers cannot match
+    inside a diff: every line git writes for a file starts with a space,
+    `+`, `-`, `@@`, a backslash or a git header word, never `===`. `diffs`
+    is "" when no scope fetched a diff.
     """
-    count = _scope_mod.count_diff_lines
-    total_lines = count(scope_output)
-    whole = ScopeSection(scope_output, total_lines, total_lines, [])
-    if scope_file is None or (line_allowance is None and char_allowance is None):
-        return whole
-    scope_lines = _read_tool_lines(scope_output)
-    kept = chars = 0
-    for line in scope_lines:
-        if line_allowance is not None and kept >= line_allowance:
-            break
-        if char_allowance is not None and chars + len(line) + 1 > char_allowance:
-            break
-        kept += 1
-        chars += len(line) + 1
-    if kept == len(scope_lines):
-        return whole
-    inline = "\n".join(scope_lines[:kept])
-    carried = count(inline)
-    rest = scope_lines[kept:]
-    reads = _chunk_reads(rest, _WARNING_LINE_COUNT + kept + 1)
-    rest_chars = sum(len(line) + 1 for line in rest)
+    listing: List[str] = []
+    sections: List[List[str]] = []
+    domain_line: Optional[str] = None
+    in_diffs = False
+    for line in scope_output.split("\n"):
+        if line.startswith(_SECONDARY_SCOPE_PREFIX):
+            in_diffs = False
+            domain_line = line
+            listing.append(line)
+        elif line == DIFFS_HEADER:
+            in_diffs = True
+            sections.append([domain_line] if domain_line else [])
+        elif in_diffs:
+            sections[-1].append(line)
+        else:
+            listing.append(line)
+    diffs = "\n\n".join("\n".join(section).rstrip("\n") for section in sections)
+    return "\n".join(listing).rstrip("\n") + "\n", (diffs + "\n" if diffs else "")
+
+
+def render_scope_section(
+    listing: str, scoped_diff: Optional[Tuple[str, str]]
+) -> ScopeSection:
+    """The briefing's scope block: the listing, then the reads of the diff.
+
+    `scoped_diff` is (the scoped-diff file, the diff it holds after the
+    line-number note), or None when the scope fetched no diff. The diff
+    never rides in the briefing: on a normal PR it was the briefing's own
+    prose that pushed it past one Read (the 2026-09-28 decision critique:
+    PR 68482's whole diff was 34K characters, its `code` briefing 50K), and
+    reviewers make exact named reads (41 of 44 across four audited runs), so
+    one rule and one wording serve every size.
+    """
+    if scoped_diff is None:
+        return ScopeSection(listing, 0, [])
+    scope_file, diffs = scoped_diff
+    file_text = READ_LINE_NUMBER_WARNING + diffs
+    reads = _chunk_reads(_read_tool_lines(file_text), 1)
+    diff_lines = _scope_mod.count_diff_lines(diffs)
     block = [
-        "=== SCOPE CONTINUES IN FILE ===",
-        f"Inlined above: {kept} of {len(scope_lines)} scope lines "
-        f"({carried} of {total_lines} diff lines).",
-        f"The whole scope is in {scope_file}; its first {_WARNING_LINE_COUNT} lines are a "
-        "line-number warning.",
-        f"The rest is {len(reads)} {'read' if len(reads) == 1 else 'reads'} of about "
-        f"{_about(rest_chars):,} characters. {_read_instruction(len(reads))}",
+        SCOPED_DIFF_HEADER,
+        f"Your scoped diff is {diff_lines:,} diff lines, about "
+        f"{_about(len(file_text)):,} characters, in {scope_file}. Read all of it "
+        "with these calls:",
     ]
     block += [f"  Read {scope_file} offset={offset} limit={limit}" for offset, limit in reads]
-    block.append(_PARTIAL_READ_WORDING)
-    text = (inline + "\n\n" if kept else "") + "\n".join(block) + "\n"
-    return ScopeSection(text, carried, total_lines, reads)
+    return ScopeSection(listing.rstrip("\n") + "\n\n" + "\n".join(block) + "\n", diff_lines, reads)
 
 
-# What a cut section can need beyond the widest continuation block, the one
-# that names every read and inlines nothing: the blank line between the
-# inline prefix and the block, and a last briefing line with no newline
-# (lines); the blank line's newline (characters).
-_CUT_EXTRA_LINES = 2
-_CUT_EXTRA_CHARS = 1
+def fit_briefing_to_one_read(
+    build: Callable[[bool], str], *, purpose_evictable: bool
+) -> Tuple[str, bool]:
+    """Build the briefing with the purpose inline; if the Read tool would
+    not return it in one call and there is a purpose to move, rebuild with
+    the purpose evicted to its file. Returns the build and whether the
+    purpose stayed inline.
 
-
-def _continuation_growth(widest: ScopeSection, scope_line_count: int) -> int:
-    """Characters a cut's continuation block can add to the widest block's.
-
-    The widest block states 0 lines kept and 0 diff lines carried, and its
-    reads name the smallest offsets and limits; a cut names at most as many
-    reads (greedy chunks of a suffix never outnumber the whole's), but each
-    of its numbers can be wider. Two numbers in the "Inlined above" line and
-    two per read. Every number is at most the scoped-diff file's line count
-    or the scope's diff-line total, and the total can be the larger:
-    count_diff_lines() splits on bare CRs, which the Read tool does not.
-    The read count and the stated size are the widest block's at most.
-
-    Fewer reads can also switch the read instruction: a widest block past
-    READ_FIRST_MAX_READS is paced while a cut naming fewer can ask for its
-    reads first, so the reserve holds the longer of the wordings a cut can
-    use, whichever that is.
+    `build(purpose_inline)` renders the REVIEW FOCUS pointer block in place
+    of the purpose body when `purpose_inline` is False. The pointer build
+    ships whether or not it fits: nothing else is cut, and the stub's
+    partial-read sentence covers a briefing still past the limit (a
+    branch-scale file list with a large purpose; BACKLOG 48 and 49).
     """
-    widest_digits = len(str(max(_WARNING_LINE_COUNT + scope_line_count, widest.total_lines)))
-    digit_growth = (2 + 2 * len(widest.remaining_reads)) * (widest_digits - 1)
-    own_wording = len(_read_instruction(len(widest.remaining_reads)))
-    wording_growth = max(len(_read_instruction(1)), own_wording) - own_wording
-    return digit_growth + wording_growth
-
-
-def fit_scope_to_one_read(
-    build: Callable[[str, bool], str],
-    scope_output: str,
-    scope_file: Optional[str],
-    *,
-    purpose_evictable: bool,
-) -> Tuple[str, ScopeSection, bool]:
-    """Build the briefing with the whole purpose and the whole scope; if the
-    Read tool would not return it in one call, rebuild with the purpose
-    evicted to its file, and only if that still does not fit, rebuild once
-    more with the scope cut to what the rest of the briefing leaves.
-
-    `build(scope_section, purpose_inline)` must place the section verbatim
-    and nothing else it renders may depend on it; with `purpose_inline`
-    False it renders the REVIEW FOCUS pointer block in place of the purpose
-    body. The order is the point: findings anchor to the diff, the purpose
-    is context, and in the elevator run's `security` briefing the purpose
-    was 17,066 of 49,960 characters; separately, a cut briefing gave the
-    diff 5% of the briefing (19% of an uncut one). A cut scope never
-    shares a briefing with an inline purpose. `purpose_evictable` is False
-    when there is no purpose to move (then the flag returned is True and
-    the fit is the two-stage one). The cut is computed from measured
-    sizes of the build that ships: the rest of the briefing from the
-    pointer build, and the continuation block reserved at its widest;
-    when even that exceeds a limit, the cut inlines nothing and names
-    every scope line as a read, and the Read tool's partial-page notice
-    takes over. `scope_file` is None when no scoped-diff file was
-    written: nothing can be cut, so the cut stage never runs, but
-    eviction still does — a purpose-carrying build that does not fit
-    still moves the purpose to its pointer, and that build ships whether
-    or not it then fits, since there is nothing further to try. With
-    `scope_file` None and `purpose_evictable` False, the whole build
-    ships regardless of fit, as before.
-    """
-    section = render_scope_section(scope_output, scope_file)
-    output = build(section.text, True)
-    if fits_one_read(READ_LINE_NUMBER_WARNING + output):
-        return output, section, True
-    purpose_inline = True
-    if purpose_evictable:
-        purpose_inline = False
-        output = build(section.text, False)
-        if scope_file is None or fits_one_read(READ_LINE_NUMBER_WARNING + output):
-            return output, section, False
-    elif scope_file is None:
-        return output, section, True
-    rest_newlines = output.count("\n") - section.text.count("\n")
-    rest_chars = len(output) - len(section.text)
-    widest = render_scope_section(scope_output, scope_file, line_allowance=0, char_allowance=0)
-    growth = _continuation_growth(widest, len(_read_tool_lines(scope_output)))
-    section = render_scope_section(
-        scope_output,
-        scope_file,
-        line_allowance=max(
-            BRIEFING_READ_LINE_LIMIT - _WARNING_LINE_COUNT - rest_newlines
-            - widest.text.count("\n") - _CUT_EXTRA_LINES,
-            0,
-        ),
-        char_allowance=max(
-            BRIEFING_READ_CHAR_LIMIT - len(READ_LINE_NUMBER_WARNING) - rest_chars
-            - len(widest.text) - growth - _CUT_EXTRA_CHARS,
-            0,
-        ),
-    )
-    return build(section.text, purpose_inline), section, purpose_inline
+    output = build(True)
+    if not purpose_evictable or fits_one_read(output):
+        return output, True
+    return build(False), False
 
 
 # Soft cap on host_context section size to keep prompt growth bounded.
@@ -678,11 +584,9 @@ _SCOPE_FACT_LISTS = (
 
 # Both are required, not defaulted: a summary missing either is malformed,
 # and an absent count silently read as 0 would size a zero budget or report
-# an empty fetch as measured facts. Bootstrap no longer reads
-# inline_diff_lines for telemetry, which records the lines the briefing
-# carried after the fit-to-one-Read cut; it still validates the schema-4
-# sidecar whole, and the count scope.py fetched stays the comparison point
-# for that carried count.
+# an empty fetch as measured facts. Bootstrap reads inline_diff_lines only
+# to validate the schema-4 sidecar whole; telemetry records the hunk lines
+# of the scoped diff bootstrap wrote, the same diff scope.py fetched.
 _SCOPE_FACT_COUNTS = (
     "in_scope_stat_lines",
     "inline_diff_lines",
@@ -1326,10 +1230,9 @@ def build_output(
             lines.append(change_purpose)
         else:
             # The purpose left so the rest could fit in one read
-            # (fit_scope_to_one_read evicts it before cutting a scope line,
-            # and evicts it outright when there is no scope line to cut); the
-            # reviewer fetches it from the file the orchestrator wrote at
-            # step 3.
+            # (fit_briefing_to_one_read evicts it when the briefing would
+            # not fit); the reviewer fetches it from the file the
+            # orchestrator wrote at step 3.
             purpose_file = os.path.abspath(artifact_path(output_dir, "change_purpose"))
             lines.append(REVIEW_FOCUS_CONTINUES_HEADER)
             lines.append(
@@ -1432,9 +1335,9 @@ def build_output(
         lines.append("=== COVERAGE NOTE ===")
         lines.append(coverage_note)
         lines.append("")
-    # scope_section is rendered by render_scope_section() and starts with
-    # "=== REVIEW SCOPE ===" from scope.py; the cut, if any, was decided by
-    # fit_scope_to_one_read() from the measured size of everything else here.
+    # scope_section is rendered by render_scope_section(): the scope's
+    # listing, starting with "=== REVIEW SCOPE ===" from scope.py, and the
+    # SCOPED DIFF IN FILE block that names the reads of the reviewer's diff.
     lines.append(scope_section)
 
     lines.append("")
@@ -1530,8 +1433,6 @@ def build_output(
     lines.append('builder.save_draft()')
     lines.append("PY")
     lines.append("")
-    lines.append("line= MUST be the SOURCE FILE line number (from @@ hunk headers),")
-    lines.append("not the Read tool's display line numbers (e.g., 227→).")
     lines.append("For findings that are line-less BY NATURE (whole changed file has no")
     lines.append("test coverage, git-history precedent, cross-file architecture), pass")
     lines.append("line=None — recorded as a verdict-counting FILE-SCOPED finding. Never")
@@ -1575,14 +1476,12 @@ def build_output(
 # call. The continuation clause is conditional on the harness's own
 # answer, not on the reviewer's judgement, so it cannot bring back the
 # three speculative offset Reads inline delivery used to cost:
-# fit_scope_to_one_read() evicts the purpose to its file before cutting
-# the scope section, and only cuts the scope to what one Read returns
-# when eviction alone still does not fit; a PR body long enough to push
-# the rest past Read's limit would otherwise leave the OUTPUT
-# INSTRUCTIONS — the save and finalize contract — unread. The last
-# sentences name the only further reads a briefing may ask for: the exact
-# scope calls a cut lists, and the purpose file when REVIEW FOCUS points
-# to one.
+# fit_briefing_to_one_read() evicts the purpose to its file when the
+# briefing would not fit one Read; a PR body long enough to push the rest
+# past Read's limit would otherwise leave the OUTPUT INSTRUCTIONS — the
+# save and finalize contract — unread. The last sentences name the only
+# further reads a briefing may ask for: the scoped diff's listed calls, and
+# the purpose file when REVIEW FOCUS points to one.
 BRIEFING_STUB_GUIDANCE = (
     "Read the BRIEFING file whole before doing anything else; a shell read "
     "of a file past about 30 KB is cut off and comes back as a stub. It is "
@@ -1591,9 +1490,9 @@ BRIEFING_STUB_GUIDANCE = (
     "from the offset the notice names to the end of the file — the output "
     "instructions are the last section, and you cannot save a review "
     "without them. Follow it; do not read run artifacts by hand. "
-    "If the briefing ends its scope with SCOPE CONTINUES IN FILE, make the "
-    "Read calls it lists, as it says. If its REVIEW FOCUS says the purpose "
-    "CONTINUES IN FILE, read the file it names, as it says."
+    "Its SCOPED DIFF IN FILE block lists the Read calls that fetch your "
+    "diff; make them all. If its REVIEW FOCUS says the purpose CONTINUES "
+    "IN FILE, read the file it names, as it says."
 )
 
 # What a reviewer with an empty scope is told instead. Bootstrap has already
@@ -1647,7 +1546,7 @@ def deliver_briefing(
     briefing handed the reviewer a random-named persisted tool result
     behind a truncated preview, cost it a turn to read back, and left no
     copy with the run. The size that matters is one Read call, which is
-    what fit_scope_to_one_read() sizes the briefing for.
+    what fit_briefing_to_one_read() sizes the briefing for.
 
     Every fact in the stub arrives as a parameter, like `build_output`'s:
     re-deriving `STATUS` by parsing our own rendered text would make a
@@ -1658,8 +1557,7 @@ def deliver_briefing(
     """
     path = os.path.abspath(briefing_path(output_dir, reviewer_name))
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    text = READ_LINE_NUMBER_WARNING + output
-    atomic_write_text(path, text)
+    atomic_write_text(path, output)
     lines = [
         f"=== BOOTSTRAP: {agent_name} ===",
         f"PLUGIN_ROOT: {plugin_root}",
@@ -1668,7 +1566,7 @@ def deliver_briefing(
         # compliance grader reads it from here. An ERROR never gets this far.
         f"STATUS: {status}",
         f"BRIEFING: {path}",
-        f"BRIEFING_BYTES: {len(text.encode('utf-8'))}",
+        f"BRIEFING_BYTES: {len(output.encode('utf-8'))}",
     ]
     if recorded_review is not None:
         lines += [f"REVIEW: {recorded_review.path}", NO_DOMAIN_FILES_GUIDANCE]
@@ -2296,34 +2194,37 @@ def main():
         if secondary_only else None
     )
 
-    # The scoped diff is the run's record of what the reviewer was given and
-    # the file a cut briefing names, so it is written for every reviewer
-    # whose scope discovery ran, whatever the scope's size. Each run
-    # registers its summary sidecar in scope_summary_paths; with none, the
-    # scope is a placeholder, no file is written, and nothing is cut.
-    scope_file = None
-    if scope_summary_paths:
-        scope_file = scoped_diff_path(output_dir, reviewer_name)
+    # The diff never rides in the briefing: the briefing carries the scope's
+    # listing and names the reviewer's scoped diff with the exact Read calls
+    # that fetch it. The file is the run's record of the diff the reviewer
+    # was handed, written whenever a scope fetched one; a placeholder scope,
+    # or one of list-only files alone, has no diff and no file.
+    listing, diffs = split_scope_diffs(scope_output)
+    scoped_diff = None
+    if diffs:
+        scope_file = os.path.abspath(scoped_diff_path(output_dir, reviewer_name))
         try:
             os.makedirs(os.path.dirname(scope_file), exist_ok=True)
-            atomic_write_text(scope_file, READ_LINE_NUMBER_WARNING + scope_output)
+            atomic_write_text(scope_file, READ_LINE_NUMBER_WARNING + diffs)
         except OSError as exc:
             exit_with_bootstrap_error(build_error_output(
                 effective_agent_name,
                 f"Could not write the scoped diff: {exc}",
                 plugin_root,
             ), output_dir, effective_agent_name)
+        scoped_diff = (scope_file, diffs)
+    scope_section = render_scope_section(listing, scoped_diff)
 
     plugin_version = load_plugin_version(output_dir)
 
-    def _build(scope_section: str, purpose_inline: bool) -> str:
+    def _build(purpose_inline: bool) -> str:
         return build_output(
             agent_name=effective_agent_name,
             plugin_root=plugin_root,
             status=overall_status,
             review_rules=review_rules,
             domain_rules=domain_rules,
-            scope_section=scope_section,
+            scope_section=scope_section.text,
             exploration_scope=exploration_scope,
             output_dir=output_dir,
             pr_number=pr_number,
@@ -2345,13 +2246,13 @@ def main():
             plugin_version=plugin_version,
         )
 
-    output, scope_section, _ = fit_scope_to_one_read(
-        _build, scope_output, scope_file, purpose_evictable=change_purpose is not None
+    output, _ = fit_briefing_to_one_read(
+        _build, purpose_evictable=change_purpose is not None
     )
 
-    # Telemetry: log agent start (best-effort). Logged once the briefing is
-    # built, so the carried count is measured from the text the reviewer
-    # gets; still before deliver_briefing() and the started marker.
+    # Telemetry: log agent start (best-effort). Logged once the scope
+    # section is built, so the count is measured from the file the reviewer
+    # reads; still before deliver_briefing() and the started marker.
     if ReviewTelemetry is not None:
         try:
             _t = ReviewTelemetry(output_dir)
@@ -2373,11 +2274,10 @@ def main():
                 scope_files=len(telemetry_scope_paths),
                 scope_lines=scope_lines_for_budget,
                 # Distinct from scope_lines, the diffstat total that sizes
-                # the budget. What the briefing actually carries, counted
-                # from the text bootstrap wrote after the fit-to-one-Read
-                # cut; the sidecar's inline_diff_lines is what scope.py
-                # fetched, taken before it.
-                scope_inline_lines=scope_section.carried_lines,
+                # the budget: the hunk lines of the scoped diff bootstrap
+                # wrote, which is what the reviewer is handed. The sidecar's
+                # inline_diff_lines is the same count as scope.py fetched it.
+                scope_inline_lines=scope_section.diff_lines,
                 budget_target=review_budget,
                 scope_paths=telemetry_scope_paths,
             )
