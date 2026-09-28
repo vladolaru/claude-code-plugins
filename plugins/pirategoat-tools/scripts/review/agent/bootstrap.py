@@ -1336,8 +1336,9 @@ def build_output(
         lines.append(coverage_note)
         lines.append("")
     # scope_section is rendered by render_scope_section(): the scope's
-    # listing, starting with "=== REVIEW SCOPE ===" from scope.py, and the
-    # SCOPED DIFF IN FILE block that names the reads of the reviewer's diff.
+    # listing, starting with "=== REVIEW SCOPE ===" from scope.py, and, when
+    # the scope fetched a diff, the SCOPED DIFF IN FILE block that names the
+    # reads of the reviewer's diff.
     lines.append(scope_section)
 
     lines.append("")
@@ -1480,8 +1481,11 @@ def build_output(
 # briefing would not fit one Read; a PR body long enough to push the rest
 # past Read's limit would otherwise leave the OUTPUT INSTRUCTIONS — the
 # save and finalize contract — unread. The last sentences name the only
-# further reads a briefing may ask for: the scoped diff's listed calls, and
-# the purpose file when REVIEW FOCUS points to one.
+# further reads a briefing may ask for, each conditional on the briefing
+# holding the block that asks: the scoped diff's listed calls when a scope
+# fetched a diff (a placeholder scope, or one of list-only or
+# review-claimable files alone, has no block), and the purpose file when
+# REVIEW FOCUS points to one.
 BRIEFING_STUB_GUIDANCE = (
     "Read the BRIEFING file whole before doing anything else; a shell read "
     "of a file past about 30 KB is cut off and comes back as a stub. It is "
@@ -1490,9 +1494,9 @@ BRIEFING_STUB_GUIDANCE = (
     "from the offset the notice names to the end of the file — the output "
     "instructions are the last section, and you cannot save a review "
     "without them. Follow it; do not read run artifacts by hand. "
-    "Its SCOPED DIFF IN FILE block lists the Read calls that fetch your "
-    "diff; make them all. If its REVIEW FOCUS says the purpose CONTINUES "
-    "IN FILE, read the file it names, as it says."
+    "If its scope ends with SCOPED DIFF IN FILE, make every Read call it "
+    "lists. If its REVIEW FOCUS says the purpose CONTINUES IN FILE, read "
+    "the file it names, as it says."
 )
 
 # What a reviewer with an empty scope is told instead. Bootstrap has already

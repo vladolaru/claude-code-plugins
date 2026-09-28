@@ -1483,7 +1483,7 @@ def build_scope(args: argparse.Namespace) -> dict:
         for filepath in domain_matched_sorted:
             # List-only files: appear in file list + diffstat, but no diff content.
             # These are files rescued from noise (e.g., lock files for toolchain domain)
-            # that are too large/noisy for inline diffs but signal relevant changes.
+            # that are too large/noisy to fetch as diffs but signal relevant changes.
             if list_only_re and list_only_re.search(filepath):
                 list_only_files.append(filepath)
                 continue
@@ -1674,7 +1674,7 @@ def format_text_output(scope: dict) -> str:
         if list_only_files:
             lines.append("")
             lines.append(f"=== CHANGED (no diff — {len(list_only_files)} lock/generated files) ===")
-            lines.append("These files changed but diffs are skipped (too large/noisy for inline review).")
+            lines.append("These files changed but diffs are skipped (too large/noisy to fetch into your scoped diff).")
             lines.append(f"Use 'git diff {scope.get('range', '')} -- <file>' to inspect if relevant.")
             for filepath in list_only_files:
                 added, removed = diffstat.get(filepath, (0, 0))

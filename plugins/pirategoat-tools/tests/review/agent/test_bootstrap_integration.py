@@ -1670,6 +1670,68 @@ class TestBriefingNamesTheScopedDiff:
         assert _mod.SCOPED_DIFF_HEADER in briefing
         assert "+line 29" not in briefing
 
+    LIST_ONLY_SCOPE = (
+        "=== REVIEW SCOPE ===\nSTATUS: OK\n\n=== FILES ===\n\n"
+        "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+        "  package-lock.json  (+40 -12)\n"
+    )
+    LIST_ONLY_FACTS = dict(
+        _IN_PROCESS_FACTS,
+        inline_diff_files=[],
+        list_only_files=["package-lock.json"],
+        inline_diff_lines=0,
+    )
+
+    def _in_process_without_a_diff(self, tmp_path, monkeypatch, capsys):
+        """Run toolchain-reviewer's real main() on an OK scope of one
+        list-only file, which fetches no diff, with a telemetry log; return
+        the stub, the briefing, the agent_start event and the scoped-diff
+        path."""
+        out = tmp_path / "out"
+        out.mkdir(parents=True)
+        telemetry_log = out / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        _write_telemetry_marker(out, telemetry_log)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            _mod, "run_scope_discovery", lambda *_args, **_kwargs: (0, self.LIST_ONLY_SCOPE)
+        )
+        monkeypatch.setattr(_mod, "load_scope_facts", lambda _paths: self.LIST_ONLY_FACTS)
+        monkeypatch.setattr(sys, "argv", [
+            "bootstrap.py", "--agent", "toolchain-reviewer", "--range", "base..head",
+            "--output-dir", str(out),
+        ])
+        with pytest.raises(SystemExit) as exc:
+            _mod.main()
+        stub = capsys.readouterr().out
+        assert exc.value.code == 0, stub
+        agent_start = next(
+            event
+            for event in map(json.loads, telemetry_log.read_text().splitlines())
+            if event.get("event") == "agent_start"
+        )
+        return stub, briefing_text(stub), agent_start, Path(scoped_diff_path(str(out), "toolchain"))
+
+    def test_a_scope_without_a_diff_has_no_file_and_no_block(self, tmp_path, monkeypatch, capsys):
+        """No patch, no block: a scope of list-only files fetches no diff,
+        so no scoped-diff file is written, the briefing names none, and
+        telemetry records no diff line. The stub's clause about the block
+        is conditional, so it asks for no read this briefing lacks."""
+        stub, briefing, agent_start, scoped = self._in_process_without_a_diff(
+            tmp_path, monkeypatch, capsys
+        )
+        assert "STATUS: OK" in stub
+        assert "package-lock.json" in briefing
+        assert not scoped.exists()
+        assert _mod.SCOPED_DIFF_HEADER not in briefing
+        assert agent_start["scope"]["inline_lines"] == 0
+        assert "If its scope ends with SCOPED DIFF IN FILE," in stub
+
 
 class TestScopeSectionRidesVerbatim:
     """build_output() places the scope section it is given as it is, at the
