@@ -2202,11 +2202,15 @@ def main():
     # listing and names the reviewer's scoped diff with the exact Read calls
     # that fetch it. The file is the run's record of the diff the reviewer
     # was handed, written whenever a scope fetched one; a placeholder scope,
-    # or one of list-only files alone, has no diff and no file.
+    # or one of list-only files alone, has no diff and no file. The file
+    # exists exactly when the briefing names it: a retried reviewer whose
+    # new scope fetched nothing must not leave the last attempt's file for
+    # the transcript analysis to measure its reads against. Failing to
+    # remove one fails bootstrap, as failing to write one does.
     listing, diffs = split_scope_diffs(scope_output)
     scoped_diff = None
+    scope_file = os.path.abspath(scoped_diff_path(output_dir, reviewer_name))
     if diffs:
-        scope_file = os.path.abspath(scoped_diff_path(output_dir, reviewer_name))
         try:
             os.makedirs(os.path.dirname(scope_file), exist_ok=True)
             atomic_write_text(scope_file, READ_LINE_NUMBER_WARNING + diffs)
@@ -2217,6 +2221,17 @@ def main():
                 plugin_root,
             ), output_dir, effective_agent_name)
         scoped_diff = (scope_file, diffs)
+    else:
+        try:
+            os.remove(scope_file)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            exit_with_bootstrap_error(build_error_output(
+                effective_agent_name,
+                f"Could not remove the previous attempt's scoped diff: {exc}",
+                plugin_root,
+            ), output_dir, effective_agent_name)
     scope_section = render_scope_section(listing, scoped_diff)
 
     plugin_version = load_plugin_version(output_dir)

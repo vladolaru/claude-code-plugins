@@ -1688,7 +1688,7 @@ class TestBriefingNamesTheScopedDiff:
         the stub, the briefing, the agent_start event and the scoped-diff
         path."""
         out = tmp_path / "out"
-        out.mkdir(parents=True)
+        out.mkdir(parents=True, exist_ok=True)
         telemetry_log = out / "review.jsonl"
         telemetry_log.write_text(json.dumps({
             "schema": 1,
@@ -1731,6 +1731,22 @@ class TestBriefingNamesTheScopedDiff:
         assert _mod.SCOPED_DIFF_HEADER not in briefing
         assert agent_start["scope"]["inline_lines"] == 0
         assert "If its scope ends with SCOPED DIFF IN FILE," in stub
+
+    def test_a_retry_without_a_diff_removes_the_last_attempts_file(self, tmp_path, monkeypatch, capsys):
+        """A reviewer retried in the same run directory whose new scope
+        fetches nothing must not keep the first attempt's scoped diff: the
+        file exists exactly when the briefing names it, and the transcript
+        analysis measures reads against whatever file is there."""
+        stale = Path(scoped_diff_path(str(tmp_path / "out"), "toolchain"))
+        stale.parent.mkdir(parents=True)
+        stale.write_text(_mod.READ_LINE_NUMBER_WARNING + "diff --git a/x b/x\n+stale\n")
+        _, briefing, agent_start, scoped = self._in_process_without_a_diff(
+            tmp_path, monkeypatch, capsys
+        )
+        assert scoped == stale
+        assert not scoped.exists()
+        assert _mod.SCOPED_DIFF_HEADER not in briefing
+        assert agent_start["scope"]["inline_lines"] == 0
 
 
 class TestScopeSectionRidesVerbatim:
