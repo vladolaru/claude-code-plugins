@@ -418,3 +418,27 @@ On the elevator run rust-tests (`model: haiku`, registry `model_tier: haiku`) re
 **Evidence:** `.claude/docs/analysis/2026-09-25-claude-p5-semantic-filter-measurement.md` § Response to the second opinion; the six-run harness beside it (`measure.py`, `summarize.py`, `runs.tsv`, `P5_ARMS`).
 **Deferred because:** 1.122.0 leaves every cap but history-insights' where it is, so the cliff cannot fire, and no outcome measure yet says whether more inline files change findings (item 56).
 **Do when:** before any change to a `--diff-line-cap` value or its default.
+
+### 56. No tool compares reconciled findings across runs of one PR
+
+Every reviewer-input change in 1.119.5–1.122.0 was judged by what reviewers read, not by what they found; the only outcome datum on record is July's six lost findings. Deciding whether a cap change, a claimable-queue rule (item 51) or any delivery change helps needs findings compared by file across runs of one PR, against that PR's own run-to-run spread (PR 68482: `b016` and `35fa`, five raw findings each from mostly different reviewers, ledgers of three and five).
+
+**Evidence:** `.claude/docs/analysis/2026-09-28-claude-diff-delivery-decision-critique.md` § Key insight, claims A2 and P2, § Recommendation 3.
+**Deferred because:** the 1.122.0 gate compares three runs of PR 68482 by hand, and a tool should be shaped by that first comparison.
+**Do when:** before any `--diff-line-cap` change (item 55), any claimable-queue rule change, or item 51.
+
+### 57. The builder does not check a finding's line against the hunks it came from
+
+A finding whose `line` falls outside every hunk of its file is almost always a patch display number cited as a source line (PR 3756, 2026-03: `line=227` in a 116-line file); the reconciliator then drops it as out of scope. Since 1.122.0 the only defenses are the patch's three-line note and `add_finding()`'s stderr warning past line 5,000. The builder knows the reviewer's `scoped-diff.patch`, so at save it could name each finding whose line misses every `@@` range of its file, the way the save receipt already names unclaimed files.
+
+**Evidence:** commit `0e205ace` (the March fix and its incident); `scripts/review/agent/output.py`'s line-5000 warning; the 2026-09-28 line-number discussion in `.claude/docs/analysis/2026-09-28-claude-diff-delivery-simplification.md`.
+**Deferred because:** 1.122.0 removes prose rather than adding checks, and no audit since March has recorded the mistake.
+**Do when:** an audit finds a finding dropped for a line outside its hunks, or the next change to `add_finding()` or the save receipt.
+
+### 58. The review budget scales with diff size and asks reviewers to count calls they cannot count
+
+`compute_review_budget()` in `bootstrap.py` gives each reviewer 15 tool calls plus one per 10 changed lines, capped at 80, and the REVIEW BUDGET section adds a "hard ceiling" at 1.5× with "At N calls: STOP exploring. Write output immediately, no exceptions." Diff size is the wrong measure: the calls that find bugs (tracing callers, reading upstream code, running a test) do not grow with diff lines, and the protocol's own relevance check says "domain relevance, not change size". On PR 69062, php-tests got 19 calls for a 43-line test whose Verify items asked for three traces and a mutation run. Four reviewers already bypass the formula through `budget_override`. The "at N calls" lines are also a rule a reviewer cannot evaluate, since models keep no running tally of their calls; `build_output()`'s own comment gives that reason for deleting an earlier sentence from the same section, after a 19-reviewer field run used a median 44% of budget and under-spend did not predict weak output. The budget exists for wall-clock time (the pipeline waits for its slowest agent), which a dispatch timeout in the orchestrator can bound without instructing reviewers.
+
+**Evidence:** `compute_review_budget()` and the REVIEW BUDGET block in `build_output()` with its comment; commit `47862b9c` (the hard ceiling, 2026-03-20); the 2026-09-28 budget discussion recorded in `.claude/docs/analysis/2026-09-28-claude-diff-delivery-simplification.md`.
+**Deferred because:** 1.122.0 already changes every reviewer's input and its PR 68482 comparison must stay attributable; the budget also feeds the `Budget util` telemetry column, the claimable-queue "spend the budget" paragraph and the save receipt's target echo, which move with it.
+**Do when:** the release after 1.122.0, with 1.122.0's field run as the baseline: drop the target, the ceiling and the "at N calls" lines, keep tool calls as telemetry only, and bound wall-clock time with a dispatch timeout.
