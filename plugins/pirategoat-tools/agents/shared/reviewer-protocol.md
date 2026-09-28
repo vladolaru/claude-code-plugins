@@ -60,7 +60,7 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: NO_DOMAIN_FILES`:** bootstrap records and finalizes the `not_applicable` review itself. Its stdout stub delivers the return signal, and each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
-**On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the diff line cap. Files are sorted by inline priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal cap.
+**On `STATUS: OK`:** The `=== DIFFS ===` section contains the diffs of matched files within the diff line cap, as git wrote them. Files are sorted by inline priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal cap.
 
 **On `REVIEW_CLAIMABLE` / `=== REVIEW-CLAIMABLE ===`:** These files matched your domain but their diffs were NOT given to you. Claim every file you actually read through the positive-claim API; the builder validates those claims and derives every remaining path as an unclaimed review file. Bootstrap's `=== REVIEW BUDGET ===` section delivers the executable contract because this section is stripped before you receive the protocol.
 

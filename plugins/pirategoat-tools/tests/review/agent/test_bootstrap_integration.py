@@ -540,7 +540,7 @@ class TestCategoryRepresentatives:
         assert "=== EXPLORATION SCOPE ===" not in briefing
 
     def test_exploration_agent(self, tmp_path):
-        """patterns-reviewer gets EXPLORATION SCOPE + no_semantic_filter (patterns-reviewer)."""
+        """patterns-reviewer gets EXPLORATION SCOPE (patterns-reviewer)."""
         result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", str(tmp_path))
         briefing = briefing_text(result)
         assert result.returncode == 0

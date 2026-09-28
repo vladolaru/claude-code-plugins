@@ -251,14 +251,6 @@ The wp-env resolver knows whether an entry came from `core` or from a plugin map
 **Deferred because:** widening any of the 15 criteria's dispatch conditions is a triage-behavior change, not a test-trim decision, and needs its own review of false-positive/false-negative risk per criterion.
 **Do when:** the next dispatch-planning pass, or when a field run shows one of the 15 criteria's reviewer either never firing when it should or always firing on an unrelated diff.
 
-### 30. The suppression-directive exemption in diff-noise filtering pins the wrong claim
-
-`diff_noise_filter.should_filter()` never recognizes `//`- or `#`-prefixed lines as comments at all, so every such line — suppression directive or not — survives the filter through its default `return False`, not through the directive-exemption logic the tests believe they are pinning. The comment-classification helpers (`is_inline_comment_only()`, `_STRUCTURED_COMMENT_PATTERNS`) run only in `filter_diff()`'s post-hoc statistics, never in the active filtering path. `test_diff_noise_filter.py`'s exemption table therefore proves "comments are never filtered," not "directives survive an active filter" — a pre-existing gap the test-corpus trim's mutation pass surfaced rather than caused.
-
-**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` Task 15 report and reviewer confirmation at `agent/diff_noise_filter.py:198-237,276`.
-**Deferred because:** fixing the classification requires deciding whether comment-only lines should ever be actively filtered, which changes noise-filtering behavior beyond a test fix.
-**Do when:** a field run shows a suppression directive filtered out (or a comment wrongly kept) by the active filter, or the next time `diff_noise_filter.py` is touched.
-
 ### 31. Several review_run_metrics guards cannot be isolated by any test input
 
 The analysis/metrics layer carries a handful of pre-existing untested guards that Task 16's per-branch trim could not close: the overlay causal check, the legacy event-path check, and two share-guard alternatives. Some of the schema type checks in this module cannot be triggered by any input a test could construct, because an earlier guard in the same function already rejects that input first.
@@ -363,16 +355,6 @@ The confidence table's `0.51–0.75` row is labeled **Note** ("DO NOT REPORT"), 
 **Deferred because:** resolving it decides which findings code-reviewer reports, a behavior change outside a scale conversion.
 **Do when:** the next change to code-reviewer's confidence rules.
 
-### 46. The semantic filter drops hunk lines but keeps the `@@` headers, so counted line numbers drift
-
-`scope.py`'s `apply_semantic_filter()` runs each file's diff through `diff_noise_filter.filter_diff()`, whose `should_filter()` removes added and removed lines that are blank (`is_blank_line_change()`), bracket- or brace-only such as `)`, `}` or `{` (`is_formatting_only()`), or docblock and annotation lines, while every `@@ -a,b +c,d @@` header stays as git wrote it. A reviewer anchoring `add_finding(line=...)` counts forward from `+c` over the lines it sees, as `READ_LINE_NUMBER_WARNING` tells it to, so each dropped line above a finding shifts the reported source line by one. The fix is a design choice, not a one-liner: keep blank and bracket-only lines, split a hunk with a fresh `@@` header where lines were dropped, or number the kept lines.
-
-**Evidence:** `python3 plugins/pirategoat-tools/scripts/review/agent/scope.py --domain code --range f38d4e7e..a57d6c4d --output-dir <tmp>` prints `+_WARNING_LINE_COUNT = READ_LINE_NUMBER_WARNING.count("\n")` followed directly by `+class ScopeSection(NamedTuple):`, while `git diff f38d4e7e..a57d6c4d -- plugins/pirategoat-tools/scripts/review/agent/bootstrap.py` has two blank `+` lines between them, and the `+    )` that closes `fits_one_read` is missing from the scope output; found during the 1.120.0 final review.
-**Deferred because:** every choice changes the diff text all reviewers read and the lines `--diff-line-cap` counts, which belongs in its own change with the filter's noise-reduction trade-off measured, not in the reviewer-input-fidelity fixes.
-**Measured 2026-09-25:** removing the filter outright closes this item, and it is the recommended fix. It can't ship alone. The default `--diff-line-cap` (2000) counts filtered lines, so on PHP-heavy PRs removal alone moves files from inline to claimable: 46 across 12 reviewers on PR 66900, php-tests 16 → 7 inline. Raising the cap ×1.5 restores that parity. On the elevator branch, though, it shrinks inline scope: 93 → 73 files. The reason is that `is_protected_oversized_diff` exempts the first file from the pool only when it alone exceeds the cap, which makes the inline allowance non-monotonic in the cap. Order: make that exemption monotonic, remove the filter and its registry flag, then re-pick the cap with the six-run harness (`.claude/docs/analysis/2026-09-25-claude-p5-semantic-filter-measurement/`: `measure.py`, `summarize.py`, `runs.tsv`; `P5_ARMS` selects arms). The filter also strips docblocks and test annotations that code-clarity, api-contract, ecosystem-integration and the test reviewers need.
-**Evidence (measurement):** `.claude/docs/analysis/2026-09-25-claude-p5-semantic-filter-measurement.md`, including the second-opinion section and the cap-quirk response.
-**Do when:** the 1.122.0 release, as its own change with a field run and a reformat or docblock-sweep PR in the gate. Compare its telemetry within the release, since inline diff lines jump about 50% on PHP.
-
 ### 47. The reviewer protocol reaches reviewers through the one capped channel
 
 REVIEW RULES (10,833 chars without hosts after 1.120.1) arrive inside the briefing, the one channel sized to a Read call, while the agent definition is a system prompt with no cap. A build step inlining `agents/shared/reviewer-protocol.md` into each `agents/*.md` (as `scripts/generate_codex_compat.py` already generates the Codex adapters) would free that much briefing for the diff at the same token cost, but makes the definitions generated files and rewires the skip-list tests (`TestArchitecturalInvariants`, `TestEmpiricalProbeContract`, `TestHostContextUsageFollowsTheHosts`).
@@ -436,3 +418,11 @@ On the elevator run rust-tests (`model: haiku`, registry `model_tier: haiku`) re
 **Evidence:** `src-tauri/proto/scip.proto` unscoped in the elevator run; `.claude/docs/analysis/2026-09-25-claude-low-risk-fix-proposals.md` § P4.
 **Deferred because:** one occurrence, a vendored upstream schema, and a routing decision.
 **Do when:** a first-party schema file changes in a reviewed PR.
+
+### 55. The lead-file exemption makes the inline allowance non-monotonic in the diff-line cap
+
+`scope.py` diffs the first file in inline-priority order whole and leaves it out of the cap only when it alone exceeds the cap (`is_protected_oversized_diff`, from `49c90638`, the fix for the July 2026 bug where one oversized test file took every reviewer's whole allowance). So the allowance is `lead + cap` when the lead file is over the cap and `cap` when it is under: raising the cap past the lead file's size shrinks the scope. On the elevator branch a 2,063-line lead file gives 4,063 lines at cap 2,000 and 3,000 at cap 3,000 (inline files 93 → 73 across reviewers). Always exempting the lead file (`lead + cap`) is monotonic and never gives less than today at the same cap; always counting it brings back the July bug.
+
+**Evidence:** `.claude/docs/analysis/2026-09-25-claude-p5-semantic-filter-measurement.md` § Response to the second opinion; the six-run harness beside it (`measure.py`, `summarize.py`, `runs.tsv`, `P5_ARMS`).
+**Deferred because:** 1.122.0 leaves every cap but history-insights' where it is, so the cliff cannot fire, and no outcome measure yet says whether more inline files change findings (item 56).
+**Do when:** before any change to a `--diff-line-cap` value or its default.

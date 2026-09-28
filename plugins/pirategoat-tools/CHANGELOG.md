@@ -5,6 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.122.0] - UNRELEASED
+
+### Changed
+
+- Reviewers see each diff exactly as git wrote it: the semantic filter that stripped docblocks, test annotations such as `@dataProvider`, blank lines and closing braces is gone, so a line number counted from a hunk header matches the source.
+- history-insights-reviewer's diff-line cap is 750 lines (was 500), the same allowance now that its lines are counted unfiltered.
+
+### Removed
+
+- `scope.py`'s `--no-semantic-filter` flag and the agent registry's `no_semantic_filter` key.
+
 ## [1.121.1] - 2026-09-26
 
 ### Fixed

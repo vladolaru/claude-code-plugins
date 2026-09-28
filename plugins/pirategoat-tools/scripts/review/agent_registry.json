@@ -154,7 +154,6 @@
         "reviewer"
       ],
       "scope_flags": [],
-      "no_semantic_filter": true,
       "dispatch_class": "conditional",
       "require_php_source_file": true,
       "triage_criteria": [
@@ -291,7 +290,6 @@
         "reviewer"
       ],
       "scope_flags": [],
-      "no_semantic_filter": true,
       "extra_scope": [
         "--base-ref-only"
       ],
@@ -357,7 +355,7 @@
       ],
       "scope_flags": [
         "--diff-line-cap",
-        "500"
+        "750"
       ],
       "file_history": true,
       "max_history_commits": 5,
@@ -826,7 +824,6 @@
         "reviewer"
       ],
       "scope_flags": [],
-      "no_semantic_filter": true,
       "dispatch_class": "conditional",
       "require_php_source_file": true,
       "require_triage_keyword_match": true,

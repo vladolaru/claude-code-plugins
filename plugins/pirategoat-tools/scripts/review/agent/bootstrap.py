@@ -2034,8 +2034,6 @@ def main():
     elif config["domain"] is not None:
         # Run primary scope discovery
         scope_flags = list(config.get("scope_flags", []))
-        if config.get("no_semantic_filter", False):
-            scope_flags.append("--no-semantic-filter")
         # Persist a machine-readable scope summary per agent: it is this
         # reviewer's only source of assignment facts, and when the caller
         # pinned the output dir it is also what the run level
@@ -2081,8 +2079,6 @@ def main():
             if scope_status == "ERROR":
                 break
             sec_flags = list(config.get("scope_flags", []))
-            if config.get("no_semantic_filter", False):
-                sec_flags.append("--no-semantic-filter")
             sec_summary_out = scope_summary_path(
                 output_dir,
                 derive_reviewer_name(effective_agent_name),
