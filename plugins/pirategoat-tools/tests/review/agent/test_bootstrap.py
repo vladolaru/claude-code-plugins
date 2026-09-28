@@ -1356,7 +1356,8 @@ class TestRenderScopeSection:
     diff and the Read calls that fetch all of it, in order, from line 1;
     the diff never rides in the briefing. Counts are hunk lines (`^[+-]`,
     not `+++`/`---`), scope.py's own rule, so `diff_lines` equals the
-    sidecar's fetched count."""
+    sidecars' fetched count, summed over the primary and secondary
+    domains."""
 
     LISTING, DIFFS = _mod.split_scope_diffs(PRIMARY_SCOPE)
 

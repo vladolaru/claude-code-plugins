@@ -163,8 +163,9 @@ class ScopeSection(NamedTuple):
 
     `diff_lines` is the scoped diff's hunk-line count (`^[+-]`, not
     `+++`/`---`), counted with scope.py's own count_diff_lines, so it equals
-    the sidecar's fetched count; nothing is cut, so it is what the reviewer
-    is handed. `reads` are (offset, limit) pairs for the Read tool against
+    the sidecar's fetched count, or the sum over the sidecars when secondary
+    domains add their own; nothing is cut, so it is what the reviewer is
+    handed. `reads` are (offset, limit) pairs for the Read tool against
     the scoped-diff file, 1-based line numbers as the Read tool counts them,
     covering the whole file; empty when the scope fetched no diff.
     """
@@ -2294,8 +2295,9 @@ def main():
                 scope_lines=scope_lines_for_budget,
                 # Distinct from scope_lines, the diffstat total that sizes
                 # the budget: the hunk lines of the scoped diff bootstrap
-                # wrote, which is what the reviewer is handed. The sidecar's
-                # inline_diff_lines is the same count as scope.py fetched it.
+                # wrote, which is what the reviewer is handed. The sidecars'
+                # inline_diff_lines, summed over the primary and secondary
+                # domains, is the same count as scope.py fetched it.
                 scope_inline_lines=scope_section.diff_lines,
                 budget_target=review_budget,
                 scope_paths=telemetry_scope_paths,
