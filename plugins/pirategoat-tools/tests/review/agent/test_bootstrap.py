@@ -1329,6 +1329,27 @@ class TestSplitScopeDiffs:
         scope = "=== REVIEW SCOPE ===\nSTATUS: OK\n\n=== FILES ===\nsrc/a.py  (+3 -1)\n"
         assert _mod.split_scope_diffs(scope) == (scope, "")
 
+    def test_a_secondary_domain_diff_after_a_primary_without_one(self):
+        """The primary scope fetched no diff (list-only files alone), a
+        secondary domain's did: the diffs open with the line naming that
+        domain, and the listing keeps both scopes."""
+        primary = (
+            "=== REVIEW SCOPE ===\nSTATUS: OK\n\n=== FILES ===\n\n"
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "  package-lock.json  (+40 -12)\n"
+        )
+        listing, diffs = _mod.split_scope_diffs(
+            primary + "\n\n=== SECONDARY SCOPE: config-ops ===\n" + SECONDARY_SCOPE
+        )
+        lines = diffs.split("\n")
+        assert lines[0] == "=== SECONDARY SCOPE: config-ops ==="
+        assert lines[1] == "diff --git a/config/app.yml b/config/app.yml"
+        assert _mod._scope_mod.count_diff_lines(diffs) == 1
+        assert "  package-lock.json  (+40 -12)" in listing
+        assert "=== SECONDARY SCOPE: config-ops ===" in listing
+        assert "config/app.yml  (+1 -0)" in listing
+        assert _mod.DIFFS_HEADER not in listing
+
 
 class TestRenderScopeSection:
     """The briefing carries the listing and a block that names the scoped
@@ -1377,6 +1398,18 @@ class TestRenderScopeSection:
         assert "reviewing each part" not in section.text
         assert "comes back partial" not in section.text
 
+    @pytest.mark.parametrize("separator", ["\r", "\x0c", "\u2028", "\x85"])
+    def test_offsets_count_only_newlines_as_line_ends(self, monkeypatch, separator):
+        """str.splitlines() also breaks on a bare CR, form feed, U+2028 and
+        NEL, which the Read tool does not; one such character in a diff
+        line must not shift the offsets named after it."""
+        diffs = f"diff --git a/x b/x\n+page one{separator}page two\n+kept\n+last\n"
+        file_lines = _read_tool_lines(_mod.READ_LINE_NUMBER_WARNING + diffs)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", len(file_lines) - 1)
+        section = _mod.render_scope_section(self.LISTING, (SCOPE_FILE, diffs))
+        assert section.reads == [(1, len(file_lines) - 1), (len(file_lines), 1)]
+        assert file_lines[section.reads[-1][0] - 1] == "+last"
+
     def test_no_diff_means_the_listing_alone(self):
         listing = "=== REVIEW SCOPE ===\nSTATUS: OK\n"
         assert _mod.render_scope_section(listing, None) == _mod.ScopeSection(listing, 0, [])
@@ -1410,6 +1443,18 @@ class TestFitBriefingToOneRead:
         output, purpose_inline = _mod.fit_briefing_to_one_read(self._build, purpose_evictable=True)
         assert purpose_inline is False
         assert output == self._build(False)
+        assert _mod.fits_one_read(output)
+
+    def test_the_char_limit_evicts_the_purpose_too(self, monkeypatch):
+        """The line limit fits and the character limit does not: the
+        purpose still leaves for its file."""
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", 10**6)
+        whole, pointer = self._build(True), self._build(False)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_CHAR_LIMIT", (len(whole) + len(pointer)) // 2)
+        assert not _mod.fits_one_read(whole)
+        output, purpose_inline = _mod.fit_briefing_to_one_read(self._build, purpose_evictable=True)
+        assert purpose_inline is False
+        assert output == pointer
         assert _mod.fits_one_read(output)
 
     def test_the_pointer_build_ships_even_when_it_does_not_fit(self, monkeypatch):
