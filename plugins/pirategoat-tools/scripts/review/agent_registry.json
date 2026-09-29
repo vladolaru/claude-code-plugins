@@ -154,7 +154,6 @@
         "reviewer"
       ],
       "scope_flags": [],
-      "no_semantic_filter": true,
       "dispatch_class": "conditional",
       "require_php_source_file": true,
       "triage_criteria": [
@@ -291,7 +290,6 @@
         "reviewer"
       ],
       "scope_flags": [],
-      "no_semantic_filter": true,
       "extra_scope": [
         "--base-ref-only"
       ],
@@ -357,7 +355,7 @@
       ],
       "scope_flags": [
         "--diff-line-cap",
-        "500"
+        "750"
       ],
       "file_history": true,
       "max_history_commits": 5,
@@ -690,7 +688,7 @@
         "Behavioral changes flagged in commits (deprecations, renames, migrations, restructuring)",
         "File renames or directory restructuring",
         "Hook signature changes or new hooks added",
-        "Changelog fragments under a `changelog/` directory, whose significance, type, and note must match the diff"
+        "Changelog fragments under a `changelog/`, `.changeset/`, `newsfragments/` or similar directory, whose note and any type or significance fields must match the diff"
       ],
       "triage_keywords": [
         "rename*",
@@ -711,7 +709,7 @@
         "has_new_functions",
         "file_deletions"
       ],
-      "focus": "Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs, guides after code changes",
+      "focus": "Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs, guides after code changes, and the PR's changelog fragments",
       "model_tier": "sonnet"
     },
     "toolchain-reviewer": {
@@ -826,7 +824,6 @@
         "reviewer"
       ],
       "scope_flags": [],
-      "no_semantic_filter": true,
       "dispatch_class": "conditional",
       "require_php_source_file": true,
       "require_triage_keyword_match": true,

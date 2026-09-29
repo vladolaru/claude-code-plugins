@@ -540,7 +540,7 @@ class TestCategoryRepresentatives:
         assert "=== EXPLORATION SCOPE ===" not in briefing
 
     def test_exploration_agent(self, tmp_path):
-        """patterns-reviewer gets EXPLORATION SCOPE + no_semantic_filter (patterns-reviewer)."""
+        """patterns-reviewer gets EXPLORATION SCOPE (patterns-reviewer)."""
         result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", str(tmp_path))
         briefing = briefing_text(result)
         assert result.returncode == 0
@@ -1393,9 +1393,9 @@ class TestBriefingFileDelivery:
     def test_a_truncated_read_has_a_way_to_reach_the_output_contract(
         self, tmp_path
     ):
-        """The scope is cut by fit_scope_to_one_read() to what one Read
-        returns; the PR body and the repository's rules ride in whole. A
-        briefing big enough for Read to answer partially would otherwise
+        """fit_briefing_to_one_read() moves only the change purpose out;
+        the scope listing, the PR body and the repository's rules ride in
+        whole. A briefing big enough for Read to answer partially would otherwise
         strand the reviewer before OUTPUT INSTRUCTIONS — the last section,
         and the only place the save and finalize contract is stated — with
         the stub forbidding the offset read that would reach it."""
@@ -1536,22 +1536,14 @@ class TestBriefingFileDelivery:
         assert "  COUNTS: critical: N, high: N, medium: N, low: N  (copied from DRAFT TOTALS)" in text
 
 
-class TestBriefingFitsOneRead:
-    """The briefing either carries the whole scope or names the reads for
-    the rest, and telemetry records what it carried, not what scope
-    fetched. Run A, 2026-09-14: a 1,327-line scope was cut at 15 KB, and
-    the metric reported 487 inline diff lines where the briefing held 79.
-    It also pins that main() evicts the change purpose to its file before
-    it ever cuts a scope line."""
+class TestBriefingNamesTheScopedDiff:
+    """The briefing lists the scope and ends it with the exact Read calls
+    for the reviewer's scoped diff; the diff never rides in it, and
+    telemetry records the hunk lines the file holds. It also pins that
+    main() evicts the change purpose to its file when the briefing would
+    not fit one Read."""
 
     SECTION_2 = "--- Section 2: REVIEW CONTENT (what to review) ---"
-    # What build_output() can place after the scope section, in order.
-    AFTER_SCOPE = (
-        "\n=== EXPLORATION SCOPE ===",
-        "\n=== FILE HISTORY ===",
-        "\nDYNAMIC_DISPATCH_RISK:",
-        "\n--- Section 3: OUTPUT INSTRUCTIONS",
-    )
 
     @staticmethod
     def _hunk_lines(text):
@@ -1568,14 +1560,6 @@ class TestBriefingFitsOneRead:
         if lines[-1] == "":
             lines.pop()
         return lines
-
-    def _scope_block(self, briefing):
-        """The scope section alone: from the scope's own header, the first
-        after the REVIEW CONTENT marker, to the first thing build_output()
-        places after it."""
-        start = briefing.index("=== REVIEW SCOPE ===", briefing.index(self.SECTION_2))
-        ends = [briefing.find(marker, start) for marker in self.AFTER_SCOPE]
-        return briefing[start:min(end for end in ends if end != -1) + 1]
 
     def _bootstrap(self, output_dir):
         """Run performance-reviewer's bootstrap with a telemetry log; return
@@ -1601,61 +1585,6 @@ class TestBriefingFitsOneRead:
         )
         return result, briefing, agent_start
 
-    def test_a_small_scope_is_inlined_whole_and_counted(self, tmp_path):
-        _, briefing, agent_start = self._bootstrap(tmp_path / "out")
-
-        block = self._scope_block(briefing)
-        scoped = Path(scoped_diff_path(str(tmp_path / "out"), "performance"))
-        # Written for every reviewer whose scope ran, and here the briefing
-        # carries every line of it.
-        assert scoped.read_text().rstrip("\n") == (
-            _mod.READ_LINE_NUMBER_WARNING + block.rstrip("\n")
-        )
-        assert agent_start["scope"]["inline_lines"] == self._hunk_lines(block)
-        assert agent_start["scope"]["inline_lines"] > 0
-
-    def test_a_scope_past_one_read_names_the_exact_reads(self, tmp_path, monkeypatch):
-        # Size the line limit from a real briefing: everything outside the
-        # scope plus half of the scope, so the whole cannot fit and part of
-        # the scope still can.
-        _, probe, _ = self._bootstrap(tmp_path / "probe")
-        scope_lines = len(self._read_tool_lines(self._scope_block(probe)))
-        limit = len(self._read_tool_lines(probe)) - scope_lines + scope_lines // 2
-        monkeypatch.setenv("PIRATEGOAT_BRIEFING_READ_LINE_LIMIT", str(limit))
-
-        result, briefing, agent_start = self._bootstrap(tmp_path / "cut")
-
-        assert len(self._read_tool_lines(briefing)) <= limit
-        inline, continuation = self._scope_block(briefing).split(
-            "\n\n=== SCOPE CONTINUES IN FILE ===\n"
-        )
-        inline_lines = inline.split("\n")
-        assert inline_lines[0] == "=== REVIEW SCOPE ===" and len(inline_lines) > 1
-        reads = re.findall(r"^  Read (\S+) offset=(\d+) limit=(\d+)$", continuation, re.M)
-        assert reads
-        scoped = Path(scoped_diff_path(str(tmp_path / "cut"), "performance"))
-        assert {path for path, _, _ in reads} == {str(scoped)}
-        file_lines = self._read_tool_lines(scoped.read_text())
-        warning_lines = _mod.READ_LINE_NUMBER_WARNING.count("\n")
-        scope_in_file = file_lines[warning_lines:]
-        # The inline prefix is the file's scope, line for line, and the first
-        # named read (1-based offset) starts at the first line it left out...
-        assert inline_lines == scope_in_file[:len(inline_lines)]
-        first_offset = int(reads[0][1])
-        assert first_offset == len(inline_lines) + warning_lines + 1
-        assert file_lines[first_offset - 1] == scope_in_file[len(inline_lines)]
-        # ...and the reads run on without a gap to the file's last line.
-        next_offset = first_offset
-        for _, offset, count in reads:
-            assert int(offset) == next_offset
-            next_offset += int(count)
-        assert next_offset == len(file_lines) + 1
-        assert agent_start["scope"]["inline_lines"] == self._hunk_lines(inline)
-        assert 0 < agent_start["scope"]["inline_lines"] < self._hunk_lines(scoped.read_text())
-        # The stub defers to the block, which says how the reads are paced.
-        assert "SCOPE CONTINUES IN FILE, make the Read calls it lists, as it says." in result.stdout
-        assert "before reviewing" not in result.stdout
-
     PURPOSE_HEAD = "## Verify\nV1. Something load-bearing — source: PR description\n## Context\nNone.\n## Author's description (extracted)\n> quoted\n"
 
     def _in_process_with_purpose(self, tmp_path, monkeypatch, capsys, purpose_lines, scope_hunk_lines):
@@ -1667,77 +1596,175 @@ class TestBriefingFitsOneRead:
         purpose = self.PURPOSE_HEAD + "\n".join(f"purpose filler {i}" for i in range(purpose_lines)) + "\n"
         (out / "pipeline" / "change-purpose.md").write_text(purpose)
         scope = (
-            "STATUS: OK\n=== FILES ===\nsrc/a.py  (+%d -0)\n=== DIFFS ===\n--- src/a.py ---\n" % scope_hunk_lines
+            "STATUS: OK\n=== FILES ===\nsrc/a.py  (+%d -0)\n=== DIFFS ===\ndiff --git a/src/a.py b/src/a.py\n" % scope_hunk_lines
             + "\n".join(f"+line {i}" for i in range(scope_hunk_lines)) + "\n"
         )
         facts = dict(_IN_PROCESS_FACTS, in_scope_stat_lines=scope_hunk_lines, inline_diff_lines=scope_hunk_lines)
         return _main_in_process("code-reviewer", tmp_path, monkeypatch, capsys, scope_output=scope, facts=facts), purpose
 
+    def test_the_diff_is_read_from_its_file(self, tmp_path):
+        result, briefing, agent_start = self._bootstrap(tmp_path / "out")
+
+        scoped = Path(scoped_diff_path(str(tmp_path / "out"), "performance"))
+        patch = scoped.read_text()
+        assert patch.startswith(_mod.READ_LINE_NUMBER_WARNING + "diff --git ")
+        assert _mod.DIFFS_HEADER not in patch
+        assert agent_start["scope"]["inline_lines"] == self._hunk_lines(patch) > 0
+
+        content = briefing.split(self.SECTION_2, 1)[1]
+        assert "=== REVIEW SCOPE ===" in content
+        assert _mod.DIFFS_HEADER not in content
+        first_added = next(
+            line for line in patch.split("\n")
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        assert first_added not in content.split("\n")
+        assert _mod.SCOPED_DIFF_HEADER in content
+        reads = re.findall(r"^  Read (\S+) offset=(\d+) limit=(\d+)$", content, re.M)
+        assert {path for path, _, _ in reads} == {str(scoped)}
+        assert "SCOPED DIFF IN FILE" in result.stdout
+
+        # The patch-line rule is stated once, at the top of the file whose
+        # display numbers it explains; the briefing, which holds no hunk
+        # line, carries no copy of it.
+        assert _mod.READ_LINE_NUMBER_WARNING not in briefing
+        assert (briefing + patch).count("227→") == 1
+
+    def test_the_reads_cover_the_file_without_a_gap(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PIRATEGOAT_BRIEFING_READ_LINE_LIMIT", "8")
+        _, briefing, _ = self._bootstrap(tmp_path / "out")
+
+        scoped = Path(scoped_diff_path(str(tmp_path / "out"), "performance"))
+        file_lines = self._read_tool_lines(scoped.read_text())
+        reads = re.findall(r"^  Read (\S+) offset=(\d+) limit=(\d+)$", briefing, re.M)
+        assert len(reads) > 1
+        next_offset = 1
+        for _, offset, count in reads:
+            assert int(offset) == next_offset
+            assert int(count) <= 8
+            next_offset += int(count)
+        assert next_offset == len(file_lines) + 1
+
     def test_a_briefing_that_fits_carries_the_purpose_inline(self, tmp_path, monkeypatch, capsys):
-        briefing, purpose = self._in_process_with_purpose(tmp_path, monkeypatch, capsys, 5, 5)
+        briefing, _ = self._in_process_with_purpose(tmp_path, monkeypatch, capsys, 5, 5)
         assert "purpose filler 0" in briefing
         assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in briefing
-        assert "SCOPE CONTINUES IN FILE" not in briefing
+        assert _mod.SCOPED_DIFF_HEADER in briefing
+        assert "+line 0" not in briefing
 
-    def test_the_purpose_leaves_first_and_the_scope_rides_whole(self, tmp_path, monkeypatch, capsys):
+    def test_the_purpose_leaves_when_the_briefing_would_not_fit(self, tmp_path, monkeypatch, capsys):
         # Size the limit from a probe: everything except the purpose body,
-        # plus a margin smaller than the body, so whole+whole cannot fit and
-        # pointer+whole can. monkeypatch.setattr, not setenv: main() runs
-        # against the module the test already imported, and
-        # BRIEFING_READ_LINE_LIMIT is read once at import time, so an env
-        # var set after import has no effect.
+        # plus a margin smaller than the body, so the inline build cannot
+        # fit and the pointer build can. monkeypatch.setattr, not setenv:
+        # main() runs against the imported module, whose limit was read at
+        # import time.
         probe, purpose = self._in_process_with_purpose(tmp_path / "probe", monkeypatch, capsys, 400, 30)
         assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in probe, "the probe must fit whole at the default limit"
-        purpose_body_lines = purpose.count("\n")
         total = len(_mod._read_tool_lines(probe))
-        # Evicting the purpose costs it purpose_body_lines and gains back the
-        # 2-line pointer block, so the pointer+whole build lands at
-        # total - purpose_body_lines + 2. READ_LINE_NUMBER_WARNING's 5 lines
-        # are in both `total` (the probe already carries them) and that
-        # build's own measure, so they cancel out of the difference. The
-        # +20 margin here leaves ~18 lines of slack under the limit, while
-        # the whole+whole build below is over it by ~purpose_body_lines.
-        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", total - purpose_body_lines + 20)
+        monkeypatch.setattr(_mod, "BRIEFING_READ_LINE_LIMIT", total - purpose.count("\n") + 20)
         briefing, _ = self._in_process_with_purpose(tmp_path / "cut", monkeypatch, capsys, 400, 30)
         assert _mod.REVIEW_FOCUS_CONTINUES_HEADER in briefing
         assert "purpose filler 0" not in briefing
         assert str(tmp_path / "cut" / "out" / "pipeline" / "change-purpose.md") in briefing
-        assert "SCOPE CONTINUES IN FILE" not in briefing
-        assert "+line 29" in briefing
         assert "load-bearing claims" in briefing
+        assert _mod.SCOPED_DIFF_HEADER in briefing
+        assert "+line 29" not in briefing
 
-    def test_a_cut_scope_never_shares_a_briefing_with_an_inline_purpose(self, tmp_path, monkeypatch, capsys):
-        probe, purpose = self._in_process_with_purpose(tmp_path / "probe", monkeypatch, capsys, 100, 400)
-        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER not in probe, "the probe must fit whole at the default limit"
-        assert "SCOPE CONTINUES IN FILE" not in probe, "the probe must fit whole at the default limit"
-        # Below what pointer+whole scope needs: both stages fire.
+    LIST_ONLY_SCOPE = (
+        "=== REVIEW SCOPE ===\nSTATUS: OK\n\n=== FILES ===\n\n"
+        "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+        "  package-lock.json  (+40 -12)\n"
+    )
+    LIST_ONLY_FACTS = dict(
+        _IN_PROCESS_FACTS,
+        inline_diff_files=[],
+        list_only_files=["package-lock.json"],
+        inline_diff_lines=0,
+    )
+
+    def _in_process_without_a_diff(self, tmp_path, monkeypatch, capsys):
+        """Run toolchain-reviewer's real main() on an OK scope of one
+        list-only file, which fetches no diff, with a telemetry log; return
+        the stub, the briefing, the agent_start event and the scoped-diff
+        path."""
+        out = tmp_path / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        telemetry_log = out / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        _write_telemetry_marker(out, telemetry_log)
+        monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
-            _mod, "BRIEFING_READ_LINE_LIMIT",
-            len(_mod._read_tool_lines(probe)) - purpose.count("\n") - 200,
+            _mod, "run_scope_discovery", lambda *_args, **_kwargs: (0, self.LIST_ONLY_SCOPE)
         )
-        briefing, _ = self._in_process_with_purpose(tmp_path / "cut", monkeypatch, capsys, 100, 400)
-        assert "SCOPE CONTINUES IN FILE" in briefing
-        assert _mod.REVIEW_FOCUS_CONTINUES_HEADER in briefing
-        assert "purpose filler 0" not in briefing
-        reads = re.findall(r"^  Read (\S+) offset=(\d+) limit=(\d+)$", briefing, re.M)
-        assert reads and all(path.endswith("scoped-diff.patch") for path, _, _ in reads)
+        monkeypatch.setattr(_mod, "load_scope_facts", lambda _paths: self.LIST_ONLY_FACTS)
+        monkeypatch.setattr(sys, "argv", [
+            "bootstrap.py", "--agent", "toolchain-reviewer", "--range", "base..head",
+            "--output-dir", str(out),
+        ])
+        with pytest.raises(SystemExit) as exc:
+            _mod.main()
+        stub = capsys.readouterr().out
+        assert exc.value.code == 0, stub
+        agent_start = next(
+            event
+            for event in map(json.loads, telemetry_log.read_text().splitlines())
+            if event.get("event") == "agent_start"
+        )
+        return stub, briefing_text(stub), agent_start, Path(scoped_diff_path(str(out), "toolchain"))
+
+    def test_a_scope_without_a_diff_has_no_file_and_no_block(self, tmp_path, monkeypatch, capsys):
+        """No patch, no block: a scope of list-only files fetches no diff,
+        so no scoped-diff file is written, the briefing names none, and
+        telemetry records no diff line. The stub's clause about the block
+        is conditional, so it asks for no read this briefing lacks."""
+        stub, briefing, agent_start, scoped = self._in_process_without_a_diff(
+            tmp_path, monkeypatch, capsys
+        )
+        assert "STATUS: OK" in stub
+        assert "package-lock.json" in briefing
+        assert not scoped.exists()
+        assert _mod.SCOPED_DIFF_HEADER not in briefing
+        assert agent_start["scope"]["inline_lines"] == 0
+        assert "If its scope ends with SCOPED DIFF IN FILE," in stub
+
+    def test_a_retry_without_a_diff_removes_the_last_attempts_file(self, tmp_path, monkeypatch, capsys):
+        """A reviewer retried in the same run directory whose new scope
+        fetches nothing must not keep the first attempt's scoped diff: the
+        file exists exactly when the briefing names it, and the transcript
+        analysis measures reads against whatever file is there."""
+        stale = Path(scoped_diff_path(str(tmp_path / "out"), "toolchain"))
+        stale.parent.mkdir(parents=True)
+        stale.write_text(_mod.READ_LINE_NUMBER_WARNING + "diff --git a/x b/x\n+stale\n")
+        _, briefing, agent_start, scoped = self._in_process_without_a_diff(
+            tmp_path, monkeypatch, capsys
+        )
+        assert scoped == stale
+        assert not scoped.exists()
+        assert _mod.SCOPED_DIFF_HEADER not in briefing
+        assert agent_start["scope"]["inline_lines"] == 0
 
 
 class TestScopeSectionRidesVerbatim:
     """build_output() places the scope section it is given as it is, at the
-    head of REVIEW CONTENT's scope. Where the cut falls and which Read calls
-    it names are render_scope_section()'s and fit_scope_to_one_read()'s
-    (test_bootstrap.py::TestRenderScopeSection, ::TestFitScopeToOneRead);
-    that main() writes the scoped diff the cut names is
-    TestBriefingFitsOneRead's."""
+    head of REVIEW CONTENT's scope. What the section holds is
+    split_scope_diffs()'s and render_scope_section()'s
+    (test_bootstrap.py::TestSplitScopeDiffs, ::TestRenderScopeSection); that
+    main() writes the scoped diff the section names is
+    TestBriefingNamesTheScopedDiff's."""
 
-    @pytest.mark.parametrize("line_allowance", [None, 10], ids=["whole", "cut"])
-    def test_the_section_reaches_review_content_unchanged(self, tmp_path, line_allowance):
-        scope = "=== REVIEW SCOPE ===\n=== DIFFS ===\n" + "".join(f"+line {i}\n" for i in range(50))
-        section = _mod.render_scope_section(
-            scope, scoped_diff_path(tmp_path, "security"),
-            line_allowance=line_allowance, char_allowance=None,
-        )
+    @pytest.mark.parametrize("with_diff", [True, False], ids=["diff", "no-diff"])
+    def test_the_section_reaches_review_content_unchanged(self, tmp_path, with_diff):
+        scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+50 -0)\n"
+        if with_diff:
+            scope += "=== DIFFS ===\ndiff --git a/src/a.py b/src/a.py\n" + "".join(f"+line {i}\n" for i in range(50))
+        listing, diffs = _mod.split_scope_diffs(scope)
+        scoped_diff = (scoped_diff_path(str(tmp_path), "security"), diffs) if diffs else None
+        section = _mod.render_scope_section(listing, scoped_diff)
         output = build_output(
             agent_name="security-reviewer",
             plugin_root="/fake/root",
@@ -1754,7 +1781,7 @@ class TestScopeSectionRidesVerbatim:
         )
         content = output.split("--- Section 2: REVIEW CONTENT (what to review) ---\n\n")[1]
         assert content.startswith(section.text)
-        assert (section.remaining_reads == []) is (line_allowance is None)
+        assert bool(section.reads) is with_diff
 
 
 class TestDynamicDispatchRisk:
@@ -1810,7 +1837,7 @@ class TestDynamicDispatchRisk:
             # not suppress high when the fact says PHP is in scope.
             pytest.param(
                 True,
-                "=== SCOPE CONTINUES IN FILE ===\nRead /x offset=9 limit=9\n",
+                "=== SCOPED DIFF IN FILE ===\n  Read /x offset=1 limit=9\n",
                 "high",
                 id="garbled-text-cannot-suppress-high",
             ),
@@ -2171,7 +2198,7 @@ class TestReviewClaimableContractIsDelivered:
         "=== REVIEW SCOPE ===\n"
         "=== FILES ===\n"
         "src/big.py  (+900 -10)\n"
-        "=== REVIEW-CLAIMABLE (3 files, no diff inlined) ===\n"
+        "=== REVIEW-CLAIMABLE (3 files, diff withheld) ===\n"
         "  src/big.py  (+900 -10)\n"
     )
 

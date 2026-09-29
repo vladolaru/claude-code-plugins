@@ -368,6 +368,13 @@ def _build_snapshot(
                 "repository_reads": _MANIFEST_SECTIONS_CONTRACT.safe_nonnegative_int(
                     row.get("repository_reads")
                 ),
+                "patch_lines": _MANIFEST_SECTIONS_CONTRACT.safe_nonnegative_int(row.get("patch_lines")),
+                "patch_lines_read": _MANIFEST_SECTIONS_CONTRACT.safe_nonnegative_int(
+                    row.get("patch_lines_read")
+                ),
+                "in_scope_reads": _MANIFEST_SECTIONS_CONTRACT.safe_nonnegative_int(
+                    row.get("in_scope_reads")
+                ),
             }
             for row in usable
         ],

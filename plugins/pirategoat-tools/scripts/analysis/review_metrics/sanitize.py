@@ -441,7 +441,7 @@ def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
             # `inline_lines` is optional the way `budget_target` is: absent
             # on every manifest written before it existed, and an absent
             # key must stay absent so the run reads as unmeasured rather
-            # than as a briefing that carried no diff.
+            # than as a reviewer handed no diff.
             for name in ("files", "lines", "inline_lines"):
                 count = _nonnegative_int(scope.get(name))
                 if count is not None:
@@ -1376,6 +1376,9 @@ def _sanitize_usage_snapshot(value: object) -> dict[str, Any] | None:
                 "repository_reads": _nonnegative_int(
                     row.get("repository_reads")
                 ),
+                "patch_lines": _nonnegative_int(row.get("patch_lines")),
+                "patch_lines_read": _nonnegative_int(row.get("patch_lines_read")),
+                "in_scope_reads": _nonnegative_int(row.get("in_scope_reads")),
             })
 
     captured_at = value.get("captured_at")

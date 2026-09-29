@@ -3649,6 +3649,9 @@ class TestUsageManifest:
                 "usage": self._usage(output=5),
                 "tool_calls": 42,
                 "repository_reads": 7,
+                "patch_lines": 300,
+                "patch_lines_read": 300,
+                "in_scope_reads": 5,
             },
             {
                 "agent": "security-reviewer",
@@ -3664,8 +3667,11 @@ class TestUsageManifest:
 
         assert section["by_agent"][0]["tool_calls"] == 42
         assert section["by_agent"][0]["repository_reads"] == 7
+        assert section["by_agent"][0]["patch_lines_read"] == 300
+        assert section["by_agent"][0]["in_scope_reads"] == 5
         assert section["by_agent"][1]["tool_calls"] is None
         assert section["by_agent"][1]["repository_reads"] == 3
+        assert section["by_agent"][1]["patch_lines"] is None
 
     @pytest.mark.parametrize(
         "raw_text",
@@ -3781,7 +3787,8 @@ class TestUsageManifest:
         assert section["usage_by_model"] == {}
         assert section["by_agent"] == [
             {"agent": "code-reviewer", "model": None, "usage": self._usage(),
-             "tool_calls": None, "repository_reads": None},
+             "tool_calls": None, "repository_reads": None,
+             "patch_lines": None, "patch_lines_read": None, "in_scope_reads": None},
         ]
 
     def test_non_integer_agent_counts_are_dropped(self, mod, tmp_path):
@@ -3822,10 +3829,12 @@ class TestUsageManifest:
         assert section["by_agent"] == [
             {"agent": "code-reviewer", "model": "claude-opus-5[1m]",
              "usage": self._usage(output=5), "tool_calls": None,
-             "repository_reads": None},
+             "repository_reads": None,
+             "patch_lines": None, "patch_lines_read": None, "in_scope_reads": None},
             {"agent": "security-reviewer", "model": "claude-sonnet-5",
              "usage": self._usage(output=2), "tool_calls": None,
-             "repository_reads": None},
+             "repository_reads": None,
+             "patch_lines": None, "patch_lines_read": None, "in_scope_reads": None},
         ]
         assert manifest["availability"]["usage"] is True
 

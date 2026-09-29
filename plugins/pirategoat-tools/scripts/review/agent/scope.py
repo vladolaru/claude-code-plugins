@@ -64,10 +64,6 @@ class ReviewArgumentParser(argparse.ArgumentParser):
         super().error(message)
 
 
-# =============================================================================
-# Semantic filter — content-level noise removal from diffs
-# =============================================================================
-
 def _load_glob_match():
     """Lazy-load glob_match from review_config.py (the single source of truth
     for repo-reviewer applicability globs — path scoping must match dispatch
@@ -82,33 +78,6 @@ def _load_glob_match():
     _rc_spec.loader.exec_module(_rc_mod)
     return _rc_mod.glob_match
 
-
-def _load_semantic_filter():
-    """Lazy-load filter_diff from diff_noise_filter.py (sibling script)."""
-    import importlib.util as _ilu
-    _sf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diff_noise_filter.py")
-    _sf_spec = _ilu.spec_from_file_location("diff_noise_filter", _sf_path)
-    _sf_mod = _ilu.module_from_spec(_sf_spec)
-    _sf_spec.loader.exec_module(_sf_mod)
-    return _sf_mod.filter_diff
-
-_filter_diff_fn = None
-
-def apply_semantic_filter(diff_text: str) -> str:
-    """Apply semantic filtering to remove noise from a diff.
-
-    Strips docblocks, blank lines, inline comments, and formatting-only
-    changes while preserving diff headers and meaningful code changes.
-
-    Returns filtered diff text. Returns empty string for empty input.
-    """
-    if not diff_text:
-        return ""
-    global _filter_diff_fn
-    if _filter_diff_fn is None:
-        _filter_diff_fn = _load_semantic_filter()
-    filtered, _stats = _filter_diff_fn(diff_text)
-    return filtered
 
 # =============================================================================
 # Markup-emission detection — SINGLE SOURCE, shared with plan_dispatch.py's
@@ -440,8 +409,7 @@ def classify_markup_evidence(
     tracking the current file header — no per-file subprocess fan-out and no
     retained patch bodies (a large PR would otherwise mean hundreds of git
     calls and every full diff held in memory before the diff line cap is
-    applied). The scan runs on the raw (unfiltered) diff; that's a superset
-    of the semantically filtered text, which is fine for ORDERING evidence.
+    applied). The scan reads the same diff the reviewer receives.
 
     `line_predicate` swaps the vocabulary without re-implementing the scan:
     inline priority asks the markup question, the a11y scope sniff asks the
@@ -709,27 +677,23 @@ def _ext_re(*groups) -> str:
     return r"\.(" + "|".join(exts) + r")$"
 
 
-# The semantic filter's heuristics assume programming-language comment
-# syntax. In prose formats those same characters ARE the content — a
-# Markdown bullet starts with '*' (the docblock heuristic) and a heading
-# with '#' (the comment heuristic) — so filtering strips exactly the
-# changed text the reviewer was dispatched to see (docs-drift domain,
-# path-rescued applies_to.paths files). Prose files bypass the filter.
-# Changelog fragments (Jetpack changelogger, adopted by WooCommerce and
-# WooPayments): any file directly under a `changelog/` directory. Names
-# carry no extension but often a version (`bump-phpstan-2.2.2`,
-# `update-woocommerce-analytics-0.16.7`), so nothing here reads a
-# suffix. Every domain is extension-anchored, so these matched nothing
-# and every WooPayments PR shipped one file no reviewer could see. Owned
-# by docs-drift (it asserts significance, type, and a note that must
-# match the diff); exempt from the semantic filter like other prose;
-# recognised by plan_dispatch's documentation-files check, which applies
-# this same pattern and no rule of its own.
-CHANGELOG_FRAGMENT_PATTERN = r"(^|/)changelog/[^/]+$"
-
-_SEMANTIC_FILTER_EXEMPT_RE = re.compile(
-    r"(?:" + _ext_re(_DOC_LANGS) + r"|" + CHANGELOG_FRAGMENT_PATTERN + r")",
-    re.IGNORECASE,
+# Changelog fragments: any file, at any depth, under a directory named
+# like a changelog, whatever tool wrote it (`changelog/` for the Jetpack
+# changelogger WooCommerce and WooPayments use, `.changeset/`,
+# `newsfragments/` and `changes/` for towncrier, `changelog.d/`,
+# `.changes/`, `changelogs/fragments/`, `releasenotes/notes/`), in any
+# case. Names often carry no extension but a version
+# (`bump-phpstan-2.2.2`), so nothing here reads a suffix. Every other
+# docs-drift include is extension-anchored, so before this rule every
+# WooPayments PR shipped one file no reviewer could see. Loose on
+# purpose: a code directory named `changes/` also matches, which costs
+# docs-drift a file it already gets by extension. Owned by docs-drift
+# (a fragment's note, and any type or significance field, must match
+# the diff); recognised by plan_dispatch's documentation-files check,
+# which applies this same pattern and no rule of its own.
+CHANGELOG_FRAGMENT_PATTERN = (
+    r"(?i:(^|/)(?:\.?change(?:log|set)s?(?:\.d)?|\.?changes(?:\.d)?"
+    r"|newsfragments|release-?notes)/(?:[^/]+/)*[^/]+$)"
 )
 
 
@@ -1470,9 +1434,6 @@ def build_scope(args: argparse.Namespace) -> dict:
     review_claimable_files = []
     list_only_files = []
 
-    # Determine if semantic filtering is enabled
-    use_semantic_filter = not getattr(args, "no_semantic_filter", False)
-
     if not args.base_ref_only and not args.summary:
         # Markup-evidence inline priority (a11y): the broad markup-language
         # match can put a huge non-UI file ahead of the tiny template or
@@ -1530,7 +1491,7 @@ def build_scope(args: argparse.Namespace) -> dict:
         for filepath in domain_matched_sorted:
             # List-only files: appear in file list + diffstat, but no diff content.
             # These are files rescued from noise (e.g., lock files for toolchain domain)
-            # that are too large/noisy for inline diffs but signal relevant changes.
+            # that are too large/noisy to fetch as diffs but signal relevant changes.
             if list_only_re and list_only_re.search(filepath):
                 list_only_files.append(filepath)
                 continue
@@ -1539,36 +1500,17 @@ def build_scope(args: argparse.Namespace) -> dict:
                 review_claimable_files.append(filepath)
                 continue
 
-            # Pre-skip without fetching when the RAW diffstat estimate alone
-            # exceeds the remaining ordinary allowance — but ONLY when semantic
-            # filtering is off. With filtering enabled, raw size proves nothing: a
-            # 2,050-line patch that is 2,040 docblock lines filters to 10
-            # reviewable lines and fits comfortably; the cap applies to
-            # FILTERED lines, so the file must be measured, not guessed.
-            if not use_semantic_filter:
-                est_lines = sum(diffstat.get(filepath, (0, 0)))
-                remaining_ordinary_lines = diff_line_cap - ordinary_cap_lines
-                if diffs and est_lines > remaining_ordinary_lines:
-                    review_claimable_files.append(filepath)
-                    continue
+            # Pre-skip without fetching when the diffstat alone exceeds the
+            # remaining ordinary allowance: the cap counts the lines git
+            # writes and the diffstat is that count, so a file that cannot
+            # fit is never fetched.
+            est_lines = sum(diffstat.get(filepath, (0, 0)))
+            remaining_ordinary_lines = diff_line_cap - ordinary_cap_lines
+            if diffs and est_lines > remaining_ordinary_lines:
+                review_claimable_files.append(filepath)
+                continue
 
             diff_text = get_diff_for_file(range_spec, filepath, repo_root)
-
-            # Apply semantic filtering to reduce noise (docblocks, comments,
-            # formatting). Prose files are exempt — the filter's comment
-            # heuristics would strip their content (see
-            # _SEMANTIC_FILTER_EXEMPT_RE). Path-rescued files are exempt
-            # too: they are here precisely because the domain's language
-            # recognition did NOT match them (extensionless docs/README,
-            # unknown formats), so the filter's heuristics have no basis —
-            # fail open to full content.
-            if (
-                use_semantic_filter
-                and not _SEMANTIC_FILTER_EXEMPT_RE.search(filepath)
-                and filepath not in rescued_by_path_set
-            ):
-                diff_text = apply_semantic_filter(diff_text)
-
             diff_lines = count_diff_lines(diff_text)
             is_protected_oversized_diff = not diffs and diff_lines > diff_line_cap
 
@@ -1636,7 +1578,13 @@ def build_scope(args: argparse.Namespace) -> dict:
 
 
 def format_text_output(scope: dict) -> str:
-    """Format scope as structured text for agent consumption."""
+    """Format scope as structured text for agent consumption.
+
+    The DIFFS section is always the last one and holds git's own output,
+    whose diff --git header names each file: bootstrap's split_scope_diffs()
+    moves it out of the briefing by reading from its header to the end of
+    the scope.
+    """
     lines = []
 
     # Header — always present, agents parse this
@@ -1734,7 +1682,7 @@ def format_text_output(scope: dict) -> str:
         if list_only_files:
             lines.append("")
             lines.append(f"=== CHANGED (no diff — {len(list_only_files)} lock/generated files) ===")
-            lines.append("These files changed but diffs are skipped (too large/noisy for inline review).")
+            lines.append("These files changed but diffs are skipped (too large/noisy to fetch into your scoped diff).")
             lines.append(f"Use 'git diff {scope.get('range', '')} -- <file>' to inspect if relevant.")
             for filepath in list_only_files:
                 added, removed = diffstat.get(filepath, (0, 0))
@@ -1744,7 +1692,7 @@ def format_text_output(scope: dict) -> str:
         claimable_files = scope.get("skipped_files", {}).get("review_claimable", [])
         if claimable_files:
             lines.append("")
-            lines.append(f"=== REVIEW-CLAIMABLE ({len(claimable_files)} files, no diff inlined) ===")
+            lines.append(f"=== REVIEW-CLAIMABLE ({len(claimable_files)} files, diff withheld) ===")
             lines.append("These files ARE IN YOUR SCOPE — their diffs were withheld only to fit")
             lines.append("the diff line cap. This list is your remaining work queue, largest")
             lines.append(
@@ -1787,8 +1735,7 @@ def format_text_output(scope: dict) -> str:
         if scope.get("diffs"):
             lines.append("")
             lines.append("=== DIFFS ===")
-            for filepath, diff_text in scope["diffs"].items():
-                lines.append(f"--- {filepath} ---")
+            for diff_text in scope["diffs"].values():
                 lines.append(diff_text)
                 lines.append("")
 
@@ -1818,13 +1765,13 @@ def write_scope_summary(scope: dict, path: str) -> None:
     scope; ``routing_files`` is the every-mode population the run-level file
     review subtracts from the changed set; ``in_scope_stat_lines`` sizes the
     tool-call budget; ``inline_diff_lines`` is how many hunk lines this
-    scope fetched and inlined into its own output, before bootstrap cuts the
-    briefing to fit one Read. Telemetry records bootstrap's carried count,
-    not this one; this fetched count is the point it is compared against.
+    scope fetched into its DIFFS section, which bootstrap writes whole to
+    the reviewer's scoped diff; telemetry counts the same lines from that
+    file.
 
     The last two answer different questions and can disagree: the diffstat
     total counts every changed line of every reviewed file, while the
-    inline count is the hunk lines this scope managed to fetch and inline.
+    inline count is the hunk lines this scope managed to fetch.
     A scope that fetched no diff at all reports a nonzero
     ``in_scope_stat_lines`` beside a zero ``inline_diff_lines``.
 
@@ -1902,7 +1849,7 @@ def main():
         "--diff-line-cap",
         type=int,
         default=2000,
-        help="Most diff hunk lines to inline (default: 2000). Files past the cap are listed as review-claimable, not diffed.",
+        help="Most diff lines to fetch into the reviewer's scoped diff (default: 2000). Files past the cap are listed as review-claimable, not diffed.",
     )
     parser.add_argument(
         "--format",
@@ -1934,11 +1881,6 @@ def main():
         "--no-merge-base",
         action="store_true",
         help="Disable automatic merge-base range adjustment (use raw two-dot range as-is).",
-    )
-    parser.add_argument(
-        "--no-semantic-filter",
-        action="store_true",
-        help="Disable semantic noise filtering on diffs (keep docblocks, comments, formatting).",
     )
     parser.add_argument(
         "--summary-json-out",

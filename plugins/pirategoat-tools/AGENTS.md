@@ -116,7 +116,6 @@ Each rule names the test that holds it where one exists. One clause of why; the 
 | `require_php_source_file` | optional | Evidence gate: skip unless the domain's scope holds at least one non-test `.php` file (`plan_dispatch.py` layer 2). Used by the WordPress and WooCommerce reviewers. |
 | `triage_repository_keywords` | optional | Ambient repository-identity keywords matched against fetch remotes and the checkout basename. Opt in only when repository membership alone is sufficient for applicability. |
 | `min_added_lines` | optional | Skip when the non-test in-scope additions fall below this count. |
-| `no_semantic_filter` | optional | Disable the semantic diff-noise filter for this agent's scope, so it sees every hunk. |
 | `secondary_domains`, `extra_scope`, `budget_override`, `file_history`, `max_history_commits` | optional | Extra scope domains; extra scope invocations (`["--base-ref-only"]`); a fixed tool-call budget for agents whose work does not scale with the diff; per-file git history in the prompt, and how many commits (default 15). |
 
 Adding a reviewer:

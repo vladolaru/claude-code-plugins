@@ -149,26 +149,33 @@ class TestFilterNoise:
 class TestFilterDomain:
     """Tests for filter_domain() — domain-specific file matching."""
 
-    def test_docs_drift_owns_changelog_fragments(self):
-        files = [
-            "changelog/fix-woopmnt-6265-ece-stale-click",
-            "plugins/woocommerce/changelog/35520-fix-stale-coupon-code-cache",
-            "changelog/nested/not-a-fragment",
-            "changelog.txt",
-            "src/changelog/helper.php",
-        ]
-        matched, excluded = review_scope.filter_domain(files, "docs-drift")
-        assert matched == [
-            "changelog/fix-woopmnt-6265-ece-stale-click",
-            "plugins/woocommerce/changelog/35520-fix-stale-coupon-code-cache",
-            "changelog.txt",
-            "src/changelog/helper.php",
-        ]
-        assert "changelog/nested/not-a-fragment" in excluded
+    # Extensionless or data-format fragments, so only the fragment rule can
+    # route them: every other docs-drift include is extension-anchored.
+    CHANGELOG_FRAGMENTS = [
+        "changelog/fix-woopmnt-6265-ece-stale-click",  # Jetpack changelogger
+        "plugins/woocommerce/changelog/35520-fix-stale-coupon-code-cache",
+        "changelog/bump-phpstan-2.2.2",
+        "packages/js/components/changelog/nested/fix-thing",
+        ".changeset/brave-dogs-sing",  # changesets
+        "newsfragments/1234.bugfix",  # towncrier
+        "changes/1234.feature",
+        "changelog.d/20260929_fix_cursor",  # scriv
+        ".changes/unreleased/Fixed-20260929",  # changie
+        "changelogs/fragments/fix-module",  # ansible
+        "releasenotes/notes/fix-thing-0123abcd",  # reno
+        "release-notes/fix-thing",
+        "ChangeLog/Fix-Thing",
+    ]
 
-    def test_changelog_fragments_bypass_the_semantic_filter(self):
-        assert review_scope._SEMANTIC_FILTER_EXEMPT_RE.search("changelog/fix-thing")
-        assert not review_scope._SEMANTIC_FILTER_EXEMPT_RE.search("src/thing.php")
+    def test_docs_drift_owns_changelog_fragments_wherever_they_live(self):
+        matched, excluded = review_scope.filter_domain(self.CHANGELOG_FRAGMENTS, "docs-drift")
+        assert matched == self.CHANGELOG_FRAGMENTS
+        assert excluded == []
+
+    def test_a_changelog_word_outside_a_directory_name_is_not_a_fragment(self):
+        files = ["bin/changelogger", "tools/changes-report", "src/Changelog", "LICENSE"]
+        matched, _ = review_scope.filter_domain(files, "docs-drift")
+        assert matched == []
 
     def test_no_domain_is_a_catch_all(self):
         """Recorded decision: extensionless files other than changelog
@@ -454,7 +461,6 @@ class TestMergeBaseGatingIntegration:
             summary=False,
             output_dir=str(Path(repo) / ".review-output"),
             no_merge_base=no_merge_base,
-            no_semantic_filter=False,
         )
         saved_cwd = os.getcwd()
         try:
@@ -602,7 +608,7 @@ class TestGitRunsFromTheRepositoryToplevel:
         args = argparse.Namespace(
             domain="code", range="main..HEAD", diff_line_cap=2000,
             base_ref_only=False, summary=False, output_dir=str(tmp_path),
-            no_merge_base=False, no_semantic_filter=False, include_path=None,
+            no_merge_base=False, include_path=None,
         )
         saved_cwd = os.getcwd()
         try:
@@ -648,41 +654,6 @@ class TestAnEmptyRangeIsReportedNotApproved:
         assert "NO_CHANGES" in result.stdout
         assert "ACTION: Report this to the caller: the range holds no changes" in result.stdout
         assert "APPROVE" not in result.stdout
-
-
-# =============================================================================
-# Semantic filtering tests — apply_semantic_filter() integration
-# =============================================================================
-
-
-class TestSemanticFiltering:
-    """Semantic filtering integration in diff output.
-
-    apply_semantic_filter is a thin wrapper over filter_diff
-    (diff_noise_filter.py, covered by test_diff_noise_filter.py); this is
-    the one test of the wrapper itself."""
-
-    def test_apply_semantic_filter_strips_docblocks(self):
-        """apply_semantic_filter removes docblock noise from diff text."""
-        diff_with_docblock = (
-            "--- a/src/Foo.php\n"
-            "+++ b/src/Foo.php\n"
-            "@@ -1,10 +1,15 @@\n"
-            " context line\n"
-            "+/**\n"
-            "+ * Added docblock\n"
-            "+ * @param string $name\n"
-            "+ */\n"
-            "+public function bar($name) {\n"
-            "+    return $name;\n"
-            "+}\n"
-        )
-        filtered = review_scope.apply_semantic_filter(diff_with_docblock)
-        # Docblock lines should be removed, code lines kept
-        assert "+public function bar" in filtered
-        assert "+    return $name;" in filtered
-        assert "* Added docblock" not in filtered
-        assert "@param string" not in filtered
 
 
 class TestInScopeFilesAcrossModes:
@@ -733,7 +704,7 @@ class TestInScopeFilesAcrossModes:
                 domain="code", range="abc123..HEAD", diff_line_cap=2000,
                 base_ref_only=base_ref_only, summary=summary,
                 output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
 
@@ -750,7 +721,7 @@ class TestInScopeFilesAcrossModes:
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=2000,
                 base_ref_only=True, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
 
@@ -760,130 +731,31 @@ class TestInScopeFilesAcrossModes:
         assert scope["in_scope_files"] == ["src/Bar.php", "src/Foo.php"]
 
 
-class TestSemanticFilterIntegration:
-    """Semantic filtering integrated into build_scope diff pipeline."""
+class TestDiffsAreVerbatim:
+    """scope['diffs'] holds each file's diff exactly as git wrote it: the
+    lines the cap counts are the lines the reviewer reads, and a line number
+    counted from a hunk header lands on the source line. The semantic filter
+    this replaced dropped docblock, blank and brace-only lines under the
+    unchanged `@@` headers (BACKLOG 46), and with them `@dataProvider` and
+    `@testdox` annotations the test reviewers needed (PR 69062 audit)."""
 
-    def test_build_scope_applies_semantic_filter_by_default(self, tmp_path):
-        """build_scope applies semantic filter to diffs by default — the
-        docblock noise the diff carries is stripped from scope['diffs']."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = self._mock_git_commands
-            args = argparse.Namespace(
-                domain="code", range="abc123..HEAD", diff_line_cap=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=False,
-            )
-            scope = review_scope.build_scope(args)
-        diff = scope["diffs"]["src/Foo.php"]
-        assert "+code();" in diff
-        assert "* Doc" not in diff
+    DIFF = (
+        "diff --git a/src/Foo.php b/src/Foo.php\n"
+        "--- a/src/Foo.php\n"
+        "+++ b/src/Foo.php\n"
+        "@@ -1,2 +1,9 @@\n"
+        " <?php\n"
+        "+/**\n"
+        "+ * Does the thing.\n"
+        "+ * @dataProvider provide_things\n"
+        "+ */\n"
+        "+function foo() {\n"
+        "+\n"
+        "+}\n"
+        " // end\n"
+    )
 
-    def test_build_scope_skips_filter_when_disabled(self, tmp_path):
-        """--no-semantic-filter keeps the docblock noise in scope['diffs']."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = self._mock_git_commands
-            args = argparse.Namespace(
-                domain="code", range="abc123..HEAD", diff_line_cap=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
-            )
-            scope = review_scope.build_scope(args)
-        diff = scope["diffs"]["src/Foo.php"]
-        assert "* Doc" in diff
-
-    def test_prose_files_bypass_semantic_filter(self, tmp_path):
-        """The filter's comment heuristics read Markdown bullets ('* ') as
-        docblock lines and headings ('# ') as comments — for prose files
-        they strip the content itself. Doc-language files must reach the
-        reviewer unfiltered."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = self._mock_git_prose_commands
-            args = argparse.Namespace(
-                domain="docs-drift", range="abc123..HEAD", diff_line_cap=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=False,
-            )
-            scope = review_scope.build_scope(args)
-        diff = scope["diffs"]["docs/guide.md"]
-        assert "+* new bullet content" in diff
-        assert "-* old bullet content" in diff
-        assert "+# New Heading" in diff
-
-    def test_path_rescued_extensionless_file_keeps_its_content(self, tmp_path):
-        """Path-rescued files are here precisely because the domain's
-        language recognition did NOT match them (extensionless docs/README,
-        unknown formats) — the filter's comment heuristics have no basis
-        and must not run on them."""
-        def _mock(cmd, check=True, cwd=None):
-            cmd_str = " ".join(cmd)
-            if "rev-parse --git-dir" in cmd_str:
-                return ".git"
-            if "rev-parse" in cmd_str:
-                return "abc123"
-            if "--name-only" in cmd_str:
-                return "docs/README"
-            if "--numstat" in cmd_str:
-                return "2\t2\tdocs/README"
-            if "merge-base" in cmd_str:
-                return "abc123"
-            if "rev-list --count" in cmd_str:
-                return "0"
-            if "diff" in cmd_str and "--" in cmd_str:
-                return (
-                    "--- a/docs/README\n+++ b/docs/README\n"
-                    "@@ -1,2 +1,2 @@\n"
-                    "-* old bullet content\n"
-                    "+* new bullet content\n"
-                )
-            return ""
-
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = _mock
-            args = argparse.Namespace(
-                domain="code", range="abc123..HEAD", diff_line_cap=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=False,
-                include_path=["docs/**"],
-            )
-            scope = review_scope.build_scope(args)
-        diff = scope["diffs"]["docs/README"]
-        assert "+* new bullet content" in diff
-        assert "-* old bullet content" in diff
-
-    @staticmethod
-    def _mock_git_prose_commands(cmd, check=True, cwd=None):
-        """Mock git commands for a Markdown-only change."""
-        cmd_str = " ".join(cmd)
-        if "rev-parse --git-dir" in cmd_str:
-            return ".git"
-        if "rev-parse" in cmd_str:
-            return "abc123"
-        if "--name-only" in cmd_str:
-            return "docs/guide.md"
-        if "--numstat" in cmd_str:
-            return "2\t2\tdocs/guide.md"
-        if "merge-base" in cmd_str:
-            return "abc123"
-        if "rev-list --count" in cmd_str:
-            return "0"
-        if "diff" in cmd_str and "--" in cmd_str:
-            return (
-                "--- a/docs/guide.md\n+++ b/docs/guide.md\n"
-                "@@ -1,4 +1,4 @@\n"
-                "-# Old Heading\n"
-                "+# New Heading\n"
-                "-* old bullet content\n"
-                "+* new bullet content\n"
-            )
-        return ""
-
-    @staticmethod
-    def _mock_git_commands(cmd, check=True, cwd=None):
-        """Mock git commands for build_scope testing."""
+    def _mock(self, cmd, check=True, cwd=None):
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
             return ".git"
@@ -892,17 +764,27 @@ class TestSemanticFilterIntegration:
         if "--name-only" in cmd_str:
             return "src/Foo.php"
         if "--numstat" in cmd_str:
-            return "10\t2\tsrc/Foo.php"
+            return "7\t0\tsrc/Foo.php"
         if "merge-base" in cmd_str:
             return "abc123"
         if "rev-list --count" in cmd_str:
             return "0"
         if "diff" in cmd_str and "--" in cmd_str:
-            return (
-                "--- a/src/Foo.php\n+++ b/src/Foo.php\n"
-                "@@ -1,3 +1,5 @@\n+/**\n+ * Doc\n+ */\n+code();\n"
-            )
+            return self.DIFF
         return ""
+
+    def test_docblocks_annotations_blank_lines_and_braces_survive(self, tmp_path):
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
+            mock_run.side_effect = self._mock
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", diff_line_cap=2000,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True,
+            )
+            scope = review_scope.build_scope(args)
+        assert scope["diffs"]["src/Foo.php"].rstrip("\n") == self.DIFF.rstrip("\n")
+        assert scope["total_diff_lines"] == 7
 
 
 # =============================================================================
@@ -999,7 +881,7 @@ class TestInlinePrioritySortOrder:
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=600,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
             # large.php (500 lines) should be in the included files
@@ -1020,7 +902,7 @@ class TestInlinePrioritySortOrder:
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=diff_line_cap,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=False,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
 
@@ -1057,7 +939,7 @@ class TestInlinePrioritySortOrder:
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=diff_line_cap,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
 
@@ -1088,7 +970,7 @@ class TestProductionFirstInlinePriority:
             args = argparse.Namespace(
                 domain=domain, range="abc123..HEAD", diff_line_cap=diff_line_cap,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=False,
+                no_merge_base=True,
             )
             return review_scope.build_scope(args)
 
@@ -1366,7 +1248,7 @@ class TestMarkupEvidenceInlinePriority:
             args = argparse.Namespace(
                 domain=domain, range="abc123..HEAD", diff_line_cap=diff_line_cap,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             return review_scope.build_scope(args), mock_run
 
@@ -1629,82 +1511,38 @@ class TestEvidenceScanPathHandling:
 
 
 # =============================================================================
-# Raw-size pre-skip vs semantic filtering
+# Raw-size pre-skip
 # =============================================================================
 
 
-def _docblock_heavy_diff(path, doc_lines, code_lines):
-    body = (
-        ["+/**"]
-        + [f"+ * Documentation line {i}." for i in range(doc_lines - 2)]
-        + ["+ */"]
-        + [f"+$code_{i} = {i};" for i in range(code_lines)]
-    )
-    return (
-        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
-        f"@@ -1,0 +1,{doc_lines + code_lines} @@\n" + "\n".join(body)
-    )
-
-
-_PRESKIP_FILES = {
-    # Both raw sizes exceed the 2,000-line cap; both filter down to code.
-    "includes/class-alpha.php": (2100, _docblock_heavy_diff("includes/class-alpha.php", 2050, 50)),
-    "includes/class-beta.php": (2050, _docblock_heavy_diff("includes/class-beta.php", 2040, 10)),
-}
-
-
-def _mock_git_for_preskip(cmd, check=True, cwd=None):
-    cmd_str = " ".join(cmd)
-    if "rev-parse --git-dir" in cmd_str:
-        return ".git"
-    if "rev-parse" in cmd_str:
-        return "abc123"
-    if "--name-only" in cmd_str:
-        return "\n".join(_PRESKIP_FILES)
-    if "--numstat" in cmd_str:
-        return "\n".join(f"{raw}\t0\t{f}" for f, (raw, _) in _PRESKIP_FILES.items())
-    if "merge-base" in cmd_str:
-        return "abc123"
-    if "rev-list --count" in cmd_str:
-        return "0"
-    if "diff" in cmd_str and "--" in cmd:
-        requested = cmd[cmd.index("--") + 1:]
-        if len(requested) == 1 and requested[0] in _PRESKIP_FILES:
-            return _PRESKIP_FILES[requested[0]][1]
-        return "\n".join(_PRESKIP_FILES[f][1] for f in requested if f in _PRESKIP_FILES)
-    return ""
-
-
 class TestRawSizePreSkip:
-    """Raw diffstat size only proves un-fittability when semantic filtering
-    is OFF. A 2,050-line patch that is 2,040 docblock lines filters to 10
-    reviewable lines — rejecting it unfetched would silently omit code that
-    fits comfortably."""
+    """The cap counts the lines git writes and the diffstat is that count,
+    so a file that cannot fit what is left of the cap is listed as
+    review-claimable without its diff ever being fetched."""
 
-    def _build(self, tmp_path, no_semantic_filter):
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
-            mock_run.side_effect = _mock_git_for_preskip
+    def test_a_file_past_the_remaining_cap_is_never_fetched(self, tmp_path):
+        files = {"src/big.php": 1500, "src/next.php": 800, "src/small.php": 300}
+        base = _make_mock_git_for_oversized_cap_test(files)
+        fetched = []
+
+        def _mock(cmd, check=True, cwd=None):
+            if "--" in cmd and not any(flag in cmd for flag in ("--numstat", "--name-only")):
+                fetched.append(cmd[-1])
+            return base(cmd, check, cwd)
+
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
+            mock_run.side_effect = _mock
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=2000,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=no_semantic_filter,
+                no_merge_base=True,
             )
-            return review_scope.build_scope(args)
+            scope = review_scope.build_scope(args)
 
-    def test_filtering_enabled_measures_before_rejecting(self, tmp_path):
-        scope = self._build(tmp_path, no_semantic_filter=False)
-        # alpha filters to ~50 lines, beta to ~10 — both fit the 2,000 cap.
-        assert "includes/class-alpha.php" in scope["diffs"]
-        assert "includes/class-beta.php" in scope["diffs"]
-        assert scope["skipped_files"]["review_claimable"] == []
-
-    def test_filtering_disabled_keeps_the_cheap_pre_skip(self, tmp_path):
-        scope = self._build(tmp_path, no_semantic_filter=True)
-        # Raw == effective size here: alpha (2,100) is included as the first
-        # file; beta's raw 2,050 >= the whole cap with diffs present —
-        # rejected without a fetch.
-        assert "includes/class-beta.php" in scope["skipped_files"]["review_claimable"]
+        assert list(scope["diffs"]) == ["src/big.php", "src/small.php"]
+        assert scope["skipped_files"]["review_claimable"] == ["src/next.php"]
+        assert "src/next.php" not in fetched
 
 
 # =============================================================================
@@ -1757,7 +1595,7 @@ class TestListOnly:
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", diff_line_cap=2000,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
 
@@ -1796,7 +1634,7 @@ class TestListOnly:
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", diff_line_cap=2000,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
             # Lock files should be in noise_skipped for non-toolchain domains
@@ -1811,7 +1649,7 @@ class TestListOnly:
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", diff_line_cap=50,
                 base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
+                no_merge_base=True,
             )
             scope = review_scope.build_scope(args)
             # Even with a tiny cap, lock files don't consume it
@@ -1838,8 +1676,36 @@ class TestReviewClaimableWorkQueueFraming:
             "skipped_files": {"review_claimable": ["src/big.ts"]},
         }
         text = review_scope.format_text_output(scope)
-        assert "=== REVIEW-CLAIMABLE (1 files, no diff inlined) ===" in text
+        assert "=== REVIEW-CLAIMABLE (1 files, diff withheld) ===" in text
         assert "ARE IN YOUR SCOPE" in text
+
+    def test_diffs_is_the_last_section(self):
+        """bootstrap.split_scope_diffs() moves a scope's DIFFS section out of
+        the briefing by reading from its header to the end of the scope."""
+        scope = {
+            "status": "OK", "range": "a..b", "domain": "code",
+            "files": ["src/a.py"], "diffstat": {"src/a.py": (1, 0), "src/b.py": (900, 0), "yarn.lock": (5, 5)},
+            "diffs": {"src/a.py": "@@ -0,0 +1 @@\n+one"},
+            "list_only_files": ["yarn.lock"],
+            "skipped_files": {"review_claimable": ["src/b.py"], "noise": ["dist/x.js"], "domain": ["README.md"]},
+        }
+        lines = review_scope.format_text_output(scope).split("\n")
+        headers = [line for line in lines if line.startswith("=== ")]
+        assert headers[-1] == "=== DIFFS ==="
+
+    def test_the_diffs_section_is_gits_own_output(self):
+        """No per-file `--- <path> ---` marker: git's `diff --git` header
+        already names the file, and the marker read like a unified-diff
+        `---` line without being one."""
+        diff = "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -0,0 +1 @@\n+one"
+        scope = {
+            "status": "OK", "range": "a..b", "domain": "code",
+            "files": ["src/a.py"], "diffstat": {"src/a.py": (1, 0)},
+            "diffs": {"src/a.py": diff}, "list_only_files": [], "skipped_files": {},
+        }
+        text = review_scope.format_text_output(scope)
+        assert "=== DIFFS ===\n" + diff in text
+        assert "--- src/a.py ---" not in text
 
 
 def _mock_git_include_path(files_and_diffs):
@@ -1894,8 +1760,7 @@ class TestIncludePathRescue:
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", format="json",
                 diff_line_cap=2000, base_ref_only=False, summary=False,
-                output_dir=str(tmp_path), no_merge_base=True,
-                no_semantic_filter=False, include_path=include_path,
+                output_dir=str(tmp_path), no_merge_base=True, include_path=include_path,
             )
             return review_scope.build_scope(args)
 
@@ -1978,7 +1843,6 @@ class TestA11yUiEvidenceSniff:
             summary=False,
             output_dir=str(Path(repo) / ".review-output"),
             no_merge_base=True,
-            no_semantic_filter=False,
             include_path=None,
         )
         saved_cwd = os.getcwd()
@@ -2183,7 +2047,7 @@ class TestNonAsciiPathsReachTheirDomain:
             domain=domain, range="main..HEAD", format="json", diff_line_cap=2000,
             base_ref_only=False, summary=False,
             output_dir=str(Path(repo) / ".review-output"),
-            no_merge_base=True, no_semantic_filter=False, include_path=None,
+            no_merge_base=True, include_path=None,
         )
         saved_cwd = os.getcwd()
         try:

@@ -84,8 +84,8 @@ One section also reaches the two participants that run code outside a reviewer's
 Preserve this order when changing `agent/bootstrap.py` or the protocol files:
 
 1. **REVIEW RULES** (top): behavioral steering by primacy.
-2. **Context sections**: PR INTENT (title, author, linked issues, and either a pointer to the extracted author description or the whole HTML-comment-stripped body), REVIEW FOCUS (from `change-purpose.md`; only a structured purpose adds the two-tier instruction and the `verifies=` citation call; when the briefing would not fit one Read, `fit_scope_to_one_read` evicts the purpose body first, leaving the header, the two-tier instruction and a `REVIEW FOCUS CONTINUES IN FILE` block naming the file, and cuts the scope only if the briefing still does not fit), REVIEWER-REQUESTED FOCUS (from `run-config.json`, only when steering keywords were provided), HOST CONTEXT (discovery availability and degradation, plus resolved upstream runtime-host and library-dep entries with version, commit, refresh date and declared minimum; a resolved entry is authoritative for its upstream surface), and REVIEW BUDGET (scope-proportionate tool-call calibration).
-3. **REVIEW CONTENT** (middle): the scoped diff.
+2. **Context sections**: PR INTENT (title, author, linked issues, and either a pointer to the extracted author description or the whole HTML-comment-stripped body), REVIEW FOCUS (from `change-purpose.md`; only a structured purpose adds the two-tier instruction and the `verifies=` citation call; when the briefing would not fit one Read, `fit_briefing_to_one_read` evicts the purpose body, leaving the header, the two-tier instruction and a `REVIEW FOCUS CONTINUES IN FILE` block naming the file), REVIEWER-REQUESTED FOCUS (from `run-config.json`, only when steering keywords were provided), HOST CONTEXT (discovery availability and degradation, plus resolved upstream runtime-host and library-dep entries with version, commit, refresh date and declared minimum; a resolved entry is authoritative for its upstream surface), and REVIEW BUDGET (scope-proportionate tool-call calibration).
+3. **REVIEW CONTENT** (middle): the scope's file list and review-claimable queue, ending with the `SCOPED DIFF IN FILE` block that names the reviewer's `scoped-diff.patch` and the exact Read calls that fetch all of it. The diff itself never rides in the briefing.
 4. **OUTPUT INSTRUCTIONS** (bottom): format and paths, by recency.
 
 ## Pipeline-wide containment
@@ -141,7 +141,7 @@ Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/`; an 
         │   ├── review.json
         │   ├── review.md
         │   ├── scope-summary.json                             # plus scope-summary-<domain>.json
-        │   ├── scoped-diff.patch                              # the whole scoped diff, written for every reviewer whose scope discovery ran (not tests-mutation-reviewer, which has no domain scope, nor a ref-mode adapter with no valid domain); the briefing inlines all of it when the briefing fits one Read, else lists the exact Read calls for the rest
+        │   ├── scoped-diff.patch                              # a line-number note and git's own diff output for the reviewer's scope, written whenever its scope fetched a diff (not tests-mutation-reviewer, which has no domain scope, nor a ref-mode adapter with no valid domain); the briefing names it with the exact Read calls that fetch all of it
         │   └── started
         ├── synthesis/
         │   ├── reconciliation-context.json                    # schema 4; carries orchestrator_notes

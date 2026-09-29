@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .contracts import (
     DEFAULT_REGISTRY,
@@ -157,11 +157,15 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
             safe["usage"] = usage
             safe["tool_calls"] = tool_calls
             safe["repository_reads"] = _nonnegative_exact_int(item.get("repository_reads"))
+            for name in ("patch_lines", "patch_lines_read", "in_scope_reads"):
+                safe[name] = _nonnegative_exact_int(item.get(name))
             safe["termination"] = _sanitize_termination(item.get("termination"))
         else:
             safe["usage"] = None
             safe["tool_calls"] = None
             safe["repository_reads"] = None
+            for name in ("patch_lines", "patch_lines_read", "in_scope_reads"):
+                safe[name] = None
             safe["termination"] = None
         result.append(safe)
     return result
@@ -563,12 +567,17 @@ def _wall_time(manifest: dict[str, Any]) -> int | None:
 
 
 def _inline_diff_lines(started: list[Any]) -> dict[str, Any]:
-    """How many diff lines the run's reviewer briefings actually carried.
+    """How many diff lines the run's reviewers were handed in their scoped diffs.
 
     Per START EXECUTION, like every other count in the lifecycle family: a
     retry gets its own bootstrap, its own scope discovery and its own
     briefing, so its lines are a second delivery rather than a restatement
     of the first.
+
+    Before 1.120.0 and from 1.122.0 this is the scoped diff's count; from
+    1.120.0 to 1.121.1 it was what each briefing carried after its
+    fit-to-one-Read cut, and before 1.122.0 the lines were semantically
+    filtered.
 
     `total` is None unless every dispatched reviewer carries the key —
     partly measured briefings would sum to a number smaller than the run's
@@ -596,19 +605,16 @@ def _inline_diff_lines(started: list[Any]) -> dict[str, Any]:
     }
 
 
-def _briefings_carried_no_diff(measured: dict[str, Any]) -> bool:
-    """True when every briefing arrived empty and the diffstat says it should
-    not have.
+def _reviewers_got_no_diff(measured: dict[str, Any]) -> bool:
+    """True when every reviewer was handed an empty diff and the diffstat
+    says it should not have been.
 
     The regression this names ran unseen from 2026-09-10 until the scope fix:
-    `scope.py` inlined nothing because its git commands ran from the wrong
+    `scope.py` fetched nothing because its git commands ran from the wrong
     directory, while the diffstat total each briefing quoted stayed right, so
     every reviewer read a file list and no code. Both halves are required —
     a run whose reviewers genuinely had nothing to diff has a zero diffstat
     too, and flagging it would be a false alarm on an honest empty review.
-    Since 1.120.0 the count is what each briefing carried after the
-    fit-to-one-Read cut, so this also fires when every briefing's rest alone
-    filled one Read and its scope was cut to nothing inline.
     """
     lifecycle = measured.get("lifecycle")
     inline = lifecycle.get("inline_diff_lines") if isinstance(lifecycle, dict) else None
@@ -1334,7 +1340,7 @@ def measure_run(
         return measured
 
     warnings = list(measured.get("warnings", []))
-    if _briefings_carried_no_diff(measured):
+    if _reviewers_got_no_diff(measured):
         warnings.append("inline_diff_empty")
     if not include_transcripts:
         transcript = _unavailable_transcript("disabled")

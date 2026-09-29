@@ -442,7 +442,7 @@ CRITERIA_PROBES = {
             diff="+do_action( 'wc_after_checkout_processed', $order );",
         ),
         probe(
-            "Changelog fragments under a `changelog/` directory, whose significance, type, and note must match the diff",
+            "Changelog fragments under a `changelog/`, `.changeset/`, `newsfragments/` or similar directory, whose note and any type or significance fields must match the diff",
             ["changelog/fix-stale-coupon-cache"],
             diff=(
                 "+Significance: patch\n"

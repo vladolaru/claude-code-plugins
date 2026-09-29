@@ -5,6 +5,32 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.122.0] - UNRELEASED
+
+### Changed
+
+- Reviewers see each diff exactly as git wrote it: the semantic filter that stripped docblocks, test annotations such as `@dataProvider`, blank lines and closing braces is gone, so a line number counted from a hunk header matches the source.
+- history-insights-reviewer's diff-line cap is 750 lines (was 500), the same allowance now that its lines are counted unfiltered.
+- A reviewer's briefing no longer carries its diff: it keeps the scope's file list and review-claimable queue and, when the scope fetched a diff, ends it with `=== SCOPED DIFF IN FILE ===`, which names the reviewer's `scoped-diff.patch` and the exact Read calls that fetch all of it, in one wording at every size; the change purpose still leaves the briefing when the rest would not fit one Read.
+- `scoped-diff.patch` holds a three-line note on line numbers followed by git's own diff output, without the `=== DIFFS ===` line or scope.py's per-file `--- <path> ---` marker; scope.py's own output drops that marker too.
+- The review-claimable section header reads `=== REVIEW-CLAIMABLE (N files, diff withheld) ===` (was `no diff inlined`).
+- The rule for turning a patch line into a source line is stated once, in that note, where the Read tool's numbers can mislead; the briefing's copy of the old header, the review rules' CRITICAL paragraph and the output instructions' repeat are gone.
+- Run metrics' `Inline diff lines` counts the diff lines in each reviewer's scoped diff, unfiltered, so it is not comparable with runs before 1.122.0.
+- Changelog fragments reach docs-drift-reviewer wherever they live: any file under a `changelog/`, `.changeset/`, `newsfragments/`, `changes/`, `changelog.d/`, `.changes/`, `release-notes/` or similarly named directory, at any depth and in any case (was only files directly under `changelog/`).
+
+### Added
+
+- Each agent's usage row in run metrics and shared telemetry carries `patch_lines`, `patch_lines_read` and `in_scope_reads`: how long its scoped diff was, how much of it the reviewer read, and how many of its in-scope files it read by any route; the telemetry consent disclosure names them.
+
+### Removed
+
+- `scope.py`'s `--no-semantic-filter` flag and the agent registry's `no_semantic_filter` key.
+
+### Fixed
+
+- The triage briefing names changelog fragments in docs-drift-reviewer's focus, so skipping it has to account for the PR's fragment.
+- The review rules' STOP CHECK asks whether the change touched a file, instead of pointing at a `CHANGED_FILES` list that no briefing contains; code-clarity-reviewer and docs-drift-reviewer ask the same way.
+
 ## [1.121.1] - 2026-09-26
 
 ### Fixed

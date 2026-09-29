@@ -259,6 +259,15 @@ class TestRowsCarryEvidenceCounts:
         assert rows["review-reconciliator"]["repository_reads"] == 0
         assert rows["security-reviewer"]["repository_reads"] == 4
 
+    def test_scoped_diff_and_in_scope_read_counts_ride_on_each_row(self):
+        snapshot = self._snapshot([
+            {"agent": "security-reviewer", "model": "m", "available": True,
+             "usage": _usage(1, 2), "tool_calls": 12, "repository_reads": 4,
+             "patch_lines": 120, "patch_lines_read": 118, "in_scope_reads": 3},
+        ])
+        [row] = snapshot["subagent_usage"]
+        assert (row["patch_lines"], row["patch_lines_read"], row["in_scope_reads"]) == (120, 118, 3)
+
     @pytest.mark.parametrize(
         "value",
         [
@@ -271,10 +280,14 @@ class TestRowsCarryEvidenceCounts:
         [row] = self._snapshot([
             {"agent": "security-reviewer", "available": True,
              "usage": _usage(1, 2), "tool_calls": value,
-             "repository_reads": value},
+             "repository_reads": value, "patch_lines": value,
+             "patch_lines_read": value, "in_scope_reads": value},
         ])["subagent_usage"]
         assert row["tool_calls"] is None
         assert row["repository_reads"] is None
+        assert row["patch_lines"] is None
+        assert row["patch_lines_read"] is None
+        assert row["in_scope_reads"] is None
 
 
 class TestStdoutMode:

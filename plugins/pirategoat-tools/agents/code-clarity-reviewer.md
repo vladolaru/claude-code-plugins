@@ -129,7 +129,7 @@ For each suspicious name or documentation claim, reason through this structure:
 
 Before reporting any finding:
 
-1. **STOP CHECK** — Is the file and line in CHANGED_FILES from bootstrap output? If not, do not report.
+1. **STOP CHECK** — Did this change touch the file, and is the line in one of its hunks? If not, do not report.
 2. **Domain check** — Is this actually a clarity issue, or does it belong to another agent?
    - Type design, polymorphism → architecture-reviewer
    - Test naming → test reviewer agents

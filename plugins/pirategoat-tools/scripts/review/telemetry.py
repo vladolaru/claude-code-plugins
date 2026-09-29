@@ -418,12 +418,12 @@ class ReviewTelemetry:
         """Append agent_start event. No-op if not started.
 
         ``scope_lines`` is the diffstat total over the reviewer's files;
-        ``scope_inline_lines`` is how many diff lines its briefing actually
-        carried. They differ whenever scope could not inline the diffs and
-        whenever bootstrap cut the scope to fit one Read, and the second is
-        the one that says the briefing was empty. It is
-        optional because manifests written before it exists carry no such
-        measurement — an absent key is unmeasured, never zero.
+        ``scope_inline_lines`` is how many diff lines the reviewer was handed
+        in its scoped diff. They differ whenever scope withheld a file's
+        diff (the review-claimable queue), and the second is the one that
+        says the reviewer got no diff. It is optional because manifests
+        written before it exists carry no such measurement — an absent key
+        is unmeasured, never zero.
         """
         if self.log_path is None:
             return

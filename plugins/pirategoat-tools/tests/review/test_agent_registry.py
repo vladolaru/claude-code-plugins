@@ -152,19 +152,6 @@ class TestModelTier:
             )
 
 
-class TestNoSemanticFilterConfig:
-    """Agents with no_semantic_filter must have valid domain (so scope discovery runs)."""
-
-    def test_no_semantic_filter_agents_have_domain(self, agents):
-        """no_semantic_filter is only meaningful when domain-based scope runs."""
-        for agent_name, config in agents.items():
-            if config.get("no_semantic_filter"):
-                assert config["domain"] is not None, (
-                    f"Agent '{agent_name}' has no_semantic_filter=true but domain=null "
-                    f"— the flag has no effect without scope discovery"
-                )
-
-
 class TestEcosystemIntegrationReviewerEntry:
     """ecosystem-integration-reviewer's registry identity: the domain it
     scopes by, how it is dispatched and gated, its model, and the fixed

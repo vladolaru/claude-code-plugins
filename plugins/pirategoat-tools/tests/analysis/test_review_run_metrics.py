@@ -72,6 +72,21 @@ class TestRepositoryReadEvidence:
         }])
         assert row["repository_reads"] is None
 
+    @pytest.mark.parametrize("value, expected", [(7, 7), (True, None), (-1, None)])
+    def test_sanitized_usage_keeps_only_exact_scoped_diff_counts(self, value, expected):
+        [row] = measure._sanitize_agent_usage([{
+            "agent": "security-reviewer", "available": True, "usage": _usage(2),
+            "tool_calls": 3, "patch_lines": value, "patch_lines_read": value, "in_scope_reads": value,
+        }])
+        assert (row["patch_lines"], row["patch_lines_read"], row["in_scope_reads"]) == (expected,) * 3
+
+    def test_unavailable_row_cannot_claim_scoped_diff_reads(self):
+        [row] = measure._sanitize_agent_usage([{
+            "agent": "security-reviewer", "available": False,
+            "patch_lines": 7, "patch_lines_read": 7, "in_scope_reads": 2,
+        }])
+        assert (row["patch_lines"], row["patch_lines_read"], row["in_scope_reads"]) == (None, None, None)
+
     def test_available_row_sanitizes_its_termination(self):
         # An unsafe token ("END TURN") proves `_sanitize_termination` ran
         # on this path, not that the row was copied through untouched.
@@ -8596,6 +8611,9 @@ def _usage_snapshot_payload(**overrides) -> dict:
                 "usage": _usage(2),
                 "tool_calls": 12,
                 "repository_reads": 4,
+                "patch_lines": 120,
+                "patch_lines_read": 120,
+                "in_scope_reads": 3,
             },
             {
                 "agent": contracts._SYNTHESIS_RECONCILIATOR,
@@ -8603,6 +8621,9 @@ def _usage_snapshot_payload(**overrides) -> dict:
                 "usage": _usage(5),
                 "tool_calls": 8,
                 "repository_reads": 3,
+                "patch_lines": None,
+                "patch_lines_read": None,
+                "in_scope_reads": None,
             },
             {
                 "agent": contracts._SYNTHESIS_DECISION_CRITIC,
@@ -8610,6 +8631,9 @@ def _usage_snapshot_payload(**overrides) -> dict:
                 "usage": _usage(3),
                 "tool_calls": 6,
                 "repository_reads": 2,
+                "patch_lines": None,
+                "patch_lines_read": None,
+                "in_scope_reads": None,
             },
         ],
     }
@@ -9309,6 +9333,18 @@ class TestUsageSnapshotSanitize:
         sanitized = sanitize._sanitize_manifest(manifest)
 
         assert sanitized["usage"] == _usage_snapshot_payload()
+
+    def test_a_negative_scoped_diff_count_reads_as_none(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = True
+        payload = _usage_snapshot_payload()
+        payload["by_agent"][0]["patch_lines_read"] = -1
+        manifest["usage"] = payload
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"]["by_agent"][0]["patch_lines_read"] is None
+        assert sanitized["usage"]["by_agent"][0]["patch_lines"] == 120
 
     def test_an_incomplete_usage_map_reads_as_none_not_a_zero(self):
         """All-or-nothing: a map missing a field cannot be summed or

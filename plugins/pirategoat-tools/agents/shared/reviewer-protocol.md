@@ -60,7 +60,7 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: NO_DOMAIN_FILES`:** bootstrap records and finalizes the `not_applicable` review itself. Its stdout stub delivers the return signal, and each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
-**On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the diff line cap. Files are sorted by inline priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal cap.
+**On `STATUS: OK`:** The briefing's `=== SCOPED DIFF IN FILE ===` block names your `scoped-diff.patch`, which holds the diffs of matched files within the diff line cap, as git wrote them. Files are sorted by inline priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal cap.
 
 **On `REVIEW_CLAIMABLE` / `=== REVIEW-CLAIMABLE ===`:** These files matched your domain but their diffs were NOT given to you. Claim every file you actually read through the positive-claim API; the builder validates those claims and derives every remaining path as an unclaimed review file. Bootstrap's `=== REVIEW BUDGET ===` section delivers the executable contract because this section is stripped before you receive the protocol.
 
@@ -82,20 +82,18 @@ Small changes still warrant review: a one-line change in a security-sensitive fu
 Explore freely (conventions, call sites, similar patterns); exploration informs review but never produces findings.
 
 **STOP CHECK — before every `add_finding()` call**, state the file path and line number, then verify:
-1. Is this file in `CHANGED_FILES`? (NO → drop)
+1. Did this change touch this file? (NO → drop)
 2. Is this line in a diff hunk? (NO → drop)
 
 Both must be YES. Findings on unchanged code are false positives.
 
-**Exception — findings that are line-less by nature** (OUTPUT INSTRUCTIONS explains `line=None`): check 1 still applies; the file must be in `CHANGED_FILES`.
+**Exception — findings that are line-less by nature** (OUTPUT INSTRUCTIONS explains `line=None`): check 1 still applies; the change must have touched the file.
 
 **Exception — a changed hunk's new contract reaching an unchanged caller.** When a hunk changes what a function does (what it throws or returns on failure, its return shape, a side effect, an ordering or timing guarantee, a validation rule), every caller that relied on the old contract is in scope, even one in a file with no diff. Anchor the finding at the changed hunk, which passes both checks, and describe the unguarded caller as blast radius in the body; a finding anchored in a file outside the diff is dropped by the structural prefilter before anyone reads it. A caller's empty `git diff` proves it is unchanged, not that it is safe: clear callers the way §Absence Claims requires.
 
 <example type="FAILURE — this cleared a caller regression the reviewer had already found">
 A PR changed a method from "fails silently, callers unaffected" to "throws and caches the exception". Two of its three call sites gained a try/catch in the same PR; the third, in a file with zero diff, did not. The reviewer traced all three, identified the third as unguarded, then discarded the finding because `git diff` on that file was empty ("pre-existing, out of scope"). An independent reviewer found the same call site and blocked the PR on it. The finding was right and already made; it was cleared by checking the wrong file's diff.
 </example>
-
-**CRITICAL — use SOURCE FILE line numbers only.** The Read tool's display numbers (`227→+class Foo`) are positions within the patch file. Take source lines from the `@@ ... @@` hunk headers: `@@ -0,0 +1,116 @@` starts a new file at source line 1; `@@ -20,6 +20,11 @@` starts a changed section at source line 20; count forward from `+N` through `+` and ` ` (context) lines. When uncertain, read the source file to confirm.
 
 **Finding quality gates** (before every `add_finding()`):
 1. **Changed code only.** Report issues this change introduced; evaluate this change, not the codebase.
