@@ -411,7 +411,7 @@ On the elevator run rust-tests (`model: haiku`, registry `model_tier: haiku`) re
 **Deferred because:** one occurrence, a vendored upstream schema, and a routing decision.
 **Do when:** a first-party schema file changes in a reviewed PR.
 
-### 55. The lead-file exemption makes the inline allowance non-monotonic in the diff-line cap
+### 55. The lead-file exemption makes the diff allowance non-monotonic in the diff-line cap
 
 `scope.py` diffs the first file in inline-priority order whole and leaves it out of the cap only when it alone exceeds the cap (`is_protected_oversized_diff`, from `49c90638`, the fix for the July 2026 bug where one oversized test file took every reviewer's whole allowance). So the allowance is `lead + cap` when the lead file is over the cap and `cap` when it is under: raising the cap past the lead file's size shrinks the scope. On the elevator branch a 2,063-line lead file gives 4,063 lines at cap 2,000 and 3,000 at cap 3,000 (inline files 93 → 73 across reviewers). Always exempting the lead file (`lead + cap`) is monotonic and never gives less than today at the same cap; always counting it brings back the July bug.
 
