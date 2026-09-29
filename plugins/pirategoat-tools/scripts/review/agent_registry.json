@@ -688,7 +688,7 @@
         "Behavioral changes flagged in commits (deprecations, renames, migrations, restructuring)",
         "File renames or directory restructuring",
         "Hook signature changes or new hooks added",
-        "Changelog fragments under a `changelog/` directory, whose significance, type, and note must match the diff"
+        "Changelog fragments under a `changelog/`, `.changeset/`, `newsfragments/` or similar directory, whose note and any type or significance fields must match the diff"
       ],
       "triage_keywords": [
         "rename*",

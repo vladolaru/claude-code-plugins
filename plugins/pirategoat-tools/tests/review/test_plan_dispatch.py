@@ -869,9 +869,13 @@ class TestTriageConditionalAgent:
         # Real fragment names carry versions; a dot is not an extension.
         assert _mod._has_documentation_files(["changelog/bump-phpstan-2.2.2"]) is True
         # The shared pattern is the whole rule, on both the scope and the
-        # planner side: a file directly under `changelog/` is docs-drift's.
+        # planner side: a file under a changelog-like directory is
+        # docs-drift's, whatever the tool that wrote it.
         assert _mod._has_documentation_files(["src/changelog/helper.php"]) is True
-        assert _mod._has_documentation_files(["changelog/nested/deeper"]) is False
+        assert _mod._has_documentation_files(["changelog/nested/deeper"]) is True
+        assert _mod._has_documentation_files([".changeset/brave-dogs-sing"]) is True
+        assert _mod._has_documentation_files(["newsfragments/1234.bugfix"]) is True
+        assert _mod._has_documentation_files(["bin/changelogger"]) is False
 
     # --- Empty domain files ---
 

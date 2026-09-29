@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The review-claimable section header reads `=== REVIEW-CLAIMABLE (N files, diff withheld) ===` (was `no diff inlined`).
 - The rule for turning a patch line into a source line is stated once, in that note, where the Read tool's numbers can mislead; the briefing's copy of the old header, the review rules' CRITICAL paragraph and the output instructions' repeat are gone.
 - Run metrics' `Inline diff lines` counts the diff lines in each reviewer's scoped diff, unfiltered, so it is not comparable with runs before 1.122.0.
+- Changelog fragments reach docs-drift-reviewer wherever they live: any file under a `changelog/`, `.changeset/`, `newsfragments/`, `changes/`, `changelog.d/`, `.changes/`, `release-notes/` or similarly named directory, at any depth and in any case (was only files directly under `changelog/`).
 
 ### Added
 

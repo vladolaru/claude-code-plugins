@@ -149,22 +149,33 @@ class TestFilterNoise:
 class TestFilterDomain:
     """Tests for filter_domain() — domain-specific file matching."""
 
-    def test_docs_drift_owns_changelog_fragments(self):
-        files = [
-            "changelog/fix-woopmnt-6265-ece-stale-click",
-            "plugins/woocommerce/changelog/35520-fix-stale-coupon-code-cache",
-            "changelog/nested/not-a-fragment",
-            "changelog.txt",
-            "src/changelog/helper.php",
-        ]
-        matched, excluded = review_scope.filter_domain(files, "docs-drift")
-        assert matched == [
-            "changelog/fix-woopmnt-6265-ece-stale-click",
-            "plugins/woocommerce/changelog/35520-fix-stale-coupon-code-cache",
-            "changelog.txt",
-            "src/changelog/helper.php",
-        ]
-        assert "changelog/nested/not-a-fragment" in excluded
+    # Extensionless or data-format fragments, so only the fragment rule can
+    # route them: every other docs-drift include is extension-anchored.
+    CHANGELOG_FRAGMENTS = [
+        "changelog/fix-woopmnt-6265-ece-stale-click",  # Jetpack changelogger
+        "plugins/woocommerce/changelog/35520-fix-stale-coupon-code-cache",
+        "changelog/bump-phpstan-2.2.2",
+        "packages/js/components/changelog/nested/fix-thing",
+        ".changeset/brave-dogs-sing",  # changesets
+        "newsfragments/1234.bugfix",  # towncrier
+        "changes/1234.feature",
+        "changelog.d/20260929_fix_cursor",  # scriv
+        ".changes/unreleased/Fixed-20260929",  # changie
+        "changelogs/fragments/fix-module",  # ansible
+        "releasenotes/notes/fix-thing-0123abcd",  # reno
+        "release-notes/fix-thing",
+        "ChangeLog/Fix-Thing",
+    ]
+
+    def test_docs_drift_owns_changelog_fragments_wherever_they_live(self):
+        matched, excluded = review_scope.filter_domain(self.CHANGELOG_FRAGMENTS, "docs-drift")
+        assert matched == self.CHANGELOG_FRAGMENTS
+        assert excluded == []
+
+    def test_a_changelog_word_outside_a_directory_name_is_not_a_fragment(self):
+        files = ["bin/changelogger", "tools/changes-report", "src/Changelog", "LICENSE"]
+        matched, _ = review_scope.filter_domain(files, "docs-drift")
+        assert matched == []
 
     def test_no_domain_is_a_catch_all(self):
         """Recorded decision: extensionless files other than changelog

@@ -677,16 +677,24 @@ def _ext_re(*groups) -> str:
     return r"\.(" + "|".join(exts) + r")$"
 
 
-# Changelog fragments (Jetpack changelogger, adopted by WooCommerce and
-# WooPayments): any file directly under a `changelog/` directory. Names
-# carry no extension but often a version (`bump-phpstan-2.2.2`,
-# `update-woocommerce-analytics-0.16.7`), so nothing here reads a
-# suffix. Every domain is extension-anchored, so these matched nothing
-# and every WooPayments PR shipped one file no reviewer could see. Owned
-# by docs-drift (it asserts significance, type, and a note that must
-# match the diff); recognised by plan_dispatch's documentation-files
-# check, which applies this same pattern and no rule of its own.
-CHANGELOG_FRAGMENT_PATTERN = r"(^|/)changelog/[^/]+$"
+# Changelog fragments: any file, at any depth, under a directory named
+# like a changelog, whatever tool wrote it (`changelog/` for the Jetpack
+# changelogger WooCommerce and WooPayments use, `.changeset/`,
+# `newsfragments/` and `changes/` for towncrier, `changelog.d/`,
+# `.changes/`, `changelogs/fragments/`, `releasenotes/notes/`), in any
+# case. Names often carry no extension but a version
+# (`bump-phpstan-2.2.2`), so nothing here reads a suffix. Every other
+# docs-drift include is extension-anchored, so before this rule every
+# WooPayments PR shipped one file no reviewer could see. Loose on
+# purpose: a code directory named `changes/` also matches, which costs
+# docs-drift a file it already gets by extension. Owned by docs-drift
+# (a fragment's note, and any type or significance field, must match
+# the diff); recognised by plan_dispatch's documentation-files check,
+# which applies this same pattern and no rule of its own.
+CHANGELOG_FRAGMENT_PATTERN = (
+    r"(?i:(^|/)(?:\.?change(?:log|set)s?(?:\.d)?|\.?changes(?:\.d)?"
+    r"|newsfragments|release-?notes)/(?:[^/]+/)*[^/]+$)"
+)
 
 
 def is_template_file(path: str) -> bool:
