@@ -2528,20 +2528,38 @@ def _unavailable(reason: str) -> dict[str, Any]:
 def _scope_for_agent(manifest: dict[str, Any], agent: str) -> list[str] | None:
     """Return the agent's authoritative scope mapping, or None without one.
 
-    An absent mapping (no assignment, no assigned_files_by_agent, no entry
-    for the agent) is NOT an empty scope: classifying reads against it would
+    A settled manifest's `assignment` section is authoritative. A running
+    manifest has none: it is built only at settlement, while the usage
+    snapshot measures the run at step 11. There the scope comes from the
+    agent's `agent_start` rows under `agents.started` (`scope.paths`,
+    unioned across retries), the input the settled section is built from.
+
+    An absent mapping (no assignment entry for the agent, no started row
+    carrying paths) is NOT an empty scope: classifying reads against it would
     report every read as out-of-scope while claiming completeness. The key
     is manifest_sections.ASSIGNED_FILES_BY_AGENT — the producer's spelling.
     """
     assignment = manifest.get("assignment")
-    by_agent = (
-        assignment.get("assigned_files_by_agent")
-        if isinstance(assignment, dict) else None
-    )
-    paths = by_agent.get(agent) if isinstance(by_agent, dict) else None
-    if not isinstance(paths, list):
-        return None
-    return [path for path in paths if isinstance(path, str)]
+    if isinstance(assignment, dict):
+        by_agent = assignment.get("assigned_files_by_agent")
+        paths = by_agent.get(agent) if isinstance(by_agent, dict) else None
+        if not isinstance(paths, list):
+            return None
+        return [path for path in paths if isinstance(path, str)]
+
+    agents = manifest.get("agents")
+    started = agents.get("started") if isinstance(agents, dict) else None
+    scope_paths: set[str] | None = None
+    for row in started if isinstance(started, list) else []:
+        if not isinstance(row, dict) or row.get("agent") != agent:
+            continue
+        scope = row.get("scope")
+        paths = scope.get("paths") if isinstance(scope, dict) else None
+        if isinstance(paths, list):
+            scope_paths = (scope_paths or set()) | {
+                path for path in paths if isinstance(path, str)
+            }
+    return sorted(scope_paths) if scope_paths is not None else None
 
 
 def _expected_agents(

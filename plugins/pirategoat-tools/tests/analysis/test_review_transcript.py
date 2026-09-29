@@ -5256,6 +5256,37 @@ class TestBudgetAndEvidenceCounts:
         [entry] = result["agent_usage"]
         assert entry["patch_lines_read"] == 10
 
+    def test_a_running_manifest_takes_the_scope_from_the_agent_start_event(self, tmp_path):
+        """The step-11 usage snapshot measures a running manifest, which has
+        no `assignment` section yet (it is built at settlement); the scope
+        the settled section would be built from is already on the agent's
+        `agent_start` row. Run 26fc (PR 68482) recorded in_scope_reads None
+        for every reviewer before this."""
+        patch = self._patch(tmp_path)
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(_call("r1", "Read", file_path=str(patch)), usage=_usage(1, 2)),
+                _result("r1"),
+                _assistant(_call("r2", "Read", file_path="src/in.py")),
+                _result("r2"),
+                _assistant(_call("r3", "Read", file_path="src/other.py")),
+                _result("r3"),
+            ],
+            manifest_overrides={
+                "assignment": None,
+                "agents": {"started": [
+                    {"agent": "security-reviewer", "scope": {"paths": ["src/in.py"]}},
+                ]},
+            },
+        )
+
+        [entry] = result["agent_usage"]
+        assert entry["in_scope_reads"] == 1
+        assert "agent_scope_evidence_missing" not in {
+            warning["code"] for warning in result["warnings"]
+        }
+
     def test_no_scoped_diff_means_no_patch_counts(self, tmp_path):
         result = self._run_with_subagent(
             tmp_path,
