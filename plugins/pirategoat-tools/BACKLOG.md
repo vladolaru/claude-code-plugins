@@ -431,9 +431,11 @@ Every reviewer-input change in 1.119.5–1.122.0 was judged by what reviewers re
 
 A finding whose `line` falls outside every hunk of its file is almost always a patch display number cited as a source line (PR 3756, 2026-03: `line=227` in a 116-line file); the reconciliator then drops it as out of scope. Since 1.122.0 the only defenses are the patch's three-line note and `add_finding()`'s stderr warning past line 5,000. The builder knows the reviewer's `scoped-diff.patch`, so at save it could name each finding whose line misses every `@@` range of its file, the way the save receipt already names unclaimed files.
 
-**Evidence:** commit `0e205ace` (the March fix and its incident); `scripts/review/agent/output.py`'s line-5000 warning; the 2026-09-28 line-number discussion in `.claude/docs/analysis/2026-09-28-claude-diff-delivery-simplification.md`.
-**Deferred because:** 1.122.0 removes prose rather than adding checks, and no audit since March has recorded the mistake.
-**Do when:** an audit finds a finding dropped for a line outside its hunks, or the next change to `add_finding()` or the save receipt.
+It recurred on the first 1.122.0 dev run (WooCommerce PR 68544, run `eeae`, 2026-09-29). history-insights read its whole patch, note included, spent 16 calls on git history, then saved `line=273` for a test-file finding: 273 is the line's number in the patch, and its source line is 473 (the hunk `@@ -285,4 +285,217 @@` starts at patch line 84). It never opened the test file. Reviewers on the same model that grounded the number in the source (`grep -n`, phpcs) or worked it out from the hunk header got it right. The reconciliator merged it into the same finding three other reviewers placed at 473–475, so nothing was lost; raised by history-insights alone, it would have fallen outside every hunk. 1.122.0 moved the rule from beside `add_finding` in the output instructions to the top of the patch, so a reviewer that saves findings long after reading the patch no longer meets it at the point of use; a guard at save does not depend on where the reviewer read the rule.
+
+**Evidence:** commit `0e205ace` (the March fix and its incident); `scripts/review/agent/output.py`'s line-5000 warning; the 2026-09-28 line-number discussion in `.claude/docs/analysis/2026-09-28-claude-diff-delivery-simplification.md`; the near miss in `.claude/docs/analysis/2026-09-29-claude-pr-68544-dev-run-eeae-audit.md` § Observation 1.
+**Deferred because:** 1.122.0 removes prose rather than adding checks, and its release must stay attributable to the delivery change.
+**Do when:** the release after 1.122.0, alongside item 58, which also changes what reviewers see at save; sooner if an audit finds a finding dropped for a line outside its hunks.
 
 ### 58. The review budget scales with diff size and asks reviewers to count calls they cannot count
 
