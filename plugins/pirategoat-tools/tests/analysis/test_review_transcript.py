@@ -5236,6 +5236,26 @@ class TestBudgetAndEvidenceCounts:
         [entry] = result["agent_usage"]
         assert entry["patch_lines_read"] == 10
 
+    def test_a_shell_read_through_the_home_directory_counts(self, tmp_path, monkeypatch):
+        """Run directories live under $HOME (~/.pirategoat-tools), so `~/…`
+        is a natural way to name a reviewer's patch; the detector returns
+        such an operand unexpanded."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        self._patch(tmp_path)
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("sh", "Bash", command="cat ~/run/reviewers/security/scoped-diff.patch"),
+                    usage=_usage(1, 2),
+                ),
+                _result("sh"),
+            ],
+        )
+
+        [entry] = result["agent_usage"]
+        assert entry["patch_lines_read"] == 10
+
     def test_no_scoped_diff_means_no_patch_counts(self, tmp_path):
         result = self._run_with_subagent(
             tmp_path,

@@ -2163,13 +2163,16 @@ def _patch_lines_read(
             operands = _bash_read_paths(
                 call["input"].get("command"), repo, _entry_cwd(entries[call["index"]], repo)
             )
-            # `_bash_read_paths` returns an absolute operand unchanged, but
-            # resolves a relative one only against the shell's repo-relative
-            # cwd, not against the filesystem — the same resolution
-            # `_normalize_repo_path` applies to a Read's own candidates, so
-            # a scoped-diff patch living inside the repo (the common case)
-            # is matched the same way a repository read is.
+            # `_bash_read_paths` returns absolute and `~/` operands unchanged
+            # and a relative one against the shell's repo-relative cwd, so
+            # each resolves the way `_normalize_repo_path` resolves a Read's
+            # own candidates. Run directories live under $HOME
+            # (~/.pirategoat-tools), outside the repo: the absolute path the
+            # briefing names, or its `~/` spelling, is the route that
+            # matters; a relative operand matches only a patch inside the
+            # repo, and a `cd` into the run directory is not followed.
             for operand in operands:
+                operand = os.path.expanduser(operand)
                 resolved = os.path.realpath(
                     operand if os.path.isabs(operand) else repo / operand
                 )
