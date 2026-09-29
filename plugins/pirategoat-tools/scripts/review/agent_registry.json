@@ -709,7 +709,7 @@
         "has_new_functions",
         "file_deletions"
       ],
-      "focus": "Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs, guides after code changes",
+      "focus": "Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs, guides after code changes, and the PR's changelog fragments",
       "model_tier": "sonnet"
     },
     "toolchain-reviewer": {

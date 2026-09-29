@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The triage briefing names changelog fragments in docs-drift-reviewer's focus, so skipping it has to account for the PR's fragment.
 - The review rules' STOP CHECK asks whether the change touched a file, instead of pointing at a `CHANGED_FILES` list that no briefing contains; code-clarity-reviewer and docs-drift-reviewer ask the same way.
 
 ## [1.121.1] - 2026-09-26
