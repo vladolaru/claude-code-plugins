@@ -92,6 +92,78 @@ CONTEXT_GATHER_TIMEOUT = (2 * 30 * 60) + 60  # two ecosystem-cache refreshes + g
 AGENT_WAIT_GRACE_SECONDS = 60
 
 
+# ---------------------------------------------------------------------------
+# Reviewer Concurrency Cap
+# ---------------------------------------------------------------------------
+
+# The pipeline's own override, honored on both hosts. On Codex it is the only
+# way to opt into dispatch waves, because Codex does not expose its
+# agent-thread limit through the environment.
+REVIEWER_CAP_ENV = "PIRATEGOAT_MAX_CONCURRENT_REVIEWERS"
+# Claude Code's concurrent-subagent limit, and its default when unset.
+CLAUDE_SUBAGENT_CAP_ENV = "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
+DEFAULT_CLAUDE_SUBAGENT_CAP = 20
+
+# Where a resolved cap came from. Recorded in the plan's `dispatch_waves`
+# record and in the run manifest; `dispatch_status.validate_dispatch_waves()`
+# accepts exactly this set.
+CAP_SOURCE_PIRATEGOAT_ENV = "pirategoat_env"
+CAP_SOURCE_CLAUDE_ENV = "claude_env"
+CAP_SOURCE_CLAUDE_DEFAULT = "claude_default"
+CAP_SOURCE_UNBOUNDED = "unbounded"
+CAP_SOURCES = frozenset({
+    CAP_SOURCE_PIRATEGOAT_ENV,
+    CAP_SOURCE_CLAUDE_ENV,
+    CAP_SOURCE_CLAUDE_DEFAULT,
+    CAP_SOURCE_UNBOUNDED,
+})
+
+
+def _positive_int(raw):
+    """Parse an env value as a positive decimal int, or return None."""
+    text = str(raw).strip()
+    if not re.fullmatch(r"[0-9]+", text):
+        return None
+    value = int(text)
+    return value if value > 0 else None
+
+
+def resolve_reviewer_cap(host, env):
+    """Resolve how many reviewers step 6 may launch at once.
+
+    Returns ``(cap, source, invalid_env)``: ``cap`` is a positive int, or
+    None for unbounded; ``source`` is one of ``CAP_SOURCES``; ``invalid_env``
+    names every consulted variable that was set to something other than a
+    positive decimal integer (``"0"``, ``"-3"``, ``"abc"``, ``""``), so the
+    step-6 situation can say which setting was ignored.
+
+    Order: ``PIRATEGOAT_MAX_CONCURRENT_REVIEWERS`` on either host; then, on
+    Claude Code, ``CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`` and finally the
+    default of 20; on Codex, unbounded. An invalid value falls through to the
+    next source. ``host`` is normalized like ``_host()`` (unknown means
+    Claude). Pure: ``env`` is any mapping, normally ``os.environ``.
+    """
+    invalid = []
+
+    def _read(name):
+        if name not in env:
+            return None
+        value = _positive_int(env[name])
+        if value is None:
+            invalid.append(name)
+        return value
+
+    cap = _read(REVIEWER_CAP_ENV)
+    if cap is not None:
+        return cap, CAP_SOURCE_PIRATEGOAT_ENV, invalid
+    if _host({"host": host}) == HOST_CODEX:
+        return None, CAP_SOURCE_UNBOUNDED, invalid
+    cap = _read(CLAUDE_SUBAGENT_CAP_ENV)
+    if cap is not None:
+        return cap, CAP_SOURCE_CLAUDE_ENV, invalid
+    return DEFAULT_CLAUDE_SUBAGENT_CAP, CAP_SOURCE_CLAUDE_DEFAULT, invalid
+
+
 def _git_output(*args):
     """Return one Git identity value, or an empty string when unavailable."""
     try:

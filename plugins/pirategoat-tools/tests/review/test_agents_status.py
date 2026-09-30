@@ -54,6 +54,12 @@ def _start_agent(tmp_path, name, minutes_ago=0):
     marker.write_text(ts.isoformat())
 
 
+def _start_agent_at(tmp_path, name, at):
+    marker = Path(started_marker_path(tmp_path, derive_reviewer_name(name)))
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(at.isoformat())
+
+
 def _finish_agent(tmp_path, name, findings=None, verdict=None):
     severities = [finding["severity"] for finding in findings or []]
     reviewer = derive_reviewer_name(name)
@@ -462,6 +468,161 @@ class TestDispatchStatusContract:
             dispatch_status.validate_dispatch_plan_agents([agent])
 
         assert "security-reviewer" in str(exc_info.value)
+
+
+_STAMP = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+
+
+def _rows(*names, status="DISPATCH"):
+    return [{"name": name, "status": status} for name in names]
+
+
+def _lists(state, keys=("queued", "pending")):
+    """The named name lists of a queue_state() result."""
+    return {key: state[key] for key in keys}
+
+
+def _release(at, count=1, counted=0):
+    """A `released` entry: latest release time, releases, counted releases."""
+    return {"at": at, "count": count, "counted": counted}
+
+
+def _waves(cap=2, wave_1=("a", "b"), queued=("c",), **overrides):
+    record = {
+        "schema": 1,
+        "cap": cap,
+        "cap_source": "claude_default",
+        "wave_1": list(wave_1),
+        "queued": list(queued),
+        "stamped_at": _STAMP.isoformat(),
+        "grace_seconds": 90,
+    }
+    record.update(overrides)
+    return record
+
+
+class TestDispatchWavesRecord:
+    """The plan-level `dispatch_waves` record: builder, validator, reader, queue."""
+
+    @pytest.mark.parametrize(
+        "cap, wave_1, queued",
+        [
+            pytest.param(5, ["a", "b", "c"], [], id="under-cap"),
+            pytest.param(3, ["a", "b", "c"], [], id="equal-cap"),
+            pytest.param(2, ["a", "b"], ["c"], id="over-cap"),
+            pytest.param(None, ["a", "b", "c"], [], id="unbounded"),
+        ],
+    )
+    def test_builder_splits_dispatched_rows_at_the_cap(self, cap, wave_1, queued):
+        record = dispatch_status.build_dispatch_waves(
+            _rows("a", "b", "c"), cap, "claude_env", _STAMP.isoformat(),
+        )
+
+        assert record == {
+            "schema": 1,
+            "cap": cap,
+            "cap_source": "claude_env",
+            "wave_1": wave_1,
+            "queued": queued,
+            "stamped_at": _STAMP.isoformat(),
+            "grace_seconds": dispatch_status.DISPATCH_WAVES_GRACE_SECONDS,
+        }
+
+    def test_builder_keeps_plan_order_and_excludes_skipped_rows(self):
+        agents = [
+            {"name": "zeta", "status": "DISPATCH"},
+            {"name": "alpha", "status": "SKIPPED_TRIAGE"},
+            {"name": "mid", "status": "DISPATCH_OVERRIDE"},
+            {"name": "beta", "status": "SKIPPED_OVERRIDE"},
+            {"name": "last", "status": "DISPATCH"},
+        ]
+
+        record = dispatch_status.build_dispatch_waves(
+            agents, 2, "claude_default", _STAMP.isoformat(),
+        )
+
+        assert record["wave_1"] == ["zeta", "mid"]
+        assert record["queued"] == ["last"]
+
+    def test_validator_accepts_a_built_record(self):
+        record = dispatch_status.build_dispatch_waves(
+            _rows("a", "b", "c"), 2, "claude_default", _STAMP.isoformat(),
+        )
+
+        assert dispatch_status.validate_dispatch_waves(record) is record
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            pytest.param(None, id="not-object"),
+            pytest.param(_waves(schema=2), id="schema-2"),
+            pytest.param(_waves(schema=True), id="schema-bool"),
+            pytest.param(_waves(cap=0), id="cap-zero"),
+            pytest.param(_waves(cap=True), id="cap-bool"),
+            pytest.param(_waves(cap_source="guess"), id="unknown-source"),
+            pytest.param(_waves(queued=["a"]), id="overlap"),
+            pytest.param(_waves(wave_1=["Bad Name"]), id="bad-name"),
+            pytest.param({**_waves(), "queued": "c"}, id="queued-not-list"),
+            pytest.param(_waves(stamped_at="yesterday"), id="bad-timestamp"),
+            pytest.param(_waves(stamped_at=None), id="missing-timestamp"),
+            pytest.param(_waves(grace_seconds=-1), id="negative-grace"),
+        ],
+    )
+    def test_validator_rejects_each_bad_field(self, bad):
+        with pytest.raises(ValueError):
+            dispatch_status.validate_dispatch_waves(bad)
+
+    def test_validator_accepts_unbounded_cap(self):
+        record = _waves(cap=None, cap_source="unbounded", queued=[])
+
+        assert dispatch_status.validate_dispatch_waves(record) is record
+
+    def test_load_passes_legacy_and_valid_plans_through_unchanged(self, tmp_path):
+        path = tmp_path / "dispatch-plan.json"
+        for plan in (
+            {"agents": _rows("a")},
+            {"agents": _rows("a", "b", "c"), "dispatch_waves": _waves()},
+        ):
+            path.write_text(json.dumps(plan))
+
+            assert dispatch_status.load_dispatch_plan(path) == plan
+
+    def test_load_rejects_an_invalid_record_naming_the_file(self, tmp_path):
+        path = tmp_path / "dispatch-plan.json"
+        path.write_text(json.dumps({
+            "agents": _rows("a"), "dispatch_waves": _waves(cap=0),
+        }))
+
+        with pytest.raises(ValueError, match="dispatch-plan.json"):
+            dispatch_status.load_dispatch_plan(path)
+
+    def test_queue_state_inside_grace_holds_wave_1_as_pending(self):
+        state = dispatch_status.queue_state(
+            _waves(), ["c", "b", "a"], _STAMP + timedelta(seconds=90),
+        )
+
+        assert _lists(state) == {"queued": ["c"], "pending": ["a", "b"]}
+
+    def test_queue_state_past_grace_queues_wave_1_rejections_first(self):
+        state = dispatch_status.queue_state(
+            _waves(), ["c", "b"], _STAMP + timedelta(seconds=91),
+        )
+
+        assert _lists(state) == {"queued": ["b", "c"], "pending": []}
+
+    def test_queue_state_ignores_started_reviewers(self):
+        state = dispatch_status.queue_state(
+            _waves(), [], _STAMP + timedelta(seconds=10),
+        )
+
+        assert state == {
+            "queued": [], "pending": [], "abandoned": [], "attempts": {},
+        }
+
+    def test_queue_state_for_a_legacy_plan_is_empty(self):
+        assert dispatch_status.queue_state(None, ["a"], _STAMP) == {
+            "queued": [], "pending": [], "abandoned": [], "attempts": {},
+        }
 
 
 class TestExplicitSkippedFormatting:
@@ -926,3 +1087,1007 @@ class TestSynthesisMarkersAreInvisible:
         assert [agent["name"] for agent in after["agents"]] == [
             "code-reviewer", "security-reviewer",
         ]
+
+
+def _write_wave_plan(tmp_path, names, cap, queued_from, stamped_at=None,
+                     **record_extra):
+    """A plan whose first `queued_from` dispatched names form wave 1.
+
+    `record_extra` adds record keys (`released`, `last_release`)."""
+    stamp = stamped_at or datetime.now(timezone.utc)
+    plan = {
+        "agents": _rows(*names),
+        "dispatch_waves": {
+            "schema": 1,
+            "cap": cap,
+            "cap_source": "claude_default" if cap else "unbounded",
+            "wave_1": list(names[:queued_from]),
+            "queued": list(names[queued_from:]),
+            "stamped_at": stamp.isoformat(),
+            "grace_seconds": 90,
+            **record_extra,
+        },
+    }
+    path = run_paths.artifact_path(tmp_path, "dispatch_plan")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(plan))
+
+
+class TestQueueStatus:
+    """check_status() reports the queue, the cap, free slots and SLOT_FREE."""
+
+    def test_legacy_plan_has_no_queue_and_never_frees_a_slot(self, mod, tmp_path):
+        _write_plan(tmp_path, _rows("a", "b"))
+        _start_agent(tmp_path, "a")
+
+        result = mod.check_status(str(tmp_path))
+
+        assert result["waves_recorded"] is False
+        assert result["queued"] == []
+        assert result["pending"] == []
+        assert result["cap"] is None
+        assert result["slot_free"] is False
+        # b is NOT_DISPATCHED and does not block, exactly as before.
+        _finish_agent(tmp_path, "a")
+        assert mod.check_status(str(tmp_path))["all_done"] is True
+
+    def test_queued_reviewer_with_a_free_slot(self, mod, tmp_path):
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _start_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=5))
+
+        assert result["queued"] == ["c"]
+        assert result["slots"] == 1
+        assert result["slot_free"] is True
+        assert result["all_done"] is False
+        row = next(a for a in result["agents"] if a["name"] == "c")
+        assert row == {"name": "c", "status": "NOT_DISPATCHED", "queued": True}
+
+    def test_queue_with_every_slot_running_is_not_slot_free(self, mod, tmp_path):
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _start_agent(tmp_path, "a")
+        _start_agent(tmp_path, "b")
+
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=5))
+
+        assert result["queued"] == ["c"]
+        assert result["slots"] == 0
+        assert result["slot_free"] is False
+
+    def test_queue_with_nothing_running_is_slot_free_not_all_done(
+        self, mod, tmp_path
+    ):
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _finish_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=5))
+
+        assert result["running"] == 0
+        assert result["slot_free"] is True
+        assert result["all_done"] is False
+
+    def test_wave_1_rejection_is_pending_inside_grace_then_queued(
+        self, mod, tmp_path
+    ):
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _start_agent(tmp_path, "a")
+
+        inside = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=30))
+        past = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=91))
+
+        # Inside grace, b holds its slot: a running + b pending fill cap 2.
+        assert inside["pending"] == ["b"]
+        assert inside["queued"] == ["c"]
+        assert inside["slots"] == 0
+        assert inside["slot_free"] is False
+        # Past grace, b was rejected: it queues ahead of c and frees its slot.
+        assert past["pending"] == []
+        assert past["queued"] == ["b", "c"]
+        assert past["slots"] == 1
+        assert past["slot_free"] is True
+
+    def test_unbounded_cap_with_a_late_wave_1_row(self, mod, tmp_path):
+        _write_wave_plan(tmp_path, ["a", "b"], cap=None, queued_from=2,
+                         stamped_at=_STAMP)
+        _start_agent(tmp_path, "a")
+
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=120))
+
+        assert result["cap"] is None
+        assert result["slots"] is None
+        assert result["queued"] == ["b"]
+        assert result["slot_free"] is True
+
+    def test_empty_queue_with_record_is_all_done_when_nothing_runs(
+        self, mod, tmp_path
+    ):
+        _write_wave_plan(tmp_path, ["a", "b"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _finish_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=5))
+
+        assert result["queued"] == []
+        assert result["slot_free"] is False
+        assert result["all_done"] is True
+
+
+class TestSlotFreeExit:
+    """--wait settles SLOT_FREE before exit 4; the envelope names the queue."""
+
+    def _slot_free_plan(self, tmp_path):
+        # Stamped long ago: no pending rows, so the queue is decided by rows.
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=2, queued_from=2,
+                         stamped_at=datetime.now(timezone.utc) - timedelta(hours=1))
+        _start_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+
+    def test_slot_free_returns_only_after_the_settle_window(self, mod, tmp_path):
+        self._slot_free_plan(tmp_path)
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=300, poll_interval=10,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn, settle_seconds=30,
+        )
+
+        assert expired is False
+        assert result["slot_free"] is True
+        assert clock.sleeps == [10, 10, 10]
+
+    def test_slot_free_that_clears_before_settling_does_not_return(
+        self, mod, tmp_path
+    ):
+        self._slot_free_plan(tmp_path)
+        clock = _FakeClock()
+
+        def sleep_fn(seconds):
+            clock.sleep_fn(seconds)
+            if len(clock.sleeps) == 1:
+                # The launched reviewer writes its started marker.
+                _start_agent(tmp_path, "c")
+
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=60, poll_interval=10,
+            sleep_fn=sleep_fn, now_fn=clock.now_fn, settle_seconds=30,
+        )
+
+        assert expired is True
+        assert result["slot_free"] is False
+        assert result["queued"] == []
+
+    def test_all_done_with_an_empty_queue_returns_immediately(self, mod, tmp_path):
+        _write_wave_plan(tmp_path, ["a"], cap=2, queued_from=1)
+        _finish_agent(tmp_path, "a")
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=60,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert (result["all_done"], expired, clock.sleeps) == (True, False, [])
+
+    def test_expiry_with_an_unsettled_slot_free_reports_expired(
+        self, mod, tmp_path
+    ):
+        self._slot_free_plan(tmp_path)
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=20, poll_interval=10,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn, settle_seconds=30,
+        )
+
+        assert expired is True
+        assert result["slot_free"] is True
+
+    def test_format_output_names_queue_and_slots(self, mod, tmp_path):
+        self._slot_free_plan(tmp_path)
+
+        text = mod.format_output(mod.check_status(str(tmp_path)))
+
+        assert "c" in text.split("QUEUED: ", 1)[1].splitlines()[0]
+        assert "SLOTS: 1" in text
+        assert "QUEUED (launch when a slot frees)" in text
+        assert "never started" not in text.split("ALL_DONE:", 1)[1]
+
+    def test_format_output_legacy_plan_has_no_queue_lines(self, mod, tmp_path):
+        _write_plan(tmp_path, _rows("a"))
+
+        text = mod.format_output(mod.check_status(str(tmp_path)))
+
+        assert "QUEUED:" not in text
+        assert "SLOTS:" not in text
+        assert "LLM may have failed to dispatch" in text
+
+    def test_format_output_unbounded_slots_read_all(self, mod, tmp_path):
+        _write_wave_plan(tmp_path, ["a"], cap=None, queued_from=1)
+        _start_agent(tmp_path, "a")
+
+        text = mod.format_output(mod.check_status(str(tmp_path)))
+
+        assert "QUEUED: none" in text
+        assert "SLOTS: all" in text
+
+    def _assert_envelope(self, stdout):
+        assert "ALL_DONE: false" in stdout
+        assert "QUEUED: c" in stdout
+        assert "SLOTS: 1" in stdout
+
+    def test_no_wait_cli_exits_4_with_the_envelope(self, mod, tmp_path):
+        self._slot_free_plan(tmp_path)
+
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
+            capture_output=True, text=True, timeout=15, cwd=tmp_path,
+        )
+
+        assert r.returncode == mod.EXIT_SLOT_FREE == 4
+        self._assert_envelope(r.stdout)
+
+    def test_wait_cli_exits_4_with_the_envelope(self, mod, tmp_path):
+        """A real process, with the 30s settle window shortened.
+
+        main() reads SLOT_FREE_SETTLE_SECONDS at call time, so a wrapper
+        that loads the script and lowers it exercises the real --wait
+        wiring, stdout and exit code without a 30s test.
+        """
+        self._slot_free_plan(tmp_path)
+        wrapper = (
+            "import importlib.util, sys\n"
+            f"spec = importlib.util.spec_from_file_location('s', {str(SCRIPT_PATH)!r})\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "mod.SLOT_FREE_SETTLE_SECONDS = 0.1\n"
+            "mod.main()\n"
+        )
+
+        r = subprocess.run(
+            [sys.executable, "-c", wrapper, "--output-dir", str(tmp_path),
+             "--wait", "--max-seconds", "30"],
+            capture_output=True, text=True, timeout=30, cwd=tmp_path,
+        )
+
+        assert r.returncode == 4, r.stderr
+        self._assert_envelope(r.stdout)
+
+    def test_legacy_plan_cli_exit_codes_unchanged(self, tmp_path):
+        _write_plan(tmp_path, _rows("a", "b"))
+        _start_agent(tmp_path, "a")
+
+        def run(*tail):
+            return subprocess.run(
+                [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path),
+                 *tail],
+                capture_output=True, text=True, timeout=15, cwd=tmp_path,
+            ).returncode
+
+        assert run() == 2
+        assert run("--wait", "--max-seconds", "0.05") == 3
+        _finish_agent(tmp_path, "a")
+        assert run() == 0
+        assert run("--wait", "--max-seconds", "5") == 0
+
+
+def _plan_record(tmp_path):
+    path = run_paths.artifact_path(tmp_path, "dispatch_plan")
+    return json.loads(path.read_text())["dispatch_waves"]
+
+
+class TestPendingBlocksAllDone:
+    """A launched wave-1 reviewer with no started marker yet is not done."""
+
+    def test_wave_1_launched_moments_ago_is_not_all_done(self, mod, tmp_path):
+        _write_wave_plan(tmp_path, ["a", "b"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=5))
+
+        assert result["pending"] == ["a", "b"]
+        assert result["running"] == 0
+        assert result["queued"] == []
+        assert result["all_done"] is False
+        assert result["slot_free"] is False
+
+    def test_wait_cli_expires_instead_of_reporting_all_done(self, tmp_path):
+        """The reviewer's repro: record stamped now, no markers. --wait used
+        to exit 0 at once and step 8 closed intake over wave 1."""
+        _write_wave_plan(tmp_path, ["a", "b"], cap=2, queued_from=2)
+
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path),
+             "--wait", "--max-seconds", "0.5"],
+            capture_output=True, text=True, timeout=15, cwd=tmp_path,
+        )
+
+        assert r.returncode == 3, r.stdout
+        assert "ALL_DONE: false" in r.stdout
+        assert "PENDING (launched, not started yet; no action)" in r.stdout
+
+
+class TestReleaseRecord:
+    """`released` / `last_release` on the wave record, and the 180s grace."""
+
+    def test_default_grace_keeps_a_slow_wave_1_start_pending(self):
+        record = dispatch_status.build_dispatch_waves(
+            _rows("a"), 2, "claude_default", _STAMP.isoformat(),
+        )
+
+        assert record["grace_seconds"] == 180
+        assert _lists(dispatch_status.queue_state(
+            record, ["a"], _STAMP + timedelta(seconds=150),
+        )) == {"queued": [], "pending": ["a"]}
+
+    def test_a_released_name_is_pending_inside_grace_then_queued(self):
+        released_at = _STAMP + timedelta(seconds=300)
+        record = _waves(released={"c": _release(released_at.isoformat())})
+
+        inside = dispatch_status.queue_state(
+            record, ["c"], released_at + timedelta(seconds=90),
+        )
+        past = dispatch_status.queue_state(
+            record, ["c"], released_at + timedelta(seconds=91),
+        )
+
+        assert _lists(inside) == {"queued": [], "pending": ["c"]}
+        assert _lists(past) == {"queued": ["c"], "pending": []}
+
+    def test_validator_accepts_release_fields(self):
+        record = _waves(
+            released={"c": _release(_STAMP.isoformat())},
+            last_release={"at": _STAMP.isoformat(), "terminal_count": 0},
+        )
+
+        assert dispatch_status.validate_dispatch_waves(record) is record
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            pytest.param({"released": ["c"]}, id="released-not-object"),
+            pytest.param({"released": {"zz": _release(_STAMP.isoformat())}},
+                         id="unplanned-name"),
+            pytest.param({"released": {"c": _release("soon")}}, id="bad-release-time"),
+            pytest.param({"last_release": None}, id="last-release-null"),
+            pytest.param({"last_release": {"terminal_count": 1}}, id="missing-at"),
+            pytest.param(
+                {"last_release": {"at": _STAMP.isoformat(), "terminal_count": -1}},
+                id="negative-count",
+            ),
+            pytest.param(
+                {"last_release": {"at": _STAMP.isoformat(), "terminal_count": True}},
+                id="bool-count",
+            ),
+        ],
+    )
+    def test_validator_rejects_bad_release_fields(self, extra):
+        with pytest.raises(ValueError):
+            dispatch_status.validate_dispatch_waves(_waves(**extra))
+
+    def test_record_release_is_pure_and_counts_repeat_releases(self):
+        """A repeat release counts up. With nothing occupied and no reviewer
+        ended since the previous release, the release counts."""
+        record = _waves(
+            released={"b": _release("2026-01-01T00:00:00+00:00")},
+            last_release={"at": "2026-01-01T00:00:00+00:00", "terminal_count": 3},
+        )
+
+        updated = dispatch_status.record_release(
+            record, ["b", "c"], 3, _STAMP.isoformat(), 0,
+        )
+
+        assert updated["released"] == {
+            "b": {"at": _STAMP.isoformat(), "count": 2, "counted": 1},
+            "c": {"at": _STAMP.isoformat(), "count": 1, "counted": 1},
+        }
+        assert updated["last_release"] == {"at": _STAMP.isoformat(), "terminal_count": 3}
+        assert record["released"] == {"b": _release("2026-01-01T00:00:00+00:00")}
+        dispatch_status.validate_dispatch_waves(updated)
+
+    @pytest.mark.parametrize(
+        "occupied, terminal, counted",
+        [
+            pytest.param(0, 0, 1, id="host-held-nothing"),
+            pytest.param(1, 0, 0, id="a-reviewer-running-or-pending"),
+            pytest.param(0, 1, 0, id="a-reviewer-ended-since-step-6"),
+        ],
+    )
+    def test_a_release_counts_only_when_the_host_held_nothing_of_ours(
+        self, occupied, terminal, counted
+    ):
+        """A refusal while another reviewer runs, waits to start, or ran
+        and ended since the previous release (here: since step 6) may be
+        host contention, so it never counts toward abandonment."""
+        updated = dispatch_status.record_release(
+            _waves(), ["c"], terminal, _STAMP.isoformat(), occupied,
+        )
+
+        assert updated["released"]["c"] == {
+            "at": _STAMP.isoformat(), "count": 1, "counted": counted,
+        }
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            pytest.param({"at": _STAMP.isoformat(), "count": 1, "counted": 2},
+                         id="counted-over-count"),
+            pytest.param({"at": _STAMP.isoformat(), "count": 1, "counted": -1},
+                         id="negative-counted"),
+            pytest.param({"at": _STAMP.isoformat(), "count": 1}, id="no-counted"),
+            pytest.param({"at": _STAMP.isoformat(), "count": 1, "counted": 0,
+                          "first_at": _STAMP.isoformat()}, id="extra-key"),
+            pytest.param(_STAMP.isoformat(), id="bare-release-time"),
+            pytest.param({"at": _STAMP.isoformat(), "first_at": _STAMP.isoformat(),
+                          "count": 2}, id="first-at-form"),
+        ],
+    )
+    def test_validator_rejects_bad_counted_entries(self, entry):
+        with pytest.raises(ValueError):
+            dispatch_status.validate_dispatch_waves(_waves(released={"c": entry}))
+
+
+class TestReleaseAndProgress:
+    """The watchdog stamps what it releases; a re-fire needs progress."""
+
+    def _check(self, mod, tmp_path, at):
+        return mod.check_status(str(tmp_path), now=at)
+
+    def test_release_stamps_the_first_slots_names_and_prints_exactly_them(
+        self, mod, tmp_path
+    ):
+        _write_wave_plan(tmp_path, ["a", "b", "c", "d", "e"], cap=2,
+                         queued_from=2, stamped_at=_STAMP)
+        _start_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+        released_at = _STAMP + timedelta(seconds=200)
+        result = self._check(mod, tmp_path, released_at)
+        assert (result["queued"], result["slots"]) == (["c", "d", "e"], 1)
+
+        names = mod.release_queued(str(tmp_path), result, now=released_at)
+        text = mod.format_output(result)
+
+        assert names == ["c"]
+        # a is RUNNING, so c's release may meet a full host: not counted.
+        assert _plan_record(tmp_path)["released"] == {"c": {
+            "at": released_at.isoformat(), "count": 1, "counted": 0,
+        }}
+        assert _plan_record(tmp_path)["last_release"] == {
+            "at": released_at.isoformat(), "terminal_count": 1,
+        }
+        assert "QUEUED: c\n" in text
+        assert "QUEUED (launch now)" in text
+        assert "QUEUED (launch when a slot frees)" in text  # d and e wait
+        after = self._check(mod, tmp_path, released_at + timedelta(seconds=10))
+        assert after["pending"] == ["c"]
+        assert after["slots"] == 0
+        assert after["slot_free"] is False
+
+    def test_unbounded_release_takes_the_whole_queue(self, mod, tmp_path):
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=None, queued_from=3,
+                         stamped_at=_STAMP)
+        _start_agent(tmp_path, "a")
+        result = self._check(mod, tmp_path, _STAMP + timedelta(seconds=200))
+
+        names = mod.release_queued(
+            str(tmp_path), result, now=_STAMP + timedelta(seconds=200),
+        )
+
+        assert names == ["b", "c"]
+        assert sorted(_plan_record(tmp_path)["released"]) == ["b", "c"]
+
+    def test_accepted_but_unstarted_reviewer_does_not_over_launch(
+        self, mod, tmp_path
+    ):
+        """The code reviewer's repro: cap 2, a running, b accepted in wave 1
+        but not started past grace, c queued. The release names b only, and
+        once stamped b holds its slot: c is never launched over the cap."""
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _start_agent(tmp_path, "a")
+        release_at = _STAMP + timedelta(seconds=100)
+        first = self._check(mod, tmp_path, release_at)
+        assert (first["queued"], first["slots"], first["slot_free"]) == (
+            ["b", "c"], 1, True,
+        )
+
+        assert mod.release_queued(str(tmp_path), first, now=release_at) == ["b"]
+        assert "QUEUED: b\n" in mod.format_output(first)
+
+        inside = self._check(mod, tmp_path, release_at + timedelta(seconds=30))
+        assert inside["pending"] == ["b"]
+        assert inside["slot_free"] is False
+        # Past b's release grace with nothing finished: b is queued again,
+        # but its slot is explained by its own release, so no re-fire.
+        stale = self._check(mod, tmp_path, release_at + timedelta(seconds=91))
+        assert stale["queued"] == ["b", "c"]
+        assert stale["slot_free"] is False
+        # A reviewer finishing is progress: SLOT_FREE fires again.
+        _finish_agent(tmp_path, "a")
+        assert self._check(
+            mod, tmp_path, release_at + timedelta(seconds=92),
+        )["slot_free"] is True
+
+    def test_wave_1_rejection_after_a_release_waits_for_progress(
+        self, mod, tmp_path
+    ):
+        """After a release, a wave-1 rejection crossing its own grace frees
+        a slot no release explains. That alone never fires, not even once
+        the release starts; a reviewer finishing does."""
+        _write_wave_plan(tmp_path, ["a", "b", "c", "d"], cap=3, queued_from=3,
+                         stamped_at=_STAMP)
+        _finish_agent(tmp_path, "a")
+        _start_agent(tmp_path, "b")
+        release_at = _STAMP + timedelta(seconds=50)
+        first = self._check(mod, tmp_path, release_at)
+        assert first["pending"] == ["c"] and first["queued"] == ["d"]
+        mod.release_queued(str(tmp_path), first, now=release_at)
+
+        later = self._check(mod, tmp_path, _STAMP + timedelta(seconds=100))
+        assert later["queued"] == ["c"]
+        assert later["pending"] == ["d"]
+        assert later["slots"] == 1
+        assert later["slot_free"] is False
+        _start_agent(tmp_path, "d")
+        started = self._check(mod, tmp_path, _STAMP + timedelta(seconds=100))
+        assert started["queued"] == ["c"]
+        assert started["slots"] == 1
+        assert started["slot_free"] is False
+        _finish_agent(tmp_path, "b")
+        finished = self._check(mod, tmp_path, _STAMP + timedelta(seconds=110))
+
+        assert finished["queued"] == ["c"]
+        assert finished["slot_free"] is True
+
+    def test_nothing_running_or_pending_may_fire_again(self, mod, tmp_path):
+        now = datetime.now(timezone.utc)
+        _write_wave_plan(
+            tmp_path, ["a", "b"], cap=None, queued_from=2,
+            stamped_at=now - timedelta(seconds=700),
+            released={"b": _release((now - timedelta(seconds=500)).isoformat())},
+            last_release={"at": (now - timedelta(seconds=500)).isoformat(),
+                          "terminal_count": 1},
+        )
+        _finish_agent(tmp_path, "a")
+
+        result = mod.check_status(str(tmp_path))
+
+        assert (result["running"], result["pending"], result["queued"]) == (
+            0, [], ["b"],
+        )
+        assert result["slot_free"] is True
+
+    def _rejected_codex_plan(self, tmp_path):
+        """Codex, unbounded: b was released, the thread limit rejected it,
+        and its release grace ran out with nothing finished since."""
+        now = datetime.now(timezone.utc)
+        released_at = (now - timedelta(seconds=500)).isoformat()
+        _write_wave_plan(
+            tmp_path, ["a", "b", "c"], cap=None, queued_from=3,
+            stamped_at=now - timedelta(seconds=700),
+            released={"b": _release(released_at)},
+            last_release={"at": released_at, "terminal_count": 0},
+        )
+        _start_agent(tmp_path, "a")
+        _start_agent(tmp_path, "c")
+
+    def test_unbounded_rejected_release_does_not_refire(self, mod, tmp_path):
+        self._rejected_codex_plan(tmp_path)
+        clock = _FakeClock()
+
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=60, poll_interval=10,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn, settle_seconds=30,
+        )
+
+        assert result["queued"] == ["b"]
+        assert result["slot_free"] is False
+        assert expired is True
+
+    def test_unbounded_fires_once_after_a_reviewer_finishes(self, mod, tmp_path):
+        self._rejected_codex_plan(tmp_path)
+        _finish_agent(tmp_path, "a")
+        clock = _FakeClock()
+
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=120, poll_interval=10,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn, settle_seconds=30,
+        )
+        assert (result["slot_free"], expired) == (True, False)
+        assert mod.release_queued(str(tmp_path), result) == ["b"]
+
+        clock = _FakeClock()
+        again, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=60, poll_interval=10,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn, settle_seconds=30,
+        )
+        assert expired is True
+        assert again["pending"] == ["b"]
+        assert again["slot_free"] is False
+
+    def test_no_wait_cli_exit_4_is_read_only(self, tmp_path):
+        """Only --wait releases: a notification-time status call that
+        stamped names the orchestrator never launched left them pending."""
+        _write_wave_plan(tmp_path, ["a", "b", "c", "d"], cap=2, queued_from=2,
+                         stamped_at=datetime.now(timezone.utc) - timedelta(seconds=600))
+        _start_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+        plan_path = run_paths.artifact_path(tmp_path, "dispatch_plan")
+        before = plan_path.read_bytes()
+
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
+            capture_output=True, text=True, timeout=15, cwd=tmp_path,
+        )
+
+        assert r.returncode == 4, r.stderr
+        assert plan_path.read_bytes() == before
+        assert "do not launch from this output" in r.stdout
+        assert "QUEUED (launch now)" not in r.stdout
+        assert "NOTE: launch every QUEUED agent now" not in r.stdout
+
+    def test_wait_cli_exit_4_still_stamps_the_release(self, tmp_path):
+        _write_wave_plan(tmp_path, ["a", "b", "c", "d"], cap=2, queued_from=2,
+                         stamped_at=datetime.now(timezone.utc) - timedelta(seconds=600))
+        _start_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+
+        r = _run_wait_cli(tmp_path)
+
+        assert r.returncode == 4, r.stderr
+        assert "QUEUED: c\n" in r.stdout
+        assert "NOTE: launch every QUEUED agent now" in r.stdout
+        assert list(_plan_record(tmp_path)["released"]) == ["c"]
+
+
+def _run_wait_cli(tmp_path, max_seconds="30"):
+    """The real --wait CLI with the 30s settle window lowered to 0.1s."""
+    wrapper = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('s', {str(SCRIPT_PATH)!r})\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "mod.SLOT_FREE_SETTLE_SECONDS = 0.1\n"
+        "mod.main()\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", wrapper, "--output-dir", str(tmp_path),
+         "--wait", "--max-seconds", max_seconds],
+        capture_output=True, text=True, timeout=30, cwd=tmp_path,
+    )
+
+
+class TestAbandonment:
+    """A reviewer that never starts stops blocking within bounded time, so
+    step 7's watchdog always reaches exit 0 (as on a legacy plan), and a
+    healthy reviewer the host refused because it was full never does."""
+
+    TIMEOUT = 1200
+
+    def _check(self, mod, tmp_path, at):
+        return mod.check_status(str(tmp_path), timeout_seconds=self.TIMEOUT, now=at)
+
+    def _simulate(self, mod, tmp_path, durations, host_limit, lost=(),
+                  start=_STAMP, step=30, horizon=6 * 3600):
+        """Drive the watchdog against a simulated host every `step` seconds
+        from `start`, the plan's `stamped_at`, releasing on SLOT_FREE.
+
+        Step 6 launches `wave_1` at `start`. The host accepts a launch
+        while fewer than `host_limit` accepted reviewers are live and
+        refuses the rest. An accepted reviewer starts at once and runs for
+        `durations[name]` seconds; past the agent timeout it reads
+        TIMED_OUT and its host thread ends with it. A `lost` reviewer's
+        launch is accepted but it never starts and holds no thread.
+        Returns (seconds until all_done, last result, trace of
+        (seconds, abandoned names) per check)."""
+        record = _plan_record(tmp_path)
+        started, trace = {}, []
+
+        def ends_at(name):
+            return started[name] + timedelta(
+                seconds=min(durations[name], self.TIMEOUT),
+            )
+
+        def launch(names, at):
+            for name in names:
+                live = sum(1 for other in started if ends_at(other) > at)
+                if name in lost or name in started or live >= host_limit:
+                    continue
+                started[name] = at
+                _start_agent_at(tmp_path, name, at)
+
+        launch(record["wave_1"], start)
+        at = start
+        while at - start <= timedelta(seconds=horizon):
+            for name in started:
+                if durations[name] <= self.TIMEOUT and ends_at(name) <= at:
+                    _finish_agent(tmp_path, name)
+            result = self._check(mod, tmp_path, at)
+            seconds = int((at - start).total_seconds())
+            trace.append((seconds, list(result["abandoned"])))
+            if result["all_done"]:
+                return seconds, result, trace
+            if result["slot_free"]:
+                launch(mod.release_queued(str(tmp_path), result, now=at), at)
+            at += timedelta(seconds=step)
+        raise AssertionError(f"not all_done within {horizon}s: {result}")
+
+    def test_codex_thread_limit_refusals_never_abandon_a_healthy_reviewer(
+        self, mod, tmp_path
+    ):
+        """The code reviewer's probe: Codex, unbounded cap, 8 reviewers and
+        a host thread limit of 4. a-d run 580-1080s; e-h are refused at
+        step 6 and on every release while the pool is full. Every one of
+        them runs; none is abandoned."""
+        names = list("abcdefgh")
+        _write_wave_plan(tmp_path, names, cap=None, queued_from=8,
+                         stamped_at=_STAMP)
+        durations = dict(a=580, b=880, c=980, d=1080,
+                         e=600, f=600, g=600, h=600)
+
+        _, result, _ = self._simulate(mod, tmp_path, durations, host_limit=4)
+
+        assert result["abandoned"] == []
+        assert result["finished"] == 8
+
+    def test_a_serial_host_never_abandons_a_healthy_reviewer(self, mod, tmp_path):
+        """A host that runs one reviewer at a time: each release goes out
+        once the only running reviewer has ended, so nothing of ours runs
+        then, yet the host refuses every co-released name but one. A
+        reviewer ending since the previous release keeps those refusals
+        from counting."""
+        names = list("abcde")
+        _write_wave_plan(tmp_path, names, cap=None, queued_from=5,
+                         stamped_at=_STAMP)
+
+        _, result, _ = self._simulate(
+            mod, tmp_path, dict.fromkeys(names, 200), host_limit=1,
+        )
+
+        assert result["abandoned"] == []
+        assert result["finished"] == 5
+
+    def test_a_fresh_release_is_pending_not_abandoned(self, mod, tmp_path):
+        """The spec reviewer's probe: x was refused at step 6 and once
+        more; a and b finish just before the agent timeout, x is released
+        again at +1175 and checked at +1200. The retired rule (b) abandoned
+        it there, 25s into its grace window."""
+        _write_wave_plan(tmp_path, ["a", "b", "x"], cap=3, queued_from=3,
+                         stamped_at=_STAMP)
+        _start_agent_at(tmp_path, "a", _STAMP)
+        _start_agent_at(tmp_path, "b", _STAMP)
+        at = _STAMP + timedelta(seconds=200)
+        mod.release_queued(str(tmp_path), self._check(mod, tmp_path, at), now=at)
+        _finish_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+        at = _STAMP + timedelta(seconds=1175)
+        result = self._check(mod, tmp_path, at)
+        assert result["slot_free"] is True
+        mod.release_queued(str(tmp_path), result, now=at)
+
+        for seconds in (1180, 1200, 1175 + 90):
+            later = self._check(mod, tmp_path, _STAMP + timedelta(seconds=seconds))
+            assert (later["pending"], later["abandoned"]) == (["x"], [])
+            assert later["all_done"] is False
+
+    def test_nothing_is_abandoned_inside_its_grace_window(self, mod, tmp_path):
+        released_at = _STAMP + timedelta(seconds=300)
+        record = _waves(released={"c": {
+            "at": released_at.isoformat(), "count": 5, "counted": 5,
+        }})
+
+        inside = dispatch_status.queue_state(
+            record, ["c"], released_at + timedelta(seconds=90),
+        )
+        past = dispatch_status.queue_state(
+            record, ["c"], released_at + timedelta(seconds=91),
+        )
+
+        assert _lists(inside, ("pending", "abandoned")) == {
+            "pending": ["c"], "abandoned": [],
+        }
+        assert _lists(past, ("pending", "abandoned")) == {
+            "pending": [], "abandoned": ["c"],
+        }
+
+    def test_a_lone_lost_reviewer_is_abandoned_after_two_counted_releases(
+        self, mod, tmp_path
+    ):
+        """Unbounded: a runs and finishes, x's launches are all accepted
+        and lost. Its release while a runs and the one right after a
+        ended do not count (a may have held the host); the next two do,
+        and --wait then exits 0."""
+        start = datetime.now(timezone.utc) - timedelta(hours=3)
+        _write_wave_plan(tmp_path, ["a", "x"], cap=None, queued_from=2,
+                         stamped_at=start)
+
+        seconds, result, _ = self._simulate(
+            mod, tmp_path, {"a": 300}, host_limit=4, lost={"x"},
+            start=start, step=60,
+        )
+
+        assert seconds < 3 * 3600
+        assert result["abandoned"] == ["x"]
+        assert _plan_record(tmp_path)["released"]["x"]["counted"] == (
+            dispatch_status.MAX_RELEASES
+        )
+        text = mod.format_output(result)
+        # step 6, two uncounted releases, two counted ones
+        assert "ABANDONED (never started after 5 launch attempts)" in text
+        assert "ALL_DONE: true" in text
+        r = _run_wait_cli(tmp_path, max_seconds="5")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "ABANDONED" in r.stdout
+
+    def test_a_running_reviewer_defers_abandonment_until_it_times_out(
+        self, mod, tmp_path
+    ):
+        """cap 2: a runs past the agent timeout, x is lost. While a runs,
+        x's releases do not count; once a turns TIMED_OUT they do, and the
+        run still ends."""
+        _write_wave_plan(tmp_path, ["a", "x"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+
+        _, result, trace = self._simulate(
+            mod, tmp_path, {"a": 5000}, host_limit=4, lost={"x"},
+        )
+
+        assert result["abandoned"] == ["x"]
+        assert result["timed_out"] == 1
+        first_abandoned = next(seconds for seconds, names in trace if names)
+        assert first_abandoned > self.TIMEOUT
+
+    def test_an_all_lost_queue_terminates(self, mod, tmp_path):
+        """cap 2, four reviewers, every launch lost: each pair is released
+        together with nothing else occupying the host, so both count, and
+        every one is abandoned in bounded time."""
+        names = list("abcd")
+        _write_wave_plan(tmp_path, names, cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+
+        seconds, result, _ = self._simulate(
+            mod, tmp_path, {}, host_limit=4, lost=set(names),
+        )
+
+        assert result["abandoned"] == names
+        # Two pairs, each: step 6 or first-release grace, then two counted
+        # releases' grace windows (90s each here), polled every 30s.
+        assert seconds <= 2 * 3 * (90 + 30)
+
+    def test_two_lost_reviewers_released_in_turn_still_terminate(
+        self, mod, tmp_path
+    ):
+        """cap 3: c (wave 1) and d (queued) are lost. d is released when
+        a finishes, while c is still pending; c then re-queues while d is
+        pending. Released in turn, each while the other was pending,
+        neither release counted, forever. A re-fire now waits for nothing
+        to be pending, so they are released together and both count."""
+        _write_wave_plan(tmp_path, list("abcd"), cap=3, queued_from=3,
+                         stamped_at=_STAMP)
+
+        _, result, _ = self._simulate(
+            mod, tmp_path, {"a": 60, "b": 150}, host_limit=3, lost={"c", "d"},
+        )
+
+        assert result["abandoned"] == ["c", "d"]
+        assert result["finished"] == 2
+
+    def test_an_abandoned_row_frees_its_slot_for_the_queue(self, mod, tmp_path):
+        """cap 1: c abandoned after its counted releases; d, never
+        launched, is released next instead of waiting behind c forever."""
+        stamp = _STAMP.isoformat()
+        _write_wave_plan(
+            tmp_path, ["a", "c", "d"], cap=1, queued_from=1, stamped_at=_STAMP,
+            released={"c": {"at": stamp, "count": 2, "counted": 2}},
+            last_release={"at": stamp, "terminal_count": 1},
+        )
+        _finish_agent(tmp_path, "a")
+
+        result = self._check(mod, tmp_path, _STAMP + timedelta(seconds=91))
+
+        assert result["abandoned"] == ["c"]
+        assert result["queued"] == ["d"]
+        assert result["slot_free"] is True
+        assert mod.release_queued(str(tmp_path), result,
+                                  now=_STAMP + timedelta(seconds=91)) == ["d"]
+
+    def test_a_late_start_after_abandonment_runs_normally(self, mod, tmp_path):
+        stamp = _STAMP.isoformat()
+        _write_wave_plan(
+            tmp_path, ["a", "c"], cap=2, queued_from=1, stamped_at=_STAMP,
+            released={"c": {"at": stamp, "count": 2, "counted": 2}},
+        )
+        _finish_agent(tmp_path, "a")
+        _start_agent(tmp_path, "c")
+
+        result = mod.check_status(str(tmp_path))
+
+        assert result["abandoned"] == []
+        assert result["running"] == 1 and result["all_done"] is False
+
+    def test_legacy_plan_never_abandons(self, mod, tmp_path):
+        _write_plan(tmp_path, _rows("a", "b"))
+        _finish_agent(tmp_path, "a")
+
+        result = mod.check_status(
+            str(tmp_path), now=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+
+        assert result["abandoned"] == []
+        assert result["all_done"] is True
+        text = mod.format_output(result)
+        assert "ABANDONED" not in text
+        assert "NOT_DISPATCHED (never started" in text
+
+
+class TestReleaseFiltersAgainstTheReloadedRecord:
+    """A step-6 restamp between the status check and the release write."""
+
+    def _restamped_between(self, mod, tmp_path, new_names):
+        _write_wave_plan(tmp_path, ["a", "b", "c", "d"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _finish_agent(tmp_path, "a")
+        _finish_agent(tmp_path, "b")
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=200))
+        assert result["queued"][:result["slots"]] == ["c", "d"]
+        # The restamp drops c (an override skipped it after the check).
+        _write_wave_plan(tmp_path, new_names, cap=2, queued_from=2,
+                         stamped_at=_STAMP + timedelta(seconds=199))
+        return result
+
+    def test_a_dropped_name_is_not_stamped_and_the_plan_stays_valid(
+        self, mod, tmp_path
+    ):
+        result = self._restamped_between(mod, tmp_path, ["a", "b", "d"])
+
+        names = mod.release_queued(
+            str(tmp_path), result, now=_STAMP + timedelta(seconds=200),
+        )
+
+        assert names == ["d"]
+        assert result["slot_free"] is True
+        plan_path = run_paths.artifact_path(tmp_path, "dispatch_plan")
+        plan = dispatch_status.load_dispatch_plan(plan_path)
+        assert list(plan["dispatch_waves"]["released"]) == ["d"]
+        assert "QUEUED: d\n" in mod.format_output(result)
+
+    def test_no_surviving_name_clears_slot_free(self, mod, tmp_path):
+        result = self._restamped_between(mod, tmp_path, ["a", "b"])
+        plan_path = run_paths.artifact_path(tmp_path, "dispatch_plan")
+        before = plan_path.read_bytes()
+
+        names = mod.release_queued(
+            str(tmp_path), result, now=_STAMP + timedelta(seconds=200),
+        )
+
+        assert names == []
+        assert result["slot_free"] is False
+        assert plan_path.read_bytes() == before
+
+    def test_an_invalid_new_record_is_not_written(self, mod, tmp_path, capsys,
+                                                  monkeypatch):
+        _write_wave_plan(tmp_path, ["a", "b", "c"], cap=2, queued_from=2,
+                         stamped_at=_STAMP)
+        _finish_agent(tmp_path, "a")
+        result = mod.check_status(str(tmp_path), now=_STAMP + timedelta(seconds=200))
+        plan_path = run_paths.artifact_path(tmp_path, "dispatch_plan")
+        before = plan_path.read_bytes()
+        monkeypatch.setattr(
+            mod, "record_release",
+            lambda record, *args: {**record, "released": {"zz": "soon"}},
+        )
+
+        names = mod.release_queued(
+            str(tmp_path), result, now=_STAMP + timedelta(seconds=200),
+        )
+
+        assert names == ["b", "c"]
+        assert plan_path.read_bytes() == before
+        assert "WARNING: not recording the release" in capsys.readouterr().err

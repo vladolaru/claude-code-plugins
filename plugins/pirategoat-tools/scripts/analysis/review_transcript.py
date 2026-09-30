@@ -74,9 +74,11 @@ EXPECTED_EXIT_CATEGORIES = frozenset({"poll_outcome"})
 # failure — 23 of the 31 failures the two 2026-09-10 field runs recorded.
 # The name and the code alone do not settle it: argparse and the Python
 # launcher both answer a broken invocation of this same program with 2,
-# so the exemption also requires the status render itself.
+# so the exemption also requires the status render itself. Exit 4 is
+# SLOT_FREE (`agents_status.EXIT_SLOT_FREE`): a queued reviewer can be
+# launched now, the step-7 wake-up that launches the next dispatch wave.
 _POLL_PROGRAM = "agents_status.py"
-_POLL_OUTCOME_EXIT_CODES = frozenset({2, 3})
+_POLL_OUTCOME_EXIT_CODES = frozenset({2, 3, 4})
 _PYTHON_PROGRAMS = frozenset({"python", "python3"})
 # The harness frames a failed Bash result as `Exit code <n>` on the FIRST
 # line, ahead of the command's own output, and gives it a plain-string

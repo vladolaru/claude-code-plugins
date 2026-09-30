@@ -1360,17 +1360,20 @@ def _assert_poll_is_evidence_gated(text, output_dir, exit_zero_action):
     A status call plus the turn that narrated it, once per reviewer, was
     17-23% of the orchestrator's input tokens on the 2026-09-10 field runs,
     while the watchdog already exits the instant the disk says ALL_DONE.
-    So the bare (non-`--wait`) call appears exactly once, in the bullet the
-    watchdog's exit selects, and a `STATUS: FINISHED` notification selects
-    a no-action bullet.
+    The watchdog's own output is the status (its `ALL_DONE:`, `QUEUED:` and
+    `SLOTS:` lines), so no status call follows an exit: the bare
+    (non-`--wait`) call appears exactly once, in the bullet for a
+    notification the disk cannot explain, and a `STATUS: FINISHED`
+    notification selects a silent bullet that states why it is silent.
     """
     lines = text.splitlines()
 
     finished = [line for line in lines if "STATUS: FINISHED" in line]
     assert len(finished) == 1, "the FINISHED wake-up needs exactly one bullet"
-    assert "no action" in finished[0].lower(), (
+    assert "no text and no tool call" in finished[0], (
         f"a FINISHED reviewer must cost nothing: {finished[0]}"
     )
+    assert "read from disk at step 8" in finished[0]
 
     # The fenced watchdog command continues with ` --wait`; only the inline
     # bare call closes its backtick right after the output directory.
@@ -1380,10 +1383,17 @@ def _assert_poll_is_evidence_gated(text, output_dir, exit_zero_action):
         "'on wake-up, run agents_status' rule"
     )
     poll_line = next(line for line in lines if bare_poll in line)
-    assert poll_line.startswith("- The watchdog exited"), (
-        f"the poll must be gated on the watchdog's exit: {poll_line}"
+    assert poll_line.startswith("- Any other notification"), (
+        f"the poll must be gated on an unexplained notification: {poll_line}"
     )
-    assert exit_zero_action in poll_line
+
+    slot_free = next(line for line in lines if line.startswith("- Watchdog exit 4 (SLOT_FREE)"))
+    assert "`QUEUED:`" in slot_free and "`SLOTS:`" in slot_free
+    assert "fresh watchdog" in slot_free
+    exit_line = next(line for line in lines if line.startswith("- Watchdog exit 0"))
+    assert exit_zero_action in exit_line
+    never = next(line for line in lines if line.startswith("Never:"))
+    assert "per-reviewer summaries" in never
 
 
 def _waiting_text(mod, host, step, output_dir):
@@ -1407,6 +1417,132 @@ def _waiting_text(mod, host, step, output_dir):
     return "\n".join(g["actions"])
 
 
+class TestStep6DispatchWaves:
+    """Step 6 splits dispatch into wave 1 and a queue under the reviewer cap."""
+
+    NAMES = [f"r{index:02d}-reviewer" for index in range(22)]
+
+    def _state(self, cap=20, source="claude_default", queued=None, invalid=()):
+        queued = self.NAMES[20:] if queued is None else queued
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "dispatched_agents": [{"name": n, "domain": "code"} for n in self.NAMES],
+            "dispatch_waves": {
+                "cap": cap, "cap_source": source,
+                "wave_1": [n for n in self.NAMES if n not in queued],
+                "queued": list(queued), "invalid_env": list(invalid),
+            },
+        }
+
+    def _guidance(self, mod, tmp_path, state, host="claude"):
+        kwargs = {"config": {"host": host}} if host == "codex" else {}
+        return mod.get_step_guidance(
+            6, "full", state, {"git": {}}, output_dir=str(tmp_path), **kwargs
+        )
+
+    @staticmethod
+    def _sections(text):
+        head, _, queued = text.partition("### Queued (launch only when step 7's")
+        return head, queued
+
+    def test_claude_wave_1_and_queued_sections_hold_the_split(self, mod, tmp_path):
+        g = self._guidance(mod, tmp_path, self._state())
+        wave_1, queued = self._sections("\n".join(g["actions"]))
+
+        assert "Dispatch the wave-1 agents below in a SINGLE message with MULTIPLE Agent tool calls." in wave_1
+        assert wave_1.count(mod.DISPATCH_PROMPT_LEAD) == 20
+        assert queued.count(mod.DISPATCH_PROMPT_LEAD) == 2
+        assert queued.startswith(" watchdog exits SLOT_FREE)")
+        assert "--agent r20-reviewer" in queued and "--agent r20-reviewer" not in wave_1
+        assert "Do NOT poll or wait here" in g["actions"][-1]
+
+    def test_no_queued_section_when_the_queue_is_empty(self, mod, tmp_path):
+        g = self._guidance(mod, tmp_path, self._state(cap=30, queued=[]))
+        text = "\n".join(g["actions"])
+
+        assert "### Queued" not in text
+        assert text.count(mod.DISPATCH_PROMPT_LEAD) == 22
+
+    def test_claude_rejection_rule(self, mod, tmp_path):
+        text = "\n".join(self._guidance(mod, tmp_path, self._state())["actions"])
+
+        assert "`Lock file is already being held`: retry it once, together with every other lock-file rejection, in ONE follow-up message." in text
+        assert "`Concurrent subagent limit reached`: do not retry" in text
+        assert "stays NOT_DISPATCHED" in text
+
+    @pytest.mark.parametrize("source, phrase", [
+        ("claude_default", "Claude Code's default"),
+        ("claude_env", "from `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`"),
+        ("pirategoat_env", "from `PIRATEGOAT_MAX_CONCURRENT_REVIEWERS`"),
+    ])
+    def test_situation_names_cap_source_and_split(self, mod, tmp_path, source, phrase):
+        g = self._guidance(mod, tmp_path, self._state(source=source))
+        situation = "\n".join(g["situation"])
+
+        assert "**Reviewer cap:** 20 at once" in situation
+        assert phrase in situation
+        assert "Wave 1: 20 launch now; 2 queued until a slot frees." in situation
+
+    def test_situation_names_an_ignored_env_var(self, mod, tmp_path):
+        state = self._state(invalid=["PIRATEGOAT_MAX_CONCURRENT_REVIEWERS"])
+        situation = "\n".join(self._guidance(mod, tmp_path, state)["situation"])
+
+        assert "Ignored `PIRATEGOAT_MAX_CONCURRENT_REVIEWERS`" in situation
+
+    def test_legacy_state_renders_as_before(self, mod, tmp_path):
+        state = self._state()
+        del state["dispatch_waves"]
+        g = self._guidance(mod, tmp_path, state)
+        text = "\n".join(g["actions"])
+
+        assert "Dispatch ALL eligible agents in a SINGLE message with MULTIPLE Agent tool calls." in text
+        assert "### Queued" not in text
+        assert "Lock file" not in text
+        assert "Reviewer cap" not in "\n".join(g["situation"])
+        assert text.count(mod.DISPATCH_PROMPT_LEAD) == 22
+
+    def test_codex_unbounded_dispatches_all_and_does_not_retry_thread_limit(
+        self, mod, tmp_path
+    ):
+        state = self._state(cap=None, source="unbounded", queued=[])
+        g = self._guidance(mod, tmp_path, state, host="codex")
+        text = "\n".join(g["actions"])
+
+        assert "Dispatch ALL eligible reviewers in parallel" in text
+        assert "### Queued" not in text
+        assert "agent-thread limit is not retried" in text
+        assert "exits 4 (SLOT_FREE)" in text
+        assert "none on this host" in "\n".join(g["situation"])
+        assert text.count("spawn_agent` with task name") == 22
+
+    def test_codex_explicit_cap_splits_into_waves(self, mod, tmp_path):
+        state = self._state(source="pirategoat_env")
+        g = self._guidance(mod, tmp_path, state, host="codex")
+        wave_1, queued = self._sections("\n".join(g["actions"]))
+
+        assert "Dispatch the wave-1 reviewers below in parallel" in wave_1
+        assert wave_1.count("spawn_agent` with task name") == 20
+        assert queued.startswith(" status poll exits SLOT_FREE)")
+        assert queued.count("spawn_agent` with task name") == 2
+        assert "task name `r21_reviewer`" in queued
+        assert "Agent tool" not in wave_1 + queued
+        assert "watchdog" not in wave_1 + queued
+
+    @pytest.mark.parametrize("host", ["claude", "codex"])
+    def test_new_prose_has_no_em_dash(self, mod, tmp_path, host):
+        g = self._guidance(mod, tmp_path, self._state(invalid=["X"]), host=host)
+        new_lines = [
+            line for line in g["actions"] + g["situation"]
+            if any(key in line for key in (
+                "wave-1", "Queued", "cap is full", "Reviewer cap", "Ignored",
+                "rejected", "Lock file", "Concurrent subagent", "still rejected",
+                "rejects an Agent call",
+            ))
+        ]
+        assert new_lines
+        assert all("\u2014" not in line for line in new_lines)
+
+
 class TestStep7SaveReviewBaseline:
     def test_confirms_baseline_saved(self, mod, tmp_path):
         """Step 7 confirms the file was written (script writes it internally). Runs for ALL modes."""
@@ -1423,14 +1559,14 @@ class TestStep7SaveReviewBaseline:
 
     def test_claude_host_wait_uses_notifications_and_watchdog(self, mod, tmp_path):
         """Claude-host wait guidance: end-turn + a background watchdog
-        launched right after dispatch, in that order — and NOT_DISPATCHED
-        agents are surfaced so a missed dispatch doesn't silently pass."""
+        launched right after dispatch, in that order, and the watchdog's
+        SLOT_FREE exit launches the queued reviewers."""
         state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
         g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
 
-        assert "NOT_DISPATCHED" in text
+        assert "SLOT_FREE" in text
         assert "END YOUR TURN" in text
         # Watchdog: background wait as a guaranteed wake-up
         assert "--max-seconds 1500" in text
@@ -1456,27 +1592,44 @@ class TestStep7SaveReviewBaseline:
         # Must not carry the Codex-host cadence
         assert "once a minute" not in text.lower()
 
-    def test_an_agent_that_never_started_is_handled_before_step_8(
+    def test_a_queued_agent_is_launched_on_slot_free_before_step_8(
         self, mod, tmp_path
     ):
-        """`check_status` computes `all_done` as `running == 0`, so a
-        reviewer with no started marker never blocks ALL_DONE, and step 8
-        closes review intake on the exit-0 transition — after which that
-        reviewer can no longer submit. So the watchdog-exit bullet has to
-        dispatch NOT_DISPATCHED agents before it takes exit 0, not under
-        exit 2, which those agents can never produce."""
+        """A queued reviewer has no started marker. `all_done` now requires
+        an empty queue, so exit 0 never arrives over it; the wake-up that
+        launches it is the watchdog's exit 4, whose `QUEUED:` line names it.
+        The old "run agents_status after every watchdog exit, dispatch any
+        NOT_DISPATCHED" preamble is gone: the watchdog output is the status."""
         state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
         g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
+        lines = "\n".join(g["actions"]).splitlines()
 
-        poll_line = next(
-            line for line in "\n".join(g["actions"]).splitlines()
-            if line.startswith("- The watchdog exited")
+        slot_free = next(i for i, l in enumerate(lines) if l.startswith("- Watchdog exit 4"))
+        exit_zero = next(i for i, l in enumerate(lines) if l.startswith("- Watchdog exit 0"))
+
+        assert slot_free < exit_zero
+        assert "at most `SLOTS:`" in lines[slot_free]
+        assert "skipping any already accepted" in lines[slot_free]
+        assert "No commentary" in lines[slot_free]
+        assert not any(l.startswith("- The watchdog exited") for l in lines)
+
+    def test_codex_loop_launches_queued_agents_on_exit_4(self, mod, tmp_path):
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        g = mod.get_step_guidance(
+            7, "full", state, ctx, config={"host": "codex"}, output_dir=str(tmp_path)
         )
+        lines = "\n".join(g["actions"]).splitlines()
 
-        assert "NOT_DISPATCHED" in poll_line
-        assert poll_line.index("NOT_DISPATCHED") < poll_line.index(
-            "proceed to step 8"
+        exit_4 = next(l for l in lines if l.startswith("- Exit code 4 (SLOT_FREE)"))
+        assert "`QUEUED:`" in exit_4 and "`SLOTS:`" in exit_4
+        assert "never one already spawned" in exit_4
+        assert "re-run the same call" in exit_4
+        assert not any("NOT_DISPATCHED" in l for l in lines)
+        assert any(
+            l.startswith("No commentary on any iteration") and "result included" in l
+            for l in lines
         )
 
     def test_codex_host_wait_uses_per_minute_polling(self, mod, tmp_path):
@@ -1492,6 +1645,10 @@ class TestStep7SaveReviewBaseline:
         assert "exit code 3" in text.lower()
         # No call-count forecast and no per-poll narration to spend turns on
         assert "Expect roughly" not in text
+        # Exit 0 is guaranteed: running reviewers time out and unstarted
+        # launches are abandoned, both within the agent timeout.
+        assert "TIMED_OUT" in text and "ABANDONED" in text
+        assert "so exit 0 always arrives" in text
 
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
@@ -1858,9 +2015,111 @@ class TestStep8ReadinessGate:
         assert "--max-seconds 60" in text
         assert "exit code 3" in text.lower()
         assert "Expect roughly" not in text
+        assert "TIMED_OUT" in text and "ABANDONED" in text
+        assert "so exit 0 always arrives" in text
 
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
+
+
+class TestStep8QueuedWaiting:
+    """Queued reviewers hold step 8's WAITING gate like running ones."""
+
+    def _state(self, running=(), queued=("x-reviewer",), first_waiting_at=None):
+        waiting = {
+            "running": list(running),
+            "queued": list(queued),
+            "not_dispatched": list(queued) + ["y-reviewer"],
+            "agent_timeout_seconds": 1200,
+        }
+        if first_waiting_at:
+            waiting["first_waiting_at"] = first_waiting_at
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "waiting_on_agents": waiting,
+            "agents": {"dispatched": ["x-reviewer"], "completed": [], "discarded_drafts": []},
+        }
+
+    @pytest.mark.parametrize("host", ["claude", "codex"])
+    def test_queue_alone_returns_the_waiting_briefing(self, mod, tmp_path, host):
+        config = {"host": host} if host == "codex" else None
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(
+            8, "pr", self._state(), ctx, config=config, output_dir=str(tmp_path)
+        )
+
+        assert "WAITING" in g["title"]
+        assert g["blocks_progress"] is True
+        situation = "\n".join(g["situation"])
+        assert "**Queued, not launched yet:** x-reviewer" in situation
+        assert "still running" not in situation
+        # Queued names are not repeated as "dispatch these first".
+        assert "**Also not dispatched:** y-reviewer" in situation
+        actions = "\n".join(g["actions"])
+        assert "SLOT_FREE" in actions and "`QUEUED:`" in actions
+        if host == "claude":
+            assert "no text and no tool call" in actions
+        else:
+            assert "No commentary on any iteration" in actions
+
+    @pytest.mark.parametrize("host", ["claude", "codex"])
+    def test_pending_alone_waits_and_is_never_dispatched_again(
+        self, mod, tmp_path, host
+    ):
+        """A launched reviewer with no started marker yet holds the gate,
+        and is not offered as "dispatch these first" (a duplicate launch)."""
+        state = self._state(queued=())
+        state["waiting_on_agents"]["pending"] = ["p-reviewer"]
+        state["waiting_on_agents"]["not_dispatched"] = ["p-reviewer", "y-reviewer"]
+        config = {"host": host} if host == "codex" else None
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+
+        g = mod.get_step_guidance(
+            8, "pr", state, ctx, config=config, output_dir=str(tmp_path)
+        )
+
+        assert "WAITING" in g["title"]
+        assert g["blocks_progress"] is True
+        situation = "\n".join(g["situation"])
+        assert "**Launched, starting up (no action):** p-reviewer." in situation
+        assert "**Also not dispatched:** y-reviewer \u2014" in situation
+        assert "Queued, not launched yet" not in situation
+        assert "\u2014" not in situation.split("**Launched", 1)[1].splitlines()[0]
+
+    @pytest.mark.parametrize("host", ["claude", "codex"])
+    def test_an_abandoned_reviewer_is_not_offered_for_dispatch(
+        self, mod, tmp_path, host
+    ):
+        """An abandoned reviewer was launched and never started; offering it
+        as "dispatch these first" would restart the launches it ran out of."""
+        state = self._state(running=["r-reviewer"], queued=())
+        state["waiting_on_agents"]["abandoned"] = ["z-reviewer"]
+        state["waiting_on_agents"]["not_dispatched"] = ["z-reviewer", "y-reviewer"]
+        config = {"host": host} if host == "codex" else None
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+
+        g = mod.get_step_guidance(
+            8, "pr", state, ctx, config=config, output_dir=str(tmp_path)
+        )
+
+        situation = "\n".join(g["situation"])
+        assert "**Also not dispatched:** y-reviewer \u2014" in situation
+        assert "z-reviewer" not in situation
+
+    def test_escalation_names_the_queued_reviewers(self, mod, tmp_path):
+        from datetime import datetime, timedelta, timezone
+
+        past = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+        state = self._state(running=["r-reviewer"], first_waiting_at=past)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+
+        assert "WAITING" not in g["title"]
+        situation = "\n".join(g["situation"])
+        assert "never finished: r-reviewer" in situation
+        assert "Queued reviewers never launched: x-reviewer" in situation
 
 
 class TestCodexDraftRecovery:

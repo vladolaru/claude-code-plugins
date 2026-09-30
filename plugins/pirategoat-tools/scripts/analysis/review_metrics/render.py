@@ -243,6 +243,26 @@ def _table_row(run: dict[str, Any]) -> list[str]:
     ]
 
 
+def _dispatch_waves_lines(block: object) -> list[str]:
+    """One summary line for the cohort's reviewer waves, or none.
+
+    Absent when no run in the cohort carried a wave record, so a cohort of
+    legacy runs renders exactly as it did before the family existed.
+    """
+    if not isinstance(block, dict) or not block.get("measured_runs"):
+        return []
+    sources = block.get("cap_sources") or {}
+    source_text = ", ".join(f"{name} {count}" for name, count in sources.items())
+    return [
+        f"Reviewer waves ({block['measured_runs']} runs measured; cap "
+        f"{source_text or 'unknown'}): queued in "
+        f"{block['runs_with_queueing']} runs ({block['queued_total']} reviewers), "
+        f"late starts in {block['runs_with_late_starts']} "
+        f"({block['late_starts_total']}), never started in "
+        f"{block['runs_with_never_started']} ({block['never_started_total']})."
+    ]
+
+
 def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
     """Render a compact, missing-aware cohort table."""
     if not runs:
@@ -297,6 +317,7 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         "",
         f"Runs: {aggregate.get('runs', len(runs))}; "
         f"transcript data: {aggregate.get('transcript_runs', 0)} available.",
+        *_dispatch_waves_lines(aggregate.get("dispatch_waves")),
         "The generated-scope assignment is descriptive, not proof of model "
         "reads; "
         "observed reads are non-exhaustive.",

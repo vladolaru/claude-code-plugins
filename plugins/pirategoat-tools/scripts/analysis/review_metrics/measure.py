@@ -960,6 +960,12 @@ def _pipeline_metric_availability(
             )
             else "partial"
         )
+    # Reviewer waves: the sanitized section is all-or-nothing, so present
+    # is complete and absent (legacy plan, or dropped as malformed) is
+    # missing, never a measured "no queueing".
+    dispatch_waves_state = (
+        "complete" if isinstance(manifest.get("dispatch_waves"), dict) else "missing"
+    )
     usage = manifest.get("usage")
     usage_availability = usage.get("availability") if isinstance(usage, dict) else None
     usage_shares_state = (
@@ -998,6 +1004,7 @@ def _pipeline_metric_availability(
         "assignment": assignment_state,
         "lifecycle": lifecycle_state,
         "synthesis_agents": synthesis_state,
+        "dispatch_waves": dispatch_waves_state,
         "usage_shares": usage_shares_state,
         "evidence": evidence_state,
         "outcomes": outcomes_state,
@@ -1327,6 +1334,7 @@ def measure_run(
         # cannot vouch for which run these durations belong to, so they
         # are withdrawn rather than attributed to the wrong one.
         measured["synthesis_agents"] = None
+        measured["dispatch_waves"] = None
         measured["reviewer_agents"] = None
         measured["evidence"] = None
         measured["transcript"] = _sanitize_transcript(

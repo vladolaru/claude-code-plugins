@@ -19,6 +19,7 @@ from .contracts import (
     _ASSIGNMENT_FIELDS,
     _ASSIGNMENT_PATH_LIST_FIELDS,
     _BASE_FETCH_STATUSES,
+    _CAP_SOURCES,
     _CHANGED_FILES_FIELD,
     _DEPENDENCY_REFRESH_EXIT_STATUSES,
     _DEPENDENCY_REFRESH_STATUSES,
@@ -1255,6 +1256,46 @@ def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:
     }
 
 
+_DISPATCH_WAVES_NAME_LISTS = ("late_starts", "queued_started", "never_started")
+
+
+def _sanitize_dispatch_waves(value: object) -> dict[str, Any] | None:
+    """Sanitize the step-6 reviewer-wave section, or None.
+
+    None means the run has no measurable wave record: a legacy plan, or a
+    section this function cannot vouch for. Malformed is dropped whole,
+    never repaired field by field: `cap` must be a positive int or null
+    (unbounded), `cap_source` one of the producer's sources, the two sizes
+    exact non-negative ints, and each name list a list of producer agent
+    names. The names are the ones the `dispatch` section already carries.
+    """
+    if not isinstance(value, dict):
+        return None
+    cap = value.get("cap")
+    if cap is not None and (type(cap) is not int or cap <= 0):
+        return None
+    cap_source = _enum(value.get("cap_source"), _CAP_SOURCES)
+    wave_1_size = _nonnegative_exact_int(value.get("wave_1_size"))
+    queued_size = _nonnegative_exact_int(value.get("queued_size"))
+    if cap_source is None or wave_1_size is None or queued_size is None:
+        return None
+    result: dict[str, Any] = {
+        "cap": cap,
+        "cap_source": cap_source,
+        "wave_1_size": wave_1_size,
+        "queued_size": queued_size,
+    }
+    for key in _DISPATCH_WAVES_NAME_LISTS:
+        names = value.get(key)
+        if not isinstance(names, list) or not all(
+            isinstance(name, str) and _PRODUCER_AGENT_NAME_RE.fullmatch(name)
+            for name in names
+        ):
+            return None
+        result[key] = sorted(set(names))
+    return result
+
+
 def _sanitize_worktree_hygiene(value: object) -> dict[str, Any] | None:
     """Sanitize the step-11 worktree-hygiene section, or None.
 
@@ -1959,6 +2000,7 @@ _OPTIONAL_SECTION_SANITIZERS: dict[str, Any] = {
     "reviewer_markdown": _sanitize_derived_markdown_outcome,
     "findings_markdown": _sanitize_derived_markdown_outcome,
     "host_context": _sanitize_host_context,
+    "dispatch_waves": _sanitize_dispatch_waves,
 }
 
 
@@ -2099,6 +2141,7 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         "reviewer_markdown": optional_sections.get("reviewer_markdown"),
         "findings_markdown": optional_sections.get("findings_markdown"),
         "host_context": optional_sections.get("host_context"),
+        "dispatch_waves": optional_sections.get("dispatch_waves"),
         "outcome": _sanitize_outcome(value.get("outcome")),
         "availability": safe_availability,
         "warnings": warnings,

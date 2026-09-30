@@ -105,6 +105,7 @@ OPTIONAL_SECTION_AVAILABILITY_KEYS = (
     "reviewer_markdown",
     "findings_markdown",
     "host_context",
+    "dispatch_waves",
 )
 _BASE_FETCH_STATUSES = frozenset({"fetched", "failed"})
 _SCOPE_CHECK_STATUSES = frozenset({
@@ -908,6 +909,15 @@ class ReviewTelemetry:
         )
         manifest["assignment"] = assignment
         manifest["availability"]["assignment"] = assignment is not None
+        # Step 6's wave record against the started markers. Additive and
+        # optional under schema 3: a legacy plan has no record and the
+        # section is None.
+        manifest["dispatch_waves"] = (
+            manifest_sections.build_dispatch_waves_manifest(self.output_dir)
+        )
+        manifest["availability"]["dispatch_waves"] = (
+            manifest["dispatch_waves"] is not None
+        )
         manifest["dependency_refresh"] = (
             manifest_sections.build_dependency_refresh_manifest(self.output_dir)
         )

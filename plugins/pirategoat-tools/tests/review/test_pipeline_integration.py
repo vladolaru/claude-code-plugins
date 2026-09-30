@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1600,6 +1600,111 @@ class TestStep6Orchestration:
         assert repr("DISPATCHED") in message
 
 
+class TestStep6DispatchWaves:
+    """Step 6 stamps the `dispatch_waves` record into the final plan."""
+
+    @pytest.fixture(autouse=True)
+    def _no_cap_env(self, monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_MAX_CONCURRENT_REVIEWERS", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", raising=False)
+
+    def _write(self, tmp_path, dispatched=22, skipped=2):
+        agents = [
+            {"name": f"r{index:02d}-reviewer", "status": "DISPATCH"}
+            for index in range(dispatched)
+        ]
+        for index in range(skipped):
+            agents.insert(index * 3, {
+                "name": f"s{index:02d}-reviewer", "status": "SKIPPED_TRIAGE",
+                "reason": "no files",
+            })
+        plan = {"agents": agents, "git_range": "abc..HEAD"}
+        _artifact(tmp_path, "dispatch_plan").write_text(json.dumps(plan))
+        return plan
+
+    def _run(self, mod, tmp_path, host="claude"):
+        state = {}
+        mod._orchestrate_step(6, "full", {"host": host}, state, {}, str(tmp_path))
+        written = json.loads(_artifact(tmp_path, "dispatch_plan").read_text())
+        return state, written
+
+    def test_claude_default_cap_splits_in_plan_order(self, mod, tmp_path):
+        plan = self._write(tmp_path)
+
+        state, written = self._run(mod, tmp_path)
+
+        record = written["dispatch_waves"]
+        names = [f"r{index:02d}-reviewer" for index in range(22)]
+        assert (record["cap"], record["cap_source"]) == (20, "claude_default")
+        assert record["wave_1"] == names[:20]
+        assert record["queued"] == names[20:]
+        # Rows are untouched; skipped rows never enter either list.
+        assert written["agents"] == plan["agents"]
+        assert not any(n.startswith("s") for n in record["wave_1"] + record["queued"])
+        assert state["dispatch_waves"] == {
+            "cap": 20, "cap_source": "claude_default",
+            "wave_1": names[:20], "queued": names[20:], "invalid_env": [],
+        }
+        # The one plan reader still accepts what step 6 wrote.
+        assert agents_status.load_dispatch_plan(
+            _artifact(tmp_path, "dispatch_plan")
+        ) == written
+
+    def test_claude_env_cap_and_invalid_override_are_projected(
+        self, mod, tmp_path, monkeypatch
+    ):
+        self._write(tmp_path, dispatched=5, skipped=0)
+        monkeypatch.setenv("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", "3")
+        monkeypatch.setenv("PIRATEGOAT_MAX_CONCURRENT_REVIEWERS", "zero")
+
+        state, written = self._run(mod, tmp_path)
+
+        assert written["dispatch_waves"]["cap_source"] == "claude_env"
+        assert len(written["dispatch_waves"]["queued"]) == 2
+        assert state["dispatch_waves"]["invalid_env"] == [
+            "PIRATEGOAT_MAX_CONCURRENT_REVIEWERS",
+        ]
+
+    def test_codex_host_is_unbounded(self, mod, tmp_path):
+        self._write(tmp_path)
+
+        _, written = self._run(mod, tmp_path, host="codex")
+
+        record = written["dispatch_waves"]
+        assert (record["cap"], record["cap_source"]) == (None, "unbounded")
+        assert record["queued"] == []
+        assert len(record["wave_1"]) == 22
+
+    def test_rerun_restamps_and_leaves_the_initial_plan_alone(
+        self, mod, tmp_path, monkeypatch
+    ):
+        plan = self._write(tmp_path, dispatched=3, skipped=0)
+        initial_path = _artifact(tmp_path, "dispatch_plan_initial")
+        initial_path.write_text(json.dumps(plan))
+        stamps = iter(["2026-09-28T12:00:00+00:00", "2026-09-28T12:05:00+00:00"])
+
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.fromisoformat(next(stamps))
+
+        monkeypatch.setitem(mod._orchestrate_step_6.__globals__, "datetime", _Clock)
+        _, first = self._run(mod, tmp_path)
+        _, second = self._run(mod, tmp_path)
+
+        assert first["dispatch_waves"]["stamped_at"] == "2026-09-28T12:00:00+00:00"
+        assert second["dispatch_waves"]["stamped_at"] == "2026-09-28T12:05:00+00:00"
+        assert json.loads(initial_path.read_text()) == plan
+
+    def test_no_plan_clears_a_stale_projection(self, mod, tmp_path):
+        state = {"dispatch_waves": {"cap": 1}}
+
+        mod._orchestrate_step(6, "full", {}, state, {}, str(tmp_path))
+
+        assert "dispatch_waves" not in state
+        assert state["dispatched_agents"] == []
+
+
 class TestStep7Orchestration:
     """Step 7 main() writes the run's non-incremental baseline."""
 
@@ -1769,6 +1874,118 @@ class TestBaselineInTargetDir:
 
 class TestStep8Orchestration:
     """Step 8 main() reads change-purpose.md and agent completion status."""
+
+    def _queued_plan(self, tmp_path):
+        """code-reviewer finished; security-reviewer queued, never launched."""
+        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH"},
+                {"name": "security-reviewer", "status": "DISPATCH"},
+            ],
+            "dispatch_waves": {
+                "schema": 1, "cap": 1, "cap_source": "pirategoat_env",
+                "wave_1": ["code-reviewer"], "queued": ["security-reviewer"],
+                "stamped_at": datetime.now(timezone.utc).isoformat(),
+                "grace_seconds": 90,
+            },
+        }))
+        _save_and_finalize(tmp_path, "code")
+
+    def _stub_reconciliation(self, mod, tmp_path, monkeypatch):
+        def reconciliation_succeeds(cmd, *_args, **_kwargs):
+            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__, "_run_subprocess",
+            reconciliation_succeeds,
+        )
+
+    def test_step_8_keeps_intake_open_over_a_queued_reviewer(
+        self, mod, tmp_path, monkeypatch
+    ):
+        self._queued_plan(tmp_path)
+        self._stub_reconciliation(mod, tmp_path, monkeypatch)
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert not (_artifact(tmp_path, "review_intake")).exists()
+        assert state["waiting_on_agents"]["queued"] == ["security-reviewer"]
+        assert state["waiting_on_agents"]["running"] == []
+
+    def test_step_8_keeps_intake_open_over_a_launched_unstarted_reviewer(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """Wave 1 just launched: security-reviewer has no started marker
+        yet, inside grace. It is pending, and intake must not close."""
+        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH"},
+                {"name": "security-reviewer", "status": "DISPATCH"},
+            ],
+            "dispatch_waves": {
+                "schema": 1, "cap": 2, "cap_source": "claude_default",
+                "wave_1": ["code-reviewer", "security-reviewer"], "queued": [],
+                "stamped_at": datetime.now(timezone.utc).isoformat(),
+                "grace_seconds": 180,
+            },
+        }))
+        _save_and_finalize(tmp_path, "code")
+        self._stub_reconciliation(mod, tmp_path, monkeypatch)
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert not (_artifact(tmp_path, "review_intake")).exists()
+        assert state["waiting_on_agents"]["pending"] == ["security-reviewer"]
+        assert state["waiting_on_agents"]["queued"] == []
+
+    def test_step_8_closes_intake_over_an_abandoned_reviewer(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """security-reviewer had MAX_RELEASES counted releases and never
+        started: abandoned, so intake closes at once without the
+        escalation window, as over a legacy NOT_DISPATCHED row."""
+        now = datetime.now(timezone.utc)
+        released_at = (now - timedelta(seconds=400)).isoformat()
+        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH"},
+                {"name": "security-reviewer", "status": "DISPATCH"},
+            ],
+            "dispatch_waves": {
+                "schema": 1, "cap": 1, "cap_source": "claude_env",
+                "wave_1": ["code-reviewer"], "queued": ["security-reviewer"],
+                "stamped_at": (now - timedelta(seconds=600)).isoformat(),
+                "grace_seconds": 180,
+                "released": {"security-reviewer": {
+                    "at": released_at, "count": 2, "counted": 2,
+                }},
+            },
+        }))
+        _save_and_finalize(tmp_path, "code")
+        self._stub_reconciliation(mod, tmp_path, monkeypatch)
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert (_artifact(tmp_path, "review_intake")).exists()
+        assert "waiting_on_agents" not in state
+
+    def test_step_8_closes_intake_over_a_queue_past_the_escalation_window(
+        self, mod, tmp_path, monkeypatch
+    ):
+        self._queued_plan(tmp_path)
+        self._stub_reconciliation(mod, tmp_path, monkeypatch)
+        state = {
+            "resolved_params": {},
+            "waiting_on_agents": {"first_waiting_at": "2000-01-01T00:00:00+00:00"},
+        }
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert (_artifact(tmp_path, "review_intake")).exists()
 
     def test_step_8_keeps_oversized_host_context_out_of_reconciliation_argv(
         self, mod, tmp_path, monkeypatch

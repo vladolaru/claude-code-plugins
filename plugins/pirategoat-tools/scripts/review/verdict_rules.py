@@ -36,13 +36,16 @@ SEVERITY_RANK = {
 # reconciled findings ledger may carry. REVIEW_VERDICTS adds the one
 # verdict no ladder produces: a reviewer with nothing in scope abstains,
 # and abstention is not a threshold outcome. PIPELINE_VERDICTS is the
-# uppercase layer a reviewer echoes in its return signal; `publish_verdict`
-# maps onto the three of them the terminal result can carry, and BLOCK
-# is in the tuple for the return signal alone.
+# uppercase vocabulary `analysis/session_metrics.py` reads a reviewer's
+# verdict in: from legacy `VERDICT:` return-signal lines in old
+# transcripts, and from the builder's `DRAFT SAVED: verdict` receipt,
+# upper-cased. The return signal itself no longer carries a verdict.
+# `publish_verdict` maps onto the three of them the terminal result can
+# carry; BLOCK stays for both session-metrics sources.
 LEDGER_VERDICTS = tuple(VERDICT_RANK)
 # The abstention, spelled once: the builder, the review validator, the
-# reconciliator's save gate, bootstrap's empty-scope return signal and the
-# session-metrics reader of that signal all use it.
+# reconciliator's save gate and the session-metrics reader of an
+# empty-scope reviewer all use it.
 NOT_APPLICABLE_VERDICT = "not_applicable"
 REVIEW_VERDICTS = LEDGER_VERDICTS + (NOT_APPLICABLE_VERDICT,)
 PIPELINE_VERDICTS = ("APPROVE", "COMMENT", "REQUEST_CHANGES", "BLOCK")

@@ -49,7 +49,7 @@ _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
 from analysis.review_transcript import usage_summary_for_transcript  # noqa: E402
 from review.verdict_rules import (  # noqa: E402
-    NOT_APPLICABLE_VERDICT, PIPELINE_VERDICTS, VALID_SEVERITIES,
+    NOT_APPLICABLE_VERDICT, PIPELINE_VERDICTS, REVIEW_VERDICTS, VALID_SEVERITIES,
 )
 
 # The return-signal verdicts a session can end on: the pipeline verdicts a
@@ -64,6 +64,45 @@ _VERDICT_RE = re.compile(
     ))
     + r")\b"
 )
+
+# The builder's save receipt (`agent/output.py` `_draft_receipt`), which a
+# reviewer's transcript carries once per save_draft() call. It is the one
+# source of verdict and counts since the return signal was trimmed to
+# `STATUS: FINISHED` plus the output path. Lines are read from raw JSONL,
+# so inside a tool result the receipt's newline is the two characters
+# `\n`: the verdict token ends at a word boundary (a backslash or quote is
+# not a word character), and the totals are `findings N` plus the non-zero
+# severities in parentheses. A source listing of the builder spells
+# `{review['verdict']}` there, which no token matches.
+_RECEIPT_VERDICT_RE = re.compile(
+    r"DRAFT SAVED: verdict ("
+    + "|".join(re.escape(token) for token in REVIEW_VERDICTS)
+    + r")\b"
+)
+_RECEIPT_TOTALS_RE = re.compile(
+    r"DRAFT TOTALS: findings (\d+)(?: \(([a-z]+ \d+(?:, [a-z]+ \d+)*)\))?"
+)
+# Bootstrap's stub line for an empty scope, which ends the review before
+# any save, so no receipt follows. Anchored to a line of its own (start of
+# the JSON string, or an escaped newline, on both sides) so the protocol
+# prose that quotes it in backticks is not read as one.
+_NO_DOMAIN_FILES_RE = re.compile(r'(?:^|\\n|")STATUS: NO_DOMAIN_FILES(?=\\n|"|$)')
+
+
+def _receipt_counts(totals_match) -> tuple:
+    """(severity_counts, total_findings) from a DRAFT TOTALS match.
+
+    Severities the receipt omits were zero; one the vocabulary does not
+    know is ignored rather than invented.
+    """
+    counts = {severity: 0 for severity in VALID_SEVERITIES}
+    for part in (totals_match.group(2) or "").split(", "):
+        if not part:
+            continue
+        severity, _, number = part.partition(" ")
+        if severity in counts:
+            counts[severity] = int(number)
+    return counts, int(totals_match.group(1))
 
 
 # -- Known reviewer agent types --
@@ -468,8 +507,17 @@ def extract_subagent_metrics(filepath: str) -> dict:
     Returns a dict with:
       - input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
       - duration_seconds, start_time, end_time
-      - verdict (APPROVE/COMMENT/REQUEST_CHANGES if present)
+      - verdict (APPROVE/COMMENT/REQUEST_CHANGES/BLOCK or not_applicable,
+        if present)
       - severity_counts, total_findings
+
+    Verdict and counts come from the last builder receipt (`DRAFT SAVED:`
+    / `DRAFT TOTALS:`), the ledger verdict upper-cased into the pipeline
+    vocabulary. With no receipt, bootstrap's `STATUS: NO_DOMAIN_FILES`
+    stub means not_applicable with zero counts. Only when neither is
+    present does the legacy return signal (`VERDICT:` / `COUNTS:` lines,
+    last one wins) supply them, which is how transcripts from before the
+    signal was trimmed are still read.
       - model
       - line_count
     """
@@ -497,6 +545,9 @@ def extract_subagent_metrics(filepath: str) -> dict:
     first_timestamp = None
     last_timestamp = None
     models_seen = set()
+    receipt_verdict = None
+    receipt_counts = None
+    no_domain_files = False
 
     try:
         with open(filepath, "r") as f:
@@ -518,7 +569,19 @@ def extract_subagent_metrics(filepath: str) -> dict:
                         first_timestamp = ts_str
                     last_timestamp = ts_str
 
-                # Verdict (reviewer agents): see _VERDICT_RE.
+                # Builder receipts (reviewer agents): last one wins.
+                for receipt in _RECEIPT_VERDICT_RE.finditer(line):
+                    token = receipt.group(1)
+                    receipt_verdict = (
+                        NOT_APPLICABLE_VERDICT
+                        if token == NOT_APPLICABLE_VERDICT else token.upper()
+                    )
+                for totals in _RECEIPT_TOTALS_RE.finditer(line):
+                    receipt_counts = _receipt_counts(totals)
+                if _NO_DOMAIN_FILES_RE.search(line):
+                    no_domain_files = True
+
+                # Legacy verdict (return signal): see _VERDICT_RE.
                 verdict_match = _VERDICT_RE.search(line)
                 if verdict_match:
                     token = verdict_match.group(1)
@@ -551,6 +614,16 @@ def extract_subagent_metrics(filepath: str) -> dict:
     except (IOError, OSError) as e:
         print(f"Error reading {filepath}: {e}", file=sys.stderr)
         return metrics
+
+    if receipt_verdict is not None or receipt_counts is not None:
+        if receipt_verdict is not None:
+            metrics["verdict"] = receipt_verdict
+        if receipt_counts is not None:
+            metrics["severity_counts"], metrics["total_findings"] = receipt_counts
+    elif no_domain_files:
+        metrics["verdict"] = NOT_APPLICABLE_VERDICT
+        metrics["severity_counts"] = {severity: 0 for severity in VALID_SEVERITIES}
+        metrics["total_findings"] = 0
 
     summary = usage_summary_for_transcript(filepath)["usage"]
     metrics["input_tokens"] = summary["input_tokens"]

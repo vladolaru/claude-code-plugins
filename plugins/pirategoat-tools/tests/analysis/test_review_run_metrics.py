@@ -10167,3 +10167,126 @@ class TestOutcomeReconciliationVerification:
         assert outcome["reconciliation_verification"] == {
             "status": None, "repository_reads": 0, "verified_concern_count": 0,
         }
+
+
+def _waves_manifest(run_id: str = "run-1", **section) -> dict:
+    manifest = _manifest(run_id)
+    manifest["dispatch_waves"] = {
+        "cap": 20,
+        "cap_source": "claude_default",
+        "wave_1_size": 20,
+        "queued_size": 0,
+        "late_starts": [],
+        "queued_started": [],
+        "never_started": [],
+        **section,
+    }
+    manifest["availability"]["dispatch_waves"] = True
+    return manifest
+
+
+def _measure(manifest: dict) -> dict:
+    return measure_run(manifest, Path("/nonexistent"), include_transcripts=False)
+
+
+class TestDispatchWavesMeasurement:
+    """Step 6's reviewer waves per run: complete when the manifest carries
+    the section, missing (never "no queueing") when it does not."""
+
+    def test_a_measured_section_surfaces_as_complete(self):
+        measured = _measure(_waves_manifest(
+            queued_size=2, queued_started=["security-reviewer"],
+            late_starts=["code-reviewer"],
+        ))
+
+        assert measured["metric_availability"]["dispatch_waves"] == "complete"
+        assert measured["dispatch_waves"]["queued_size"] == 2
+        assert measured["dispatch_waves"]["late_starts"] == ["code-reviewer"]
+        assert measured["availability"]["dispatch_waves"] is True
+
+    def test_a_run_without_the_section_is_missing(self):
+        measured = _measure(_manifest("run-1"))
+
+        assert measured["metric_availability"]["dispatch_waves"] == "missing"
+        assert measured["dispatch_waves"] is None
+
+    def test_an_unbounded_cap_is_kept_as_null(self):
+        measured = _measure(_waves_manifest(cap=None, cap_source="unbounded"))
+
+        assert measured["dispatch_waves"]["cap"] is None
+        assert measured["metric_availability"]["dispatch_waves"] == "complete"
+
+    @pytest.mark.parametrize("field, value", [
+        ("cap", 0),
+        ("cap", True),
+        ("cap_source", "guess"),
+        ("queued_size", -1),
+        ("wave_1_size", "20"),
+        ("late_starts", "code-reviewer"),
+        ("never_started", ["../etc"]),
+    ])
+    def test_a_malformed_section_is_dropped_not_crashed_on(self, field, value):
+        measured = _measure(_waves_manifest(**{field: value}))
+
+        assert measured["dispatch_waves"] is None
+        assert measured["metric_availability"]["dispatch_waves"] == "missing"
+        assert measured["availability"]["dispatch_waves"] is False
+
+
+class TestDispatchWavesCohort:
+    def test_one_legacy_and_two_measured_runs(self):
+        runs = [
+            _measure(_manifest("run-1")),
+            _measure(_waves_manifest("run-2")),
+            _measure(_waves_manifest(
+                "run-3", cap=3, cap_source="claude_env", wave_1_size=3,
+                queued_size=2, queued_started=["patterns-reviewer"],
+                late_starts=["code-reviewer"],
+                never_started=["performance-reviewer"],
+            )),
+        ]
+
+        block = aggregate_cohort(runs)["dispatch_waves"]
+
+        assert block == {
+            "measured_runs": 2,
+            "runs_with_queueing": 1,
+            "queued_total": 2,
+            "runs_with_late_starts": 1,
+            "late_starts_total": 1,
+            "runs_with_never_started": 1,
+            "never_started_total": 1,
+            "cap_sources": {"claude_default": 1, "claude_env": 1},
+            "availability": block["availability"],
+        }
+        assert block["availability"]["complete"] == 2
+        assert block["availability"]["missing"] == 1
+
+    def test_an_unmeasured_cohort_reports_no_counts(self):
+        block = aggregate_cohort([_measure(_manifest("run-1"))])["dispatch_waves"]
+
+        assert block["measured_runs"] == 0
+        assert block["queued_total"] is None
+        assert block["runs_with_late_starts"] is None
+        assert block["cap_sources"] is None
+
+    def test_the_text_report_carries_one_waves_line(self):
+        runs = [
+            _measure(_manifest("run-1")),
+            _measure(_waves_manifest(
+                "run-2", cap=3, cap_source="claude_env", queued_size=2,
+                late_starts=["code-reviewer"],
+            )),
+        ]
+
+        text = format_table(runs, aggregate_cohort(runs))
+
+        assert (
+            "Reviewer waves (1 runs measured; cap claude_env 1): queued in 1 "
+            "runs (2 reviewers), late starts in 1 (1), never started in 0 (0)."
+        ) in text
+
+    def test_a_legacy_cohort_renders_no_waves_line(self):
+        runs = [_measure(_manifest("run-1"))]
+
+        assert "Reviewer waves" not in format_table(runs, aggregate_cohort(runs))

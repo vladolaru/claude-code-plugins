@@ -27,16 +27,19 @@ try:
         SCRIPTS_DIR,
         _git_output,
         _host,
+        resolve_reviewer_cap,
     )
     from .dispatch_status import (
         ORPHANED_FILES_KEY,
         DISPATCH_OVERRIDE,
+        DISPATCH_WAVES_KEY,
         DISPATCHED_STATUSES,
         LOW_SIGNAL_DISPATCH_SIGNALS,
         OVERRIDE_REASON_KEY,
         PLANNER_STATUS_KEY,
         SKIPPED_OVERRIDE,
         SKIPPED_STATUSES,
+        build_dispatch_waves,
         load_dispatch_plan,
     )
     from .dependency_refresh import (
@@ -77,16 +80,19 @@ except ImportError:
         SCRIPTS_DIR,
         _git_output,
         _host,
+        resolve_reviewer_cap,
     )
     from review.dispatch_status import (
         ORPHANED_FILES_KEY,
         DISPATCH_OVERRIDE,
+        DISPATCH_WAVES_KEY,
         DISPATCHED_STATUSES,
         LOW_SIGNAL_DISPATCH_SIGNALS,
         OVERRIDE_REASON_KEY,
         PLANNER_STATUS_KEY,
         SKIPPED_OVERRIDE,
         SKIPPED_STATUSES,
+        build_dispatch_waves,
         load_dispatch_plan,
     )
     from review.dependency_refresh import (
@@ -1326,14 +1332,47 @@ def _orchestrate_step_6(mode, config, state, context, output_dir):
             # Recompute dispatch_plan_summary from final plan (post-override)
             all_agents = plan["agents"]
             state["dispatch_plan_summary"] = _dispatch_plan_summary(all_agents)
+            state["dispatch_waves"] = _stamp_dispatch_waves(
+                plan, plan_path, config, output_dir
+            )
         # As in step 5: a malformed or unreadable plan raises; only a plan
         # removed since the existence check reads as no plan.
         except FileNotFoundError:
             state["dispatched_agents"] = []
+            state.pop("dispatch_waves", None)
     else:
         state["dispatched_agents"] = []
+        state.pop("dispatch_waves", None)
 
     return context
+
+
+def _stamp_dispatch_waves(plan, plan_path, config, output_dir):
+    """Stamp the plan's `dispatch_waves` record and return its projection.
+
+    Resolves the reviewer cap for this host, splits the dispatched rows into
+    wave 1 and the queue (`dispatch_status.build_dispatch_waves`), and
+    rewrites the plan atomically with the record beside the untouched rows.
+    Re-running step 6 restamps it with a fresh `stamped_at`. The returned
+    projection is what the step-6 briefing reads from state, including the
+    names of cap variables that held an invalid value.
+    """
+    cap, cap_source, invalid_env = resolve_reviewer_cap(_host(config), os.environ)
+    record = build_dispatch_waves(
+        plan["agents"], cap, cap_source,
+        datetime.now(timezone.utc).isoformat(),
+    )
+    plan[DISPATCH_WAVES_KEY] = record
+    # The watchdog stamps releases into this record under the same lock.
+    with atomic_io.output_dir_lock(output_dir):
+        atomic_write_json(plan_path, plan)
+    return {
+        "cap": record["cap"],
+        "cap_source": record["cap_source"],
+        "wave_1": list(record["wave_1"]),
+        "queued": list(record["queued"]),
+        "invalid_env": invalid_env,
+    }
 
 
 def _orchestrate_step_7(mode, config, state, context, output_dir):
@@ -1390,7 +1429,11 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             "remains open"
         ) from exc
 
-    if not status["all_done"]:
+    # The queue and the pending (launched, not started) reviewers are folded
+    # into `all_done` by check_status() already; they are named here too
+    # because closing intake over a reviewer that has not started is the
+    # one outcome this gate exists to refuse.
+    if not status["all_done"] or status["queued"] or status["pending"]:
         previous_waiting = state.get("waiting_on_agents", {})
         agent_timeout = status["timeout_seconds"]
         waiting = {
@@ -1402,6 +1445,9 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
                 agent["name"] for agent in status["agents"]
                 if agent["status"] == "NOT_DISPATCHED"
             ],
+            "queued": list(status["queued"]),
+            "pending": list(status["pending"]),
+            "abandoned": list(status["abandoned"]),
             "agent_timeout_seconds": agent_timeout,
             "first_waiting_at": previous_waiting.get("first_waiting_at")
             or datetime.now(timezone.utc).isoformat(),

@@ -1520,6 +1520,15 @@ class TestAnalyzeSubagent:
                 "poll_outcome", "not_applicable", id="poll-wait-expired",
             ),
             pytest.param(
+                f"{_POLL_COMMAND} --wait --max-seconds 1500", 4,
+                f"{_POLL_STATUS}\nQUEUED: code-reviewer\nSLOTS: 1",
+                "poll_outcome", "not_applicable", id="poll-slot-free",
+            ),
+            pytest.param(
+                f"{_POLL_COMMAND} --wait --max-seconds 1500", 4, "output",
+                "structured_failure", "none", id="poll-exit-4-without-status",
+            ),
+            pytest.param(
                 f"{_POLL_COMMAND} 2>&1", 2, _POLL_STATUS,
                 "poll_outcome", "not_applicable", id="poll-redirected",
             ),
@@ -1548,8 +1557,8 @@ class TestAnalyzeSubagent:
     def test_poll_exit_is_listed_as_poll_outcome_by_program_and_code(
         self, tmp_path, command, exit_code, output, category, recovery
     ):
-        """`agents_status.py` exits 2 (still running) and 3 (`--wait`
-        expired) by contract; the harness flags both as errors. The
+        """`agents_status.py` exits 2 (still running), 3 (`--wait`
+        expired) and 4 (SLOT_FREE) by contract; the harness flags both as errors. The
         exemption needs all three of the program, the code, and the status
         render — argparse answers an unknown flag with 2 and the Python
         launcher answers a missing script path with 2, from a command line

@@ -59,7 +59,6 @@ from review.reviewer_lifecycle import (
     scope_summary_path,
     scoped_diff_path,
 )
-from review.verdict_rules import NOT_APPLICABLE_VERDICT, PIPELINE_VERDICTS
 
 
 class ReviewArgumentParser(argparse.ArgumentParser):
@@ -1454,13 +1453,11 @@ def build_output(
     lines.append("  Only after that command prints REVIEW FINALIZED is the review immutable.")
     lines.append("  Only then return the FINISHED signal below.")
     lines.append("")
-    lines.append("Return signal format:")
+    lines.append("Return signal format (nothing else: the orchestrator reads counts and")
+    lines.append("verdict from the review file):")
     lines.append("  STATUS: FINISHED")
     lines.append("  OUTPUT_FILES:")
     lines.append(f"    - {paths.final}")
-    lines.append("  COUNTS: critical: N, high: N, medium: N, low: N  (copied from DRAFT TOTALS)")
-    lines.append("  VERDICT: <" + "|".join(PIPELINE_VERDICTS) + ">")
-    lines.append("  SUMMARY: <one sentence>")
     lines.append("")
     lines.append(f"PLUGIN_ROOT: {plugin_root}")
     lines.append(
@@ -1512,20 +1509,20 @@ NO_DOMAIN_FILES_GUIDANCE = (
 )
 
 
-def no_domain_files_signal(path: str, skip_reason: str) -> List[str]:
+def no_domain_files_signal(path: str) -> List[str]:
     """The complete return signal for an empty-scope reviewer.
 
-    The briefing teaches the five-line signal, and the stub tells this
+    The briefing teaches the two-part signal (`STATUS: FINISHED`, then
+    `OUTPUT_FILES:` with the final review path), and the stub tells this
     reviewer not to read the briefing, so the stub carries the signal
-    itself: one shape for every return, whoever recorded the review.
+    itself: one shape for every return, whoever recorded the review. The
+    skip reason and the not_applicable verdict live in the recorded
+    review, where the orchestrator reads them.
     """
     return [
         "  STATUS: FINISHED",
         "  OUTPUT_FILES:",
         f"    - {path}",
-        "  COUNTS: critical: 0, high: 0, medium: 0, low: 0",
-        f"  VERDICT: {NOT_APPLICABLE_VERDICT}",
-        f"  SUMMARY: {skip_reason}",
     ]
 
 
@@ -1575,7 +1572,7 @@ def deliver_briefing(
     ]
     if recorded_review is not None:
         lines += [f"REVIEW: {recorded_review.path}", NO_DOMAIN_FILES_GUIDANCE]
-        lines += no_domain_files_signal(*recorded_review)
+        lines += no_domain_files_signal(recorded_review.path)
     else:
         lines.append(BRIEFING_STUB_GUIDANCE)
     return "\n".join(lines)
