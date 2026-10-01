@@ -5,6 +5,20 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.123.0] - 2026-10-01
+
+### Added
+
+- Reviewers now launch in waves that fit the host's concurrent-subagent cap (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, default 20), and the rest are queued until a slot frees; `PIRATEGOAT_MAX_CONCURRENT_REVIEWERS` overrides the cap on either host and is how a Codex run opts into waves.
+- `agents_status.py` exits 4 (SLOT_FREE) when a queued reviewer can start, printing `QUEUED:` (exactly the reviewers to launch now) and `SLOTS:` lines. It records the reviewers it releases so they hold their slots while starting, and fires again only after a reviewer finishes (or once nothing of the review is running or starting), so a launch the host keeps rejecting is not retried every 30 seconds; a reviewer still not started after two releases made while nothing else of the review ran or was starting is reported ABANDONED and stops blocking, so a host that refuses launches while full of the review's own reviewers does not abandon a healthy one (host threads held by timed-out or hung launches are a documented limitation). Step 8 no longer closes intake while reviewers are queued or launched but not yet started.
+- Run manifests and `review_run_metrics.py` report each run's reviewer cap and its source, how many reviewers were queued, and which started late or never started.
+
+### Changed
+
+- While reviewers run, the orchestrator ends its turn silently on each reviewer's completion instead of summarizing it, since results are read from disk at step 8.
+- A Claude Code reviewer launch rejected for a held lock file is retried once, and one rejected for the subagent limit waits for a free slot instead of being retried.
+- A reviewer's return signal is now just `STATUS: FINISHED` and its output path; counts and verdict are read from the review file, and `session_metrics.py` reads them from the builder's save receipts.
+
 ## [1.122.0] - 2026-09-29
 
 ### Changed

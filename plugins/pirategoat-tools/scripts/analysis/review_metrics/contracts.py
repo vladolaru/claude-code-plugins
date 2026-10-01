@@ -182,6 +182,10 @@ _PIPELINE_FAMILIES = (
     # and the decision critic produce neither, so they are measured as
     # their own family and never move a reviewer count.
     "synthesis_agents",
+    # Step 6's reviewer waves against what started (manifest
+    # `dispatch_waves`): complete when the section is present, missing on a
+    # run with no wave record.
+    "dispatch_waves",
     "usage_shares",
     "outcomes",
     "raw_findings",
@@ -278,6 +282,9 @@ _DISPATCH_SIGNALS = frozenset(_DISPATCH_STATUS_CONTRACT.DISPATCH_SIGNALS)
 # of its consumers.
 _SAFE_RUN_ID_RE = _RUN_PATHS_CONTRACT.SAFE_RUN_ID_SEGMENT_RE
 _PRODUCER_AGENT_NAME_RE = _DISPATCH_STATUS_CONTRACT.AGENT_NAME_RE
+# Where step 6 took the reviewer cap from (`pipeline_contract.CAP_SOURCES`,
+# which dispatch_status validates the plan's wave record against).
+_CAP_SOURCES = frozenset(_DISPATCH_STATUS_CONTRACT.CAP_SOURCES)
 _WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:")
 _CRITIC_VERDICTS = frozenset(_CRITIC_CONTRACT.CRITIC_VERDICTS)
 # Deliberately NOT in _CRITIC_VERDICTS: "SKIPPED" records that no critique

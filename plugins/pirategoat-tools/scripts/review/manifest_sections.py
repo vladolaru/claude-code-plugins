@@ -20,6 +20,7 @@ import json
 import os
 import sys
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -28,8 +29,10 @@ try:
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import (
         SCOPE_SUMMARY_SCHEMA,
+        bootstrap_error_path,
         is_scope_summary_name,
         review_paths,
+        started_marker_path,
     )
     from .change_purpose import parse_change_purpose
     from .run_paths import REVIEWERS_SUBDIR, artifact_path
@@ -45,6 +48,7 @@ try:
         load_dispatch_plan,
         AGENT_NAME_RE,
         DISPATCH_OVERRIDE,
+        DISPATCH_WAVES_KEY,
         DISPATCH_SIGNALS,
         DISPATCHED_STATUSES,
         SIGNAL_OVERRIDE,
@@ -65,8 +69,10 @@ except ImportError:
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import (
         SCOPE_SUMMARY_SCHEMA,
+        bootstrap_error_path,
         is_scope_summary_name,
         review_paths,
+        started_marker_path,
     )
     from review.change_purpose import parse_change_purpose
     from review.run_paths import REVIEWERS_SUBDIR, artifact_path
@@ -82,6 +88,7 @@ except ImportError:
         load_dispatch_plan,
         AGENT_NAME_RE,
         DISPATCH_OVERRIDE,
+        DISPATCH_WAVES_KEY,
         DISPATCH_SIGNALS,
         DISPATCHED_STATUSES,
         SIGNAL_OVERRIDE,
@@ -1255,6 +1262,90 @@ def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
         "baseline_captured_at": (
             captured_at if isinstance(captured_at, str) else None
         ),
+    }
+
+
+def _started_marker_time(output_dir: str, reviewer: str) -> Optional[datetime]:
+    """When one reviewer's started marker says it started, or None.
+
+    None covers both a missing marker and one whose text is not an
+    ISO-8601 time; `build_dispatch_waves_manifest` tells the two apart by
+    the file's presence. A naive time is read as UTC, as mark_started
+    writes it.
+    """
+    try:
+        with open(started_marker_path(output_dir, reviewer), encoding="utf-8") as handle:
+            stamp = datetime.fromisoformat(handle.read().strip())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+def build_dispatch_waves_manifest(output_dir: str) -> Optional[dict]:
+    """Project step 6's wave record against what actually started.
+
+    None means the run has no measurable wave record: no final plan, a plan
+    `load_dispatch_plan` rejects (including a malformed record), or a legacy
+    plan without `dispatch_waves`. Otherwise:
+
+    - `cap`, `cap_source`: what step 6 resolved (`cap` null is unbounded).
+    - `wave_1_size`, `queued_size`: how the record split the dispatched rows.
+    - `late_starts`: wave-1 reviewers whose started marker is later than
+      `stamped_at + grace_seconds`. An upper bound on launches the host
+      rejected (cap or lock file) that a later SLOT_FREE wake-up recovered:
+      a healthy start slower than the grace window counts too.
+    - `queued_started`: queued reviewers with a started marker.
+    - `never_started`: dispatched reviewers (every `DISPATCHED_STATUSES`
+      row, including one added after stamping) with no started marker, no
+      bootstrap failure record and no final review. It is measured when the
+      manifest is built, which after step 8 is intake close.
+
+    Name lists are sorted registry/instance names, the same names the
+    `dispatch` section already discloses; nothing else leaves the builder.
+    """
+    info = inspect_dispatch_plan(output_dir, "dispatch_plan")
+    if not info["available"]:
+        return None
+    record = info["plan"].get(DISPATCH_WAVES_KEY)
+    if record is None:
+        return None
+
+    stamped_at = datetime.fromisoformat(record["stamped_at"])
+    if stamped_at.tzinfo is None:
+        stamped_at = stamped_at.replace(tzinfo=timezone.utc)
+    deadline = stamped_at + timedelta(seconds=record["grace_seconds"])
+    wave_1 = set(record["wave_1"])
+    queued = set(record["queued"])
+
+    late_starts: List[str] = []
+    queued_started: List[str] = []
+    never_started: List[str] = []
+    for agent in info["entries"]:
+        name = agent["name"]
+        if not is_dispatched(agent.get("status")):
+            continue
+        reviewer = derive_reviewer_name(name)
+        marker_present = os.path.isfile(started_marker_path(output_dir, reviewer))
+        if marker_present:
+            started = _started_marker_time(output_dir, reviewer)
+            if name in wave_1 and started is not None and started > deadline:
+                late_starts.append(name)
+            if name in queued:
+                queued_started.append(name)
+        elif not (
+            os.path.isfile(bootstrap_error_path(output_dir, reviewer))
+            or os.path.isfile(review_paths(output_dir, reviewer).final)
+        ):
+            never_started.append(name)
+
+    return {
+        "cap": record["cap"],
+        "cap_source": record["cap_source"],
+        "wave_1_size": len(record["wave_1"]),
+        "queued_size": len(record["queued"]),
+        "late_starts": sorted(set(late_starts)),
+        "queued_started": sorted(set(queued_started)),
+        "never_started": sorted(set(never_started)),
     }
 
 

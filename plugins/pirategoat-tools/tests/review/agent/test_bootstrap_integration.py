@@ -1429,16 +1429,17 @@ class TestBriefingFileDelivery:
         assert "Do not read the briefing" in result.stdout
         assert "mark_not_applicable" not in result.stdout
         # The stub hands over the complete return signal, in the shape the
-        # briefing it tells the reviewer not to read would have taught.
-        for line in (
+        # briefing it tells the reviewer not to read would have taught:
+        # status and path only, since the verdict and reason are in the file.
+        stdout_lines = result.stdout.splitlines()
+        start = stdout_lines.index("  STATUS: FINISHED")
+        assert stdout_lines[start:start + 3] == [
             "  STATUS: FINISHED",
             "  OUTPUT_FILES:",
             f"    - {final}",
-            "  COUNTS: critical: 0, high: 0, medium: 0, low: 0",
-            "  VERDICT: not_applicable",
-            f"  SUMMARY: {review['skip_reason']}",
-        ):
-            assert line in result.stdout.splitlines(), line
+        ]
+        for label in ("COUNTS:", "VERDICT:", "SUMMARY:"):
+            assert label not in result.stdout, label
         assert "STATUS: NO_DOMAIN_FILES" in briefing_text(result)
         # agents_status reads the reviewer as finished, not running.
         from review.agents_status import check_status
@@ -1524,16 +1525,30 @@ class TestBriefingFileDelivery:
         assert "performance-reviewer" in briefing_text(first)
         assert "security-reviewer" in briefing_text(second)
 
-    def test_return_signal_counts_every_verdict_counting_severity(self, tmp_path):
-        """Three 2026-09-14 reviewers appended `low: N` by hand because the
-        template stopped at medium while DRAFT TOTALS reports low."""
+    def test_return_signal_is_status_and_output_path_only(self, tmp_path):
+        """The orchestrator reads counts and verdict from the review file at
+        step 8, so the signal carries nothing a model could narrate: a
+        COUNTS/VERDICT/SUMMARY block invited a per-reviewer summary on
+        every completion notification."""
         result = run_bootstrap(
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
 
         assert result.returncode == 0, result.stderr
         text = briefing_text(result)
-        assert "  COUNTS: critical: N, high: N, medium: N, low: N  (copied from DRAFT TOTALS)" in text
+        final = review_paths(str(tmp_path), "performance").final
+        text_lines = text.splitlines()
+        start = text_lines.index("  STATUS: FINISHED")
+        assert text_lines[start - 2].startswith("Return signal format (nothing else")
+        assert "reads counts and" in text_lines[start - 2]
+        assert text_lines[start:start + 3] == [
+            "  STATUS: FINISHED",
+            "  OUTPUT_FILES:",
+            f"    - {final}",
+        ]
+        signal_tail = "\n".join(text_lines[start:start + 6])
+        for label in ("COUNTS:", "VERDICT:", "SUMMARY:"):
+            assert label not in signal_tail, label
 
 
 class TestBriefingNamesTheScopedDiff:

@@ -316,3 +316,128 @@ class TestVerdictVocabulary:
         )
         assert _mod.extract_subagent_metrics(path)["verdict"] is None
 
+
+
+def _make_tool_result(text: str) -> str:
+    """A JSONL user line carrying a Bash tool result, as a reviewer's
+    save_draft() or bootstrap call leaves it: the receipt's newlines are
+    JSON-escaped to the two characters `\\n` on the raw line."""
+    return json.dumps({"message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": text},
+    ]}})
+
+
+def _receipt(verdict: str, totals: str) -> str:
+    return (
+        f"DRAFT SAVED: verdict {verdict}\nDRAFT TOTALS: {totals}\n"
+        "FINALIZE REVIEW: python3 output.py finalize-review ...\n"
+    )
+
+
+class TestVerdictFromBuilderReceipts:
+    """The trimmed return signal carries no verdict or counts, so they are
+    read from the builder's DRAFT SAVED / DRAFT TOTALS receipts, with the
+    legacy return-signal lines as the fallback for old transcripts."""
+
+    def _metrics(self, tmp_path, *lines):
+        path = _write_jsonl(
+            [_make_user_message("python3 bootstrap.py --agent security-reviewer"), *lines],
+            str(tmp_path),
+        )
+        return _mod.extract_subagent_metrics(path)
+
+    def test_the_last_receipt_supplies_verdict_and_counts(self, tmp_path):
+        metrics = self._metrics(
+            tmp_path,
+            _make_tool_result(_receipt("comment", "findings 1 (medium 1) | checks 2")),
+            _make_tool_result(_receipt(
+                "request_changes", "findings 4 (high 1, medium 2, low 1) | checks 3",
+            )),
+            _make_assistant_message("STATUS: FINISHED\nOUTPUT_FILES:\n  - /r/review.json"),
+        )
+
+        assert metrics["verdict"] == "REQUEST_CHANGES"
+        assert metrics["total_findings"] == 4
+        assert metrics["severity_counts"] == {
+            "critical": 0, "high": 1, "medium": 2, "low": 1, "info": 0,
+        }
+
+    def test_a_block_receipt_maps_to_the_pipeline_block(self, tmp_path):
+        metrics = self._metrics(
+            tmp_path, _make_tool_result(_receipt("block", "findings 1 (critical 1)")),
+        )
+
+        assert metrics["verdict"] == "BLOCK"
+        assert metrics["severity_counts"]["critical"] == 1
+        assert metrics["total_findings"] == 1
+
+    def test_an_empty_draft_receipt_has_zero_counts(self, tmp_path):
+        metrics = self._metrics(
+            tmp_path, _make_tool_result(_receipt("approve", "findings 0 | checks 4")),
+        )
+
+        assert metrics["verdict"] == "APPROVE"
+        assert metrics["total_findings"] == 0
+        assert set(metrics["severity_counts"].values()) == {0}
+
+    def test_the_no_domain_files_stub_is_not_applicable_with_zero_counts(self, tmp_path):
+        stub = (
+            "=== BOOTSTRAP: php-tests-reviewer ===\nPLUGIN_ROOT: /p\n"
+            "STATUS: NO_DOMAIN_FILES\nBRIEFING: /r/briefing.md\n"
+        )
+        metrics = self._metrics(
+            tmp_path,
+            _make_tool_result(stub),
+            _make_assistant_message("STATUS: FINISHED\nOUTPUT_FILES:\n  - /r/review.json"),
+        )
+
+        assert metrics["verdict"] == "not_applicable"
+        assert metrics["total_findings"] == 0
+
+    def test_protocol_prose_quoting_the_stub_status_is_not_an_empty_scope(self, tmp_path):
+        """The tests-reviewer protocol quotes the status in backticks, and
+        a reviewer that reads it has a real scope."""
+        metrics = self._metrics(
+            tmp_path,
+            _make_tool_result("| No test files in diff (`STATUS: NO_DOMAIN_FILES`) | ... |"),
+        )
+
+        assert metrics["verdict"] is None
+
+    def test_a_legacy_transcript_is_read_from_its_return_signal(self, tmp_path):
+        metrics = self._metrics(
+            tmp_path,
+            _make_assistant_message(
+                "STATUS: FINISHED\nCOUNTS: critical: 0, high: 2, medium: 1, low: 0\n"
+                "VERDICT: REQUEST_CHANGES\nSUMMARY: two issues"
+            ),
+        )
+
+        assert metrics["verdict"] == "REQUEST_CHANGES"
+        assert metrics["total_findings"] == 3
+        assert metrics["severity_counts"]["high"] == 2
+
+    def test_a_receipt_wins_over_a_legacy_return_signal(self, tmp_path):
+        """A reviewer that still echoed the old signal by hand is measured
+        by what the builder saved, not by what it copied."""
+        metrics = self._metrics(
+            tmp_path,
+            _make_tool_result(_receipt("comment", "findings 2 (low 2)")),
+            _make_assistant_message(
+                "STATUS: FINISHED\nCOUNTS: critical: 0, high: 5, medium: 0, low: 0\n"
+                "VERDICT: REQUEST_CHANGES"
+            ),
+        )
+
+        assert metrics["verdict"] == "COMMENT"
+        assert metrics["total_findings"] == 2
+        assert metrics["severity_counts"]["high"] == 0
+        assert metrics["severity_counts"]["low"] == 2
+
+    def test_the_builder_source_is_not_a_receipt(self, tmp_path):
+        metrics = self._metrics(
+            tmp_path,
+            _make_tool_result("print(f\"DRAFT SAVED: verdict {review['verdict']}\")"),
+        )
+
+        assert metrics["verdict"] is None

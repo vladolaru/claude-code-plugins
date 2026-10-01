@@ -180,16 +180,9 @@ git status --porcelain
 STATUS: FINISHED
 OUTPUT_FILES:
   - {output_dir}/reviewers/tests-mutation/review.json
-MUTATION_SCORE: X%
-COUNTS:
-  mutations_total: N
-  caught: N
-  survived: N
-  errors: N
-VERDICT: <APPROVE | COMMENT | REQUEST_CHANGES>
-SUMMARY: <One sentence>
-CLEANUP: <CLEAN | STASH_RESTORED | ERROR: description>
 ```
+
+Return nothing else: the orchestrator reads the mutation score, counts and verdict from the review file. The one exception is a Phase 5 cleanup that could not restore the working tree, which the finalized review cannot record; then add a final line `CLEANUP: ERROR: <description>`.
 
 ## Safety Rules
 

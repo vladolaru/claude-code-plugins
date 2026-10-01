@@ -543,6 +543,54 @@ def _aggregate_synthesis_agents(
     }
 
 
+def _aggregate_dispatch_waves(
+    runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
+) -> dict[str, Any]:
+    """Cross-run reviewer-wave counts: how often the cap queued reviewers,
+    how often a wave-1 launch was rejected and recovered late, and how
+    often a dispatched reviewer never started.
+
+    Only runs whose family is "complete" count; a run with no wave record
+    measured nothing, so with no measured run every count is None rather
+    than a zero. `cap_sources` counts measured runs per cap source.
+    """
+    measured = [
+        run["dispatch_waves"] for run in runs
+        if run.get("metric_availability", {}).get("dispatch_waves") == "complete"
+        and isinstance(run.get("dispatch_waves"), dict)
+    ]
+
+    def count(values: list[int]) -> tuple[int | None, int | None]:
+        if not measured:
+            return None, None
+        return sum(1 for value in values if value), sum(values)
+
+    queued_runs, queued_total = count(
+        [_nonnegative_int(section.get("queued_size")) or 0 for section in measured]
+    )
+    late_runs, late_total = count(
+        [len(section.get("late_starts") or []) for section in measured]
+    )
+    never_runs, never_total = count(
+        [len(section.get("never_started") or []) for section in measured]
+    )
+    sources = Counter(
+        section["cap_source"] for section in measured
+        if isinstance(section.get("cap_source"), str)
+    )
+    return {
+        "measured_runs": len(measured),
+        "runs_with_queueing": queued_runs,
+        "queued_total": queued_total,
+        "runs_with_late_starts": late_runs,
+        "late_starts_total": late_total,
+        "runs_with_never_started": never_runs,
+        "never_started_total": never_total,
+        "cap_sources": dict(sorted(sources.items())) if measured else None,
+        "availability": availability["dispatch_waves"],
+    }
+
+
 def _aggregate_tool_failures(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> dict[str, Any]:
@@ -984,6 +1032,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
     )
     outcomes, critic, wall_time = _aggregate_outcomes(run_list, availability)
     synthesis_agents = _aggregate_synthesis_agents(run_list, availability)
+    dispatch_waves = _aggregate_dispatch_waves(run_list, availability)
     tool_failures = _aggregate_tool_failures(run_list, availability)
     artifact_writes = _aggregate_artifact_writes(run_list, availability)
     observed_reads = _aggregate_observed_reads(run_list, availability)
@@ -1010,6 +1059,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "critic": critic,
         "wall_time": wall_time,
         "synthesis_agents": synthesis_agents,
+        "dispatch_waves": dispatch_waves,
         "usage_shares": usage_shares,
         "usage": {
             "complete_totals": complete_usage,

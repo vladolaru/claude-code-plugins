@@ -9,8 +9,13 @@ from pathlib import Path
 try:
     from .change_purpose import CARRIED_OVER_MARKER, PROVENANCE
     from .pipeline_contract import (
+        CAP_SOURCE_CLAUDE_DEFAULT,
+        CAP_SOURCE_CLAUDE_ENV,
+        CAP_SOURCE_PIRATEGOAT_ENV,
+        CLAUDE_SUBAGENT_CAP_ENV,
         DEFAULT_AGENT_TIMEOUT,
         HOST_CODEX,
+        REVIEWER_CAP_ENV,
         REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _STEP_MAP,
@@ -42,8 +47,13 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review.change_purpose import CARRIED_OVER_MARKER, PROVENANCE
     from review.pipeline_contract import (
+        CAP_SOURCE_CLAUDE_DEFAULT,
+        CAP_SOURCE_CLAUDE_ENV,
+        CAP_SOURCE_PIRATEGOAT_ENV,
+        CLAUDE_SUBAGENT_CAP_ENV,
         DEFAULT_AGENT_TIMEOUT,
         HOST_CODEX,
+        REVIEWER_CAP_ENV,
         REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _STEP_MAP,
@@ -1127,6 +1137,145 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
 # Step 6: Dispatch Agents
 # ---------------------------------------------------------------------------
 
+def _dispatch_name(agent):
+    """A dispatched-agent entry's name (entries are dicts or bare names)."""
+    return agent.get("name", agent) if isinstance(agent, dict) else agent
+
+
+_CAP_SOURCE_PHRASES = {
+    CAP_SOURCE_PIRATEGOAT_ENV: f"from `{REVIEWER_CAP_ENV}`",
+    CAP_SOURCE_CLAUDE_ENV: f"from `{CLAUDE_SUBAGENT_CAP_ENV}`",
+    CAP_SOURCE_CLAUDE_DEFAULT: f"Claude Code's default; `{CLAUDE_SUBAGENT_CAP_ENV}` is unset",
+}
+
+
+def _dispatch_waves_situation(waves, wave_1_count, queued_count):
+    """Step-6 situation lines for the cap, its source and the wave split."""
+    cap = waves.get("cap")
+    if cap is None:
+        lines = [
+            "**Reviewer cap:** none on this host, so every reviewer launches "
+            f"now (set `{REVIEWER_CAP_ENV}` to launch in waves)."
+        ]
+    else:
+        source = _CAP_SOURCE_PHRASES.get(waves.get("cap_source"), "source unknown")
+        lines = [
+            f"**Reviewer cap:** {cap} at once ({source}). Wave 1: "
+            f"{wave_1_count} launch now; {queued_count} queued until a slot frees."
+        ]
+    for name in waves.get("invalid_env") or []:
+        lines.append(f"Ignored `{name}`: its value is not a positive integer.")
+    return lines
+
+
+def _dispatch_rejection_rule(codex_host):
+    """What to do with a launch the host refuses, per host."""
+    if codex_host:
+        return [
+            "A `spawn_agent` call rejected for the agent-thread limit is not "
+            "retried: it stays NOT_DISPATCHED, and step 7's poll spawns it "
+            "when it exits 4 (SLOT_FREE).",
+            "",
+        ]
+    return [
+        "If the host rejects an Agent call:",
+        "- `Lock file is already being held`: retry it once, together with "
+        "every other lock-file rejection, in ONE follow-up message.",
+        "- `Concurrent subagent limit reached`: do not retry; step 7's "
+        "watchdog reports it when a slot frees.",
+        "- Anything still rejected stays NOT_DISPATCHED; step 7 launches it.",
+        "",
+    ]
+
+
+def _dispatch_block(agent, codex_host, git_range, od):
+    """One reviewer's dispatch input: heading, host call notes, fenced command."""
+    lines = []
+    name = _dispatch_name(agent)
+    adapter = agent.get("adapter") if isinstance(agent, dict) else None
+    agent_type = adapter or name
+    if adapter:
+        # Repo-contributed reviewer: dispatch the generic adapter
+        # subagent, parameterized with this reviewer's ref. The Agent
+        # tool's subagent_type MUST be the adapter (a real CC subagent),
+        # not the synthetic instance name.
+        scope_domains = ",".join(agent.get("scope_domains") or ["code"])
+        # ref/label/id all originate from the reviewed repo's
+        # .pirategoat/config.json (PR-controlled, semi-trusted), and the
+        # adapter is instructed to run this command in a shell. Every
+        # token MUST be shell-quoted to prevent command injection. Use
+        # `or` (not dict.get default) so an explicit None falls back
+        # instead of embedding the literal string "None".
+        cmd_parts = [
+            "python3", f"{SCRIPTS_DIR}/agent/bootstrap.py",
+            "--agent", adapter,
+            "--instance-name", name,
+            "--repo-agent-ref", agent.get("ref") or "",
+            "--adapter-label", agent.get("label") or name,
+            "--execution", agent.get("execution") or EXECUTION_INLINE,
+            "--channel", agent.get("channel") or "blocking",
+            "--scope-domains", scope_domains,
+            # The tier actually dispatched for this instance (the
+            # model hint below) — telemetry must record it, not the
+            # adapter registry's static tier, or the manifest holds
+            # conflicting models for one agent. On the Codex host no
+            # Claude model override is applied (the native subagent
+            # runs the Codex model), so forwarding the declaration
+            # would attribute the execution to a tier that never ran;
+            # empty falls back to the adapter's registry "inherit".
+            "--model-tier", "" if codex_host else (agent.get("model") or ""),
+            "--range", git_range,
+            "--output-dir", od,
+        ]
+        cmd = " ".join(shlex.quote(p) for p in cmd_parts)
+        model = agent.get("model")
+        model_hint = f" with model `{model}`" if model else ""
+        if codex_host:
+            lines.append(f"**{name}** (repo reviewer adapter):")
+        else:
+            lines.append(
+                f"**{name}** (repo reviewer - dispatch as subagent_type "
+                f"`{adapter}`{model_hint}):"
+            )
+        if codex_host:
+            lines.append(
+                f"- Call `spawn_agent` with task name "
+                f"`{_codex_task_name(name)}` and no Claude model override. "
+                "The task name is this reviewer instance's identity; the "
+                "shared adapter definition remains below, and the bootstrap "
+                "`--instance-name` argument carries the same identity."
+            )
+            lines.append(
+                f"- {_codex_agent_instruction(agent_type)} Then run the exact "
+                "bootstrap command below, read the briefing file it names, "
+                "and follow that scope and output contract."
+            )
+        lines.append("```")
+        if not codex_host:
+            lines.append(DISPATCH_PROMPT_LEAD)
+        lines.append(cmd)
+        lines.append("```")
+        lines.append("")
+    else:
+        lines.append(f"**{name}:**")
+        if codex_host:
+            lines.append(
+                f"- Call `spawn_agent` with task name `{_codex_task_name(name)}`."
+            )
+            lines.append(
+                f"- {_codex_agent_instruction(agent_type)} Then run the exact "
+                "bootstrap command below, read the briefing file it names, "
+                "and follow that scope and output contract."
+            )
+        lines.append("```")
+        if not codex_host:
+            lines.append(DISPATCH_PROMPT_LEAD)
+        lines.append(f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {name} --range "{git_range}" --output-dir "{od}"')
+        lines.append("```")
+        lines.append("")
+    return lines
+
+
 def _step_6_dispatch_agents(mode, state, context, config, output_dir):
     """Step 6: Dispatch Agents — parallel agent dispatch with concrete calls."""
     git = context.get("git", {})
@@ -1161,8 +1310,23 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
             situation.append("No adjustments: the planner's plan is dispatched as computed.")
 
     codex_host = _host(config) == HOST_CODEX
+    # The wave split step 6 orchestration stamped into the plan. Codex runs
+    # in waves only when a cap was set explicitly; Claude Code always has
+    # one. No record in state (a legacy run) renders the single-wave text.
+    waves = state.get("dispatch_waves")
+    if not isinstance(waves, dict):
+        waves = None
+    in_waves = waves is not None and (not codex_host or waves.get("cap") is not None)
+    queued_names = set(waves.get("queued") or []) if in_waves else set()
+    wave_1 = [a for a in dispatched if _dispatch_name(a) not in queued_names]
+    queued = [a for a in dispatched if _dispatch_name(a) in queued_names]
+    if waves is not None:
+        situation.extend(_dispatch_waves_situation(waves, len(wave_1), len(queued)))
+
     if codex_host:
         actions = [
+            "Dispatch the wave-1 reviewers below in parallel with multiple "
+            "`spawn_agent` calls." if in_waves else
             "Dispatch ALL eligible reviewers in parallel with multiple `spawn_agent` calls.",
             "Issue the calls together rather than waiting for one reviewer before starting the next.",
             "For each subagent, use the canonical reviewer definition and exact bootstrap command below.",
@@ -1170,6 +1334,8 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
         ]
     else:
         actions = [
+            "Dispatch the wave-1 agents below in a SINGLE message with "
+            "MULTIPLE Agent tool calls." if in_waves else
             "Dispatch ALL eligible agents in a SINGLE message with MULTIPLE Agent tool calls.",
             "Each agent runs in parallel - do NOT dispatch them one at a time.",
             "",
@@ -1181,89 +1347,25 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
         else:
             actions.append("Agent dispatch calls (copy each to an Agent tool):")
         actions.append("")
-        for agent in dispatched:
-            name = agent.get("name", agent) if isinstance(agent, dict) else agent
-            adapter = agent.get("adapter") if isinstance(agent, dict) else None
-            agent_type = adapter or name
-            if adapter:
-                # Repo-contributed reviewer: dispatch the generic adapter
-                # subagent, parameterized with this reviewer's ref. The Agent
-                # tool's subagent_type MUST be the adapter (a real CC subagent),
-                # not the synthetic instance name.
-                scope_domains = ",".join(agent.get("scope_domains") or ["code"])
-                # ref/label/id all originate from the reviewed repo's
-                # .pirategoat/config.json (PR-controlled, semi-trusted), and the
-                # adapter is instructed to run this command in a shell. Every
-                # token MUST be shell-quoted to prevent command injection. Use
-                # `or` (not dict.get default) so an explicit None falls back
-                # instead of embedding the literal string "None".
-                cmd_parts = [
-                    "python3", f"{SCRIPTS_DIR}/agent/bootstrap.py",
-                    "--agent", adapter,
-                    "--instance-name", name,
-                    "--repo-agent-ref", agent.get("ref") or "",
-                    "--adapter-label", agent.get("label") or name,
-                    "--execution", agent.get("execution") or EXECUTION_INLINE,
-                    "--channel", agent.get("channel") or "blocking",
-                    "--scope-domains", scope_domains,
-                    # The tier actually dispatched for this instance (the
-                    # model hint below) — telemetry must record it, not the
-                    # adapter registry's static tier, or the manifest holds
-                    # conflicting models for one agent. On the Codex host no
-                    # Claude model override is applied (the native subagent
-                    # runs the Codex model), so forwarding the declaration
-                    # would attribute the execution to a tier that never ran;
-                    # empty falls back to the adapter's registry "inherit".
-                    "--model-tier", "" if codex_host else (agent.get("model") or ""),
-                    "--range", git_range,
-                    "--output-dir", od,
-                ]
-                cmd = " ".join(shlex.quote(p) for p in cmd_parts)
-                model = agent.get("model")
-                model_hint = f" with model `{model}`" if model else ""
-                if codex_host:
-                    actions.append(f"**{name}** (repo reviewer adapter):")
-                else:
-                    actions.append(
-                        f"**{name}** (repo reviewer - dispatch as subagent_type "
-                        f"`{adapter}`{model_hint}):"
-                    )
-                if codex_host:
-                    actions.append(
-                        f"- Call `spawn_agent` with task name "
-                        f"`{_codex_task_name(name)}` and no Claude model override. "
-                        "The task name is this reviewer instance's identity; the "
-                        "shared adapter definition remains below, and the bootstrap "
-                        "`--instance-name` argument carries the same identity."
-                    )
-                    actions.append(
-                        f"- {_codex_agent_instruction(agent_type)} Then run the exact "
-                        "bootstrap command below, read the briefing file it names, "
-                        "and follow that scope and output contract."
-                    )
-                actions.append("```")
-                if not codex_host:
-                    actions.append(DISPATCH_PROMPT_LEAD)
-                actions.append(cmd)
-                actions.append("```")
-                actions.append("")
-            else:
-                actions.append(f"**{name}:**")
-                if codex_host:
-                    actions.append(
-                        f"- Call `spawn_agent` with task name `{_codex_task_name(name)}`."
-                    )
-                    actions.append(
-                        f"- {_codex_agent_instruction(agent_type)} Then run the exact "
-                        "bootstrap command below, read the briefing file it names, "
-                        "and follow that scope and output contract."
-                    )
-                actions.append("```")
-                if not codex_host:
-                    actions.append(DISPATCH_PROMPT_LEAD)
-                actions.append(f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {name} --range "{git_range}" --output-dir "{od}"')
-                actions.append("```")
-                actions.append("")
+        for agent in wave_1:
+            actions.extend(_dispatch_block(agent, codex_host, git_range, od))
+
+    if waves is not None:
+        actions.extend(_dispatch_rejection_rule(codex_host))
+
+    if queued:
+        poll = "status poll" if codex_host else "watchdog"
+        actions.append(
+            f"### Queued (launch only when step 7's {poll} exits SLOT_FREE)"
+        )
+        actions.append(
+            f"Do not dispatch these {len(queued)} now: the cap is full. "
+            "Step 7 names which of them to launch, and how many fit, each "
+            "time a slot frees."
+        )
+        actions.append("")
+        for agent in queued:
+            actions.extend(_dispatch_block(agent, codex_host, git_range, od))
 
     # The wait rules live in step 7: the background watchdog on Claude
     # Code, the --wait poll loop on Codex. An invitation to poll here had
@@ -1302,6 +1404,41 @@ def _draft_finalization_guidance():
         "when review intake closes.",
         "",
     ]
+
+# The wake-up rules both waiting briefings (step 7, and step 8's WAITING
+# gate) share, so the two cannot drift. Exit 4 is the watchdog's SLOT_FREE
+# (agents_status.EXIT_SLOT_FREE); its `QUEUED:` and `SLOTS:` lines say which
+# queued reviewers to launch and how many fit.
+_CLAUDE_SLOT_FREE_RULE = (
+    "- Watchdog exit 4 (SLOT_FREE): dispatch the agents on its `QUEUED:` "
+    "line, at most `SLOTS:`, in one message, skipping any already "
+    "accepted; launch a fresh watchdog; end your turn. No commentary."
+)
+_CODEX_SLOT_FREE_RULE = (
+    "- Exit code 4 (SLOT_FREE): spawn the agents on the `QUEUED:` line that "
+    "fit `SLOTS:`, never one already spawned, then re-run the same call"
+)
+_CODEX_NO_COMMENTARY = (
+    "No commentary on any iteration, a returned reviewer's result included."
+)
+
+
+def _claude_notification_rules(od):
+    """Claude-host wake-up bullets for subagent notifications, and the Never line."""
+    return [
+        "- A notification beginning `STATUS: FINISHED`: produce no text and "
+        "no tool call; end your turn. Results are read from disk at step 8; "
+        "a summary here re-reads the whole context for nothing.",
+        "- Any other notification: run "
+        f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
+        "once. A `DRAFT` line: run its `FINALIZE_REVIEW_COMMAND`, then end "
+        "your turn.",
+        "- A task-id you have already acted on: no action.",
+        "",
+        "Never: foreground `sleep`, keepalive turns, status calls without a "
+        "wake-up, per-reviewer summaries.",
+    ]
+
 
 def _step_7_save_baseline(mode, state, context, config, output_dir):
     """Step 7: Save Review Baseline — script writes file internally."""
@@ -1344,9 +1481,8 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 60",
             "```",
             "- Exit code 0 (ALL_DONE): proceed to step 8",
-            "- Exit code 3 (60s elapsed, still running): re-run the same "
-            "call, no commentary",
-            "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "- Exit code 3 (60s elapsed, still running): re-run the same call",
+            _CODEX_SLOT_FREE_RULE,
             "- BOOTSTRAP_ERROR agents: do not dispatch them again; bootstrap "
             "already stopped them with the error shown, and they are "
             "excluded from reconciliation",
@@ -1354,53 +1490,40 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             "run the exact command on its `FINALIZE_REVIEW_COMMAND` line, "
             "then re-check",
             "",
+            _CODEX_NO_COMMENTARY,
             "A RUNNING agent flips to TIMED_OUT at the agent timeout "
-            f"(default {DEFAULT_AGENT_TIMEOUT}s) and stops blocking "
-            "ALL_DONE, so exit 0 always arrives.",
+            f"(default {DEFAULT_AGENT_TIMEOUT}s), and one whose launches "
+            "keep getting lost to ABANDONED; neither blocks ALL_DONE, so "
+            "exit 0 always arrives.",
         ])
     else:
         # The watchdog is the completion signal, not a backstop: --wait
         # re-reads the reviewer directories every 1.5s and exits the instant
         # nothing is left to wait for, so it cannot lag a host notification.
-        # That makes a poll after each FINISHED notification pure duplicate
-        # work — on the 2026-09-10 field runs those polls and the turns that
+        # It also exits 4 (SLOT_FREE) once a queued reviewer can start and
+        # that has held for its settle window, so the dispatch waves step 6
+        # set up are launched from here. Its output already is the status,
+        # so no status call follows an exit. A FINISHED notification costs
+        # nothing: on the 2026-09-10 field runs the polls and the turns that
         # narrated them were 17-23% of the orchestrator's input tokens.
         # Notifications stay in the briefing only for the anomalies the disk
         # cannot resolve on its own: a reviewer that saved a draft without
         # finalizing it, errored, or timed out.
         actions.extend([
             "1. Launch ONE watchdog in the BACKGROUND (a Bash call with "
-            "`run_in_background: true`). It exits the moment every reviewer "
-            "is done on disk, or at expiry:",
+            "`run_in_background: true`). It exits when every reviewer is "
+            "done on disk, a queued one can start, or at expiry:",
             "```",
             f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 1500",
             "```",
             "2. END YOUR TURN.",
             "",
             "On wake-up, act on what woke you:",
-            # NOT_DISPATCHED is read BEFORE the exit code, not under exit 2:
-            # `all_done` is `running == 0`, so an agent that never wrote a
-            # started marker does not block ALL_DONE, and step 8 closes
-            # intake on exit 0 — the reviewer could never submit.
-            "- The watchdog exited: run "
-            f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
-            "once. Any NOT_DISPATCHED agents: dispatch them, launch a fresh "
-            "watchdog, end your turn — ALL_DONE does not wait for an agent "
-            "that never started. Never dispatch BOOTSTRAP_ERROR agents again: "
-            "bootstrap already stopped them with the error shown. Otherwise "
-            "exit 0: proceed to step 8; "
-            "exit 2: launch a fresh watchdog, end your turn.",
-            "- A subagent notification whose result begins `STATUS: "
-            "FINISHED`: no action. End your turn; the watchdog fires when "
-            "all are done.",
-            "- Any other subagent notification (no FINISHED line, an error, "
-            "a timeout): run agents_status once. A `DRAFT` line in that "
-            "agent's block: run the exact command on its "
-            "`FINALIZE_REVIEW_COMMAND` line, then end your turn.",
-            "- A task-id you have already acted on: no action.",
-            "",
-            "Never: foreground `sleep`, keepalive turns, or a status call "
-            "without a wake-up.",
+            _CLAUDE_SLOT_FREE_RULE,
+            "- Watchdog exit 0: proceed to step 8. Exit 2 or 3: launch a "
+            "fresh watchdog, end your turn. Never dispatch BOOTSTRAP_ERROR "
+            "agents again.",
+            *_claude_notification_rules(od),
         ])
 
     return {
@@ -1419,8 +1542,14 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
 def _step_8_reconcile(mode, state, context, config, output_dir):
     """Step 8: Reconcile + Verify — dispatch reconciliator with all context."""
     # Readiness gate: if agents are still running, wait for them
+    # Queued reviewers (never launched yet) and pending ones (launched, not
+    # started yet) hold the gate like running ones: orchestration refuses to
+    # close intake over them.
     waiting = state.get("waiting_on_agents")
-    if waiting and waiting.get("running"):
+    if waiting and (
+        waiting.get("running") or waiting.get("queued")
+        or waiting.get("pending")
+    ):
         # Record when we first started waiting (preserve across retries)
         if "first_waiting_at" not in waiting:
             waiting["first_waiting_at"] = datetime.now(timezone.utc).isoformat()
@@ -1437,26 +1566,54 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
 
         if elapsed >= escalation_threshold:
             # Escalate: proceed with whatever agents completed
-            running = waiting["running"]
+            running = waiting.get("running") or []
+            queued = waiting.get("queued") or []
             elapsed_min = int(elapsed // 60)
             # Clear waiting state so reconciliation proceeds
             state.pop("waiting_on_agents", None)
             # Store escalation warning for the normal reconciliation briefing
+            never_launched = (
+                f"Queued reviewers never launched: {', '.join(queued)}. "
+                if queued else ""
+            )
             state["_escalation_warning"] = (
                 f"**Escalation:** Waited {elapsed_min}m for {len(running)} agent(s) "
-                f"that never finished: {', '.join(running)}. "
+                f"that never finished: {', '.join(running) or 'none'}. "
+                f"{never_launched}"
                 f"**Use {_stop_operation(config)} on these agents before proceeding.**"
             )
             # Don't return — fall through to normal reconciliation briefing below
         else:
             # Not yet escalated — return WAITING briefing
-            running = waiting["running"]
+            running = waiting.get("running") or []
+            queued = waiting.get("queued") or []
+            pending = waiting.get("pending") or []
             od = output_dir or "<OUTPUT_DIR>"
-            situation = [
-                f"**Waiting:** {len(running)} agent(s) still running: {', '.join(running)}",
-                "Reconciliation cannot start until all dispatched agents have finished.",
+            situation = []
+            if running:
+                situation.append(
+                    f"**Waiting:** {len(running)} agent(s) still running: {', '.join(running)}"
+                )
+            if queued:
+                situation.append(
+                    f"**Queued, not launched yet:** {', '.join(queued)}. The "
+                    "watchdog exits 4 (SLOT_FREE) when they can start."
+                )
+            if pending:
+                situation.append(
+                    f"**Launched, starting up (no action):** {', '.join(pending)}."
+                )
+            situation.append(
+                "Reconciliation cannot start until all dispatched agents have finished."
+            )
+            # Abandoned reviewers were launched and never started; the
+            # watchdog lists them, and dispatching them again is no fix.
+            abandoned = waiting.get("abandoned") or []
+            not_dispatched = [
+                name for name in waiting.get("not_dispatched", [])
+                if name not in queued and name not in pending
+                and name not in abandoned
             ]
-            not_dispatched = waiting.get("not_dispatched", [])
             if not_dispatched:
                 situation.append(
                     f"**Also not dispatched:** {', '.join(not_dispatched)} — dispatch these first."
@@ -1476,43 +1633,35 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                     "```",
                     "- Exit code 0 (ALL_DONE): re-run step 8",
                     "- Exit code 3 (60s elapsed, still running): re-run the "
-                    "same call, no commentary",
+                    "same call",
+                    _CODEX_SLOT_FREE_RULE,
                     "- A `DRAFT` line for an agent whose Codex task has "
                     "returned: run the exact command on its "
                     "`FINALIZE_REVIEW_COMMAND` line, then re-check",
-                    f"A RUNNING agent flips to TIMED_OUT at the {agent_timeout}s "
-                    "agent timeout, so exit 0 always arrives; the escalation "
-                    f"above force-proceeds {escalation_threshold}s after "
-                    "waiting began.",
+                    _CODEX_NO_COMMENTARY,
+                    "RUNNING turns TIMED_OUT at the "
+                    f"{agent_timeout}s agent timeout, lost launches "
+                    "ABANDONED, so exit 0 always arrives; escalation "
+                    "force-proceeds after "
+                    f"{escalation_threshold}s.",
                 ]
             else:
                 actions = _draft_finalization_guidance() + [
                     "1. Launch a fresh watchdog in the BACKGROUND (a Bash "
                     "call with `run_in_background: true`) — the step-7 one "
                     "may already have expired, and this may be the only "
-                    "remaining wake-up. It exits the moment every reviewer "
-                    "is done on disk, or at expiry:",
+                    "remaining wake-up. It exits when every reviewer is "
+                    "done on disk, a queued one can start, or at expiry:",
                     "```",
                     f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds {remaining_budget}",
                     "```",
                     "2. END YOUR TURN.",
                     "",
                     "On wake-up, act on what woke you:",
-                    "- The watchdog exited: run "
-                    f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
-                    "once. Exit 0: re-run step 8. Exit 2: launch a fresh "
-                    "watchdog, end your turn.",
-                    "- A subagent notification whose result begins `STATUS: "
-                    "FINISHED`: no action. End your turn; the watchdog fires "
-                    "when all are done.",
-                    "- Any other subagent notification (no FINISHED line, an "
-                    "error, a timeout): run agents_status once. A `DRAFT` "
-                    "line in that agent's block: run the exact command on "
-                    "its `FINALIZE_REVIEW_COMMAND` line, then end your turn.",
-                    "- A task-id you have already acted on: no action.",
-                    "",
-                    "Never: foreground `sleep`, keepalive turns, or a status "
-                    "call without a wake-up.",
+                    _CLAUDE_SLOT_FREE_RULE,
+                    "- Watchdog exit 0: re-run step 8. Exit 2 or 3: launch "
+                    "a fresh watchdog, end your turn.",
+                    *_claude_notification_rules(od),
                 ]
 
             return {

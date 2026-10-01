@@ -1133,3 +1133,68 @@ class TestDependencyRefreshConfig:
         mod.main()
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
+
+
+class TestResolveReviewerCap:
+    """`resolve_reviewer_cap()` picks the step-6 wave size per host."""
+
+    @pytest.fixture(scope="class")
+    def contract(self):
+        from review import pipeline_contract
+
+        return pipeline_contract
+
+    @pytest.mark.parametrize("host", ["claude", "codex"])
+    def test_pirategoat_env_wins_on_both_hosts(self, contract, host):
+        env = {
+            "PIRATEGOAT_MAX_CONCURRENT_REVIEWERS": "7",
+            "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "3",
+        }
+        assert contract.resolve_reviewer_cap(host, env) == (7, "pirategoat_env", [])
+
+    def test_claude_env_on_claude_host(self, contract):
+        env = {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "3"}
+        assert contract.resolve_reviewer_cap("claude", env) == (3, "claude_env", [])
+
+    def test_claude_default_is_twenty(self, contract):
+        assert contract.resolve_reviewer_cap("claude", {}) == (20, "claude_default", [])
+
+    def test_unknown_host_resolves_like_claude(self, contract):
+        assert contract.resolve_reviewer_cap("other", {}) == (20, "claude_default", [])
+
+    def test_codex_is_unbounded_and_ignores_the_claude_variable(self, contract):
+        env = {"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "3"}
+        assert contract.resolve_reviewer_cap("codex", env) == (None, "unbounded", [])
+
+    def test_codex_with_pirategoat_env(self, contract):
+        env = {"PIRATEGOAT_MAX_CONCURRENT_REVIEWERS": "4"}
+        assert contract.resolve_reviewer_cap("codex", env) == (4, "pirategoat_env", [])
+
+    @pytest.mark.parametrize("bad", ["0", "-3", "abc", "", "true", "2.5", "²"])
+    def test_invalid_values_fall_through_and_are_reported(self, contract, bad):
+        env = {
+            "PIRATEGOAT_MAX_CONCURRENT_REVIEWERS": bad,
+            "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": bad,
+        }
+        assert contract.resolve_reviewer_cap("claude", env) == (
+            20,
+            "claude_default",
+            ["PIRATEGOAT_MAX_CONCURRENT_REVIEWERS", "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"],
+        )
+        assert contract.resolve_reviewer_cap("codex", env) == (
+            None, "unbounded", ["PIRATEGOAT_MAX_CONCURRENT_REVIEWERS"],
+        )
+
+    def test_invalid_pirategoat_value_falls_through_to_claude_env(self, contract):
+        env = {
+            "PIRATEGOAT_MAX_CONCURRENT_REVIEWERS": "0",
+            "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": " 5 ",
+        }
+        assert contract.resolve_reviewer_cap("claude", env) == (
+            5, "claude_env", ["PIRATEGOAT_MAX_CONCURRENT_REVIEWERS"],
+        )
+
+    def test_every_returned_source_is_in_cap_sources(self, contract):
+        assert contract.CAP_SOURCES == {
+            "pirategoat_env", "claude_env", "claude_default", "unbounded",
+        }

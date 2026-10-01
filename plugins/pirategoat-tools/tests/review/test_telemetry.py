@@ -25,6 +25,7 @@ from helpers.review_fixtures import (
     canonical_assignment,
     canonical_findings_ledger,
     canonical_review_document,
+    write_artifact,
 )
 from review import dependency_refresh
 from review import run_paths
@@ -736,6 +737,7 @@ class TestRunManifest:
             "reviewer_markdown": False,
             "findings_markdown": False,
             "host_context": False,
+            "dispatch_waves": False,
             "evidence": False,
         }
         assert manifest["assignment"] is None
@@ -4431,3 +4433,143 @@ class TestReprojectUsage:
         marker.write_bytes(b"\xff\xfe not utf-8")
 
         assert t.reproject_usage() == "io_failure"
+
+
+class TestDispatchWavesManifest:
+    """Step 6's wave record, projected against the started markers: what
+    was queued, which wave-1 launch the host rejected and a later SLOT_FREE
+    recovered (a late start), and what never started at all."""
+
+    STAMP = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+
+    def _plan(self, tmp_path, rows, record):
+        plan = {"agents": [
+            {"name": name, "status": status, "reason": "r", "signal": "always"}
+            for name, status in rows
+        ]}
+        if record is not None:
+            plan["dispatch_waves"] = record
+        write_artifact(tmp_path, "dispatch_plan", plan)
+
+    def _record(self, wave_1, queued, cap=2, cap_source="claude_env"):
+        return {
+            "schema": 1, "cap": cap, "cap_source": cap_source,
+            "wave_1": wave_1, "queued": queued,
+            "stamped_at": self.STAMP.isoformat(), "grace_seconds": 90,
+        }
+
+    def _start(self, tmp_path, agent, seconds_after_stamp):
+        path = Path(started_marker_path(str(tmp_path), agent.removesuffix("-reviewer")))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            (self.STAMP + timedelta(seconds=seconds_after_stamp)).isoformat()
+        )
+
+    def _build(self, mod, tmp_path):
+        return mod.manifest_sections.build_dispatch_waves_manifest(str(tmp_path))
+
+    def test_a_legacy_plan_is_unmeasured(self, mod, tmp_path):
+        self._plan(tmp_path, [("code-reviewer", "DISPATCH")], None)
+        assert self._build(mod, tmp_path) is None
+
+    def test_no_plan_is_unmeasured(self, mod, tmp_path):
+        assert self._build(mod, tmp_path) is None
+
+    def test_a_malformed_record_is_unmeasured(self, mod, tmp_path):
+        record = self._record(["code-reviewer"], [])
+        record["cap"] = 0
+        self._plan(tmp_path, [("code-reviewer", "DISPATCH")], record)
+        assert self._build(mod, tmp_path) is None
+
+    def test_sizes_late_starts_queued_starts_and_never_started(self, mod, tmp_path):
+        self._plan(
+            tmp_path,
+            [
+                ("code-reviewer", "DISPATCH"),
+                ("security-reviewer", "DISPATCH"),
+                ("performance-reviewer", "DISPATCH"),
+                ("patterns-reviewer", "DISPATCH"),
+                ("a11y-reviewer", "SKIPPED_TRIAGE"),
+            ],
+            self._record(
+                ["code-reviewer", "security-reviewer"],
+                ["performance-reviewer", "patterns-reviewer"],
+            ),
+        )
+        self._start(tmp_path, "code-reviewer", 5)
+        # Rejected at launch, recovered after the grace window.
+        self._start(tmp_path, "security-reviewer", 400)
+        self._start(tmp_path, "performance-reviewer", 600)
+
+        section = self._build(mod, tmp_path)
+
+        assert section == {
+            "cap": 2,
+            "cap_source": "claude_env",
+            "wave_1_size": 2,
+            "queued_size": 2,
+            "late_starts": ["security-reviewer"],
+            "queued_started": ["performance-reviewer"],
+            "never_started": ["patterns-reviewer"],
+        }
+
+    def test_an_abandoned_reviewer_counts_as_never_started(self, mod, tmp_path):
+        """A queued reviewer with MAX_RELEASES counted releases that never
+        started (the watchdog's ABANDONED row) is in `never_started`."""
+        stamp = self.STAMP.isoformat()
+        record = self._record(["code-reviewer"],
+                              ["security-reviewer", "patterns-reviewer"])
+        record["released"] = {
+            "security-reviewer": {"at": stamp, "count": 2, "counted": 2},
+            "patterns-reviewer": {"at": stamp, "count": 3, "counted": 2},
+        }
+        self._plan(tmp_path, [("code-reviewer", "DISPATCH"),
+                              ("security-reviewer", "DISPATCH"),
+                              ("patterns-reviewer", "DISPATCH")], record)
+        self._start(tmp_path, "code-reviewer", 5)
+
+        section = self._build(mod, tmp_path)
+
+        assert section["never_started"] == ["patterns-reviewer", "security-reviewer"]
+        assert section["queued_started"] == []
+
+    def test_a_failed_bootstrap_or_a_final_review_is_not_never_started(
+        self, mod, tmp_path
+    ):
+        from review.reviewer_lifecycle import record_bootstrap_error
+
+        self._plan(
+            tmp_path,
+            [("code-reviewer", "DISPATCH"), ("security-reviewer", "DISPATCH")],
+            self._record(["code-reviewer", "security-reviewer"], [], cap=None,
+                         cap_source="unbounded"),
+        )
+        record_bootstrap_error(str(tmp_path), "code", "ERROR: boom\n")
+        final = Path(review_paths(str(tmp_path), "security").final)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        final.write_text("{}")
+
+        section = self._build(mod, tmp_path)
+
+        assert section["cap"] is None
+        assert section["never_started"] == []
+        assert section["late_starts"] == []
+
+    def test_manifest_carries_the_section_and_its_availability(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(tmp_path / "logs"))
+        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
+                run_id="run-1")
+
+        manifest = _read_manifest(t)
+        assert manifest["dispatch_waves"] is None
+        assert manifest["availability"]["dispatch_waves"] is False
+
+        self._plan(out_dir, [("code-reviewer", "DISPATCH")],
+                   self._record(["code-reviewer"], []))
+        t.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(t)
+        assert manifest["availability"]["dispatch_waves"] is True
+        assert manifest["dispatch_waves"]["never_started"] == ["code-reviewer"]
