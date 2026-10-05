@@ -5,6 +5,15 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.123.1] - UNRELEASED
+
+### Fixed
+
+- PR switching and updating obtain consent before operations that can execute another author's code through Git hooks; declining stops the workflow.
+- `/pr-branch-update` pushes to the PR's head branch even from a local alias or an existing fork checkout, and verifies the remote's fetch and push destinations.
+- `/pr-branch-update` validates an unfinished merge against the fetched base commit and initializes verification refs before resuming conflicts.
+- `/switch-to` stops when its fallback branch belongs to unrelated local work and explicitly sets tracking for new PR branches.
+
 ## [1.123.0] - UNRELEASED
 
 ### Added
