@@ -62,7 +62,7 @@ Set `RUN_PR_CODE` (RULE 2). When `author.login` matches the user's login (`$GH_C
 
 ## Step 3: Merge the base
 
-Find the remote for the base repository: the remote whose URL contains `BASE_REPO`, usually `origin`. Call it `BASE_REMOTE`. If no remote URL matches, ask the user which remote holds the base.
+Find the remote for the base repository: the remote whose URL ends in `BASE_REPO` (after `/` or `:`, with or without `.git`), usually `origin`. A URL that only contains it, such as one for `acme/shop-legacy`, does not match. Call it `BASE_REMOTE`. If no remote URL matches, ask the user which remote holds the base.
 
 The explicit refspec updates the remote-tracking ref even in a single-branch clone:
 
@@ -82,8 +82,10 @@ Git refuses the update when the local base has commits of its own (`non-fast-for
 If the count is 0, report "Already up to date with `<baseRefName>`" and the local base's state, then STOP. Otherwise record `PRE_MERGE=$(git rev-parse HEAD)` and merge:
 
 ```bash
-git merge --no-edit <BASE_REMOTE>/<baseRefName>
+git merge --no-edit -m "Merge branch '<baseRefName>' into <headRefName>" <BASE_REMOTE>/<baseRefName>
 ```
+
+The message names the PR's own head branch, which can differ from the local name `$pirategoat-tools:switch-to` chose; git keeps it for a merge that stops on conflicts.
 
 A clean merge goes straight to Step 5.
 
@@ -101,7 +103,7 @@ Stage each resolved file. Before moving on, `git diff --cached --check` must rep
 
 ## Step 5: Verify the merged result
 
-A merge that git reports as clean can still break the build: the base may have renamed or removed something the PR's new code uses. Collect the names the base removed or renamed: the `-` lines of `git diff $PRE_MERGE...<BASE_REMOTE>/<baseRefName>` that define a function, class, constant, export, or hook. Grep the PR's changed files (`git diff --name-only <BASE_REMOTE>/<baseRefName>...$PRE_MERGE`) for each one. A hit in code is breakage; a hit in prose such as a changelog is not.
+A merge that git reports as clean can still break the build: the base may have renamed or removed something the PR's new code uses. Collect the names the base removed or renamed: the `-` lines of `git diff $PRE_MERGE...<BASE_REMOTE>/<baseRefName>` that define a function, class, constant, export, or hook whose name does not come back on a `+` line. A changed definition is not a removal. Grep the PR's changed files (`git diff --name-only <BASE_REMOTE>/<baseRefName>...$PRE_MERGE`) for each one. A hit in code is breakage; a hit in prose such as a changelog is not.
 
 When `RUN_PR_CODE` is no, stop here: report the checks as not run, then go to Step 6.
 
@@ -122,6 +124,7 @@ Push to the branch the PR is built from, without force (the rebase in RULE 0 is 
 ## Step 7: Report
 
 ```
+<"No PR given; updating #<number> for the current branch", when Step 1 resolved the PR itself>
 Updated #<number> with <baseRefName>: merged <N> commits, pushed <short sha>.
 
 Conflicts:
