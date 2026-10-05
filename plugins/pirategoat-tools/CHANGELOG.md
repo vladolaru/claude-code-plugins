@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.123.0] - UNRELEASED
 
+### Added
+
+- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR.
+
 ### Changed
 
 - `/switch-to` accepts a bare PR number (`3817` or `#3817`) as well as a PR URL.

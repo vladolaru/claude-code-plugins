@@ -68,6 +68,7 @@
         "./commands/pr-review.md",
         "./commands/copy-as.md",
         "./commands/switch-to.md",
+        "./commands/pr-branch-update.md",
         "./commands/iterative-review.md"
       ],
       "agents": [

@@ -23,6 +23,7 @@ ALL_REVIEW_COMMANDS = ORCHESTRATOR_COMMANDS
 ALL_COMMANDS = ALL_REVIEW_COMMANDS + [
     "pr-update.md",
     "switch-to.md",
+    "pr-branch-update.md",
     "copy-as.md",
 ]
 

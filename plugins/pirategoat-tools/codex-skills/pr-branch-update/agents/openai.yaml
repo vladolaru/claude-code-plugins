@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/pr-branch-update.md
+interface:
+  display_name: "Pr Branch Update"
+  short_description: "Update a PR branch with its latest base branch and resolve merge conflicts -."
+  default_prompt: "Use $pirategoat-tools:pr-branch-update."
+policy:
+  allow_implicit_invocation: false
