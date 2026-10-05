@@ -49,7 +49,7 @@ Store:
 <GH_CMD> repo view --json owner,name
 ```
 
-Compare the CWD repo's `owner.login/name` against the PR's base repository. If they don't match:
+Compare the CWD repo's `owner.login/name` against the PR's base repository, the `owner/name` in the PR's `url`. If they don't match:
 
 STOP. Tell the user: "This PR belongs to `<pr_owner>/<pr_repo>` but you're in `<cwd_owner>/<cwd_repo>`. Navigate to the correct repo first."
 
@@ -73,13 +73,22 @@ fi
 
 Set `REMOTE_NAME` = `<HEAD_OWNER>` for fork PRs, or `origin` for same-repo PRs.
 
-Set `TARGET_BRANCH` = `HEAD_BRANCH` and `IS_PR = true`.
+Set `REMOTE_BRANCH` = `HEAD_BRANCH` and `IS_PR = true`.
+
+Choose the local branch name `TARGET_BRANCH`. A local branch named `HEAD_BRANCH` is this PR's branch only when it tracks `<REMOTE_NAME>/<HEAD_BRANCH>`; a fork PR opened from the contributor's `trunk` must not land on your own `trunk`:
+
+```bash
+git rev-parse --abbrev-ref <HEAD_BRANCH>@{upstream} 2>/dev/null
+```
+
+- No local `HEAD_BRANCH`, or it prints `<REMOTE_NAME>/<HEAD_BRANCH>`: `TARGET_BRANCH` = `HEAD_BRANCH`.
+- Anything else: `TARGET_BRANCH` = `pr-<PR_NUMBER>`, and say so in one line ("Local `trunk` is a different branch; using `pr-7` for this PR"). Not `<HEAD_OWNER>/<HEAD_BRANCH>`: that is also the name of the fork's remote-tracking ref, and git would read it ambiguously.
 
 Proceed to **Step 3**.
 
 ## Step 2B: Branch Flow
 
-Set `TARGET_BRANCH` = the branch name argument.
+Set `TARGET_BRANCH` and `REMOTE_BRANCH` = the branch name argument.
 Set `REMOTE_NAME` = `origin`.
 Set `IS_PR = false`.
 
@@ -140,13 +149,13 @@ Proceed to **Step 5**.
 
 Check if it exists on the remote:
 ```bash
-git ls-remote --heads <REMOTE_NAME> <TARGET_BRANCH>
+git ls-remote --heads <REMOTE_NAME> <REMOTE_BRANCH>
 ```
 
 If it exists on the remote — create a local tracking branch:
 ```bash
-git fetch <REMOTE_NAME> <TARGET_BRANCH>
-git checkout -b <TARGET_BRANCH> <REMOTE_NAME>/<TARGET_BRANCH>
+git fetch <REMOTE_NAME> +refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>
+git checkout -b <TARGET_BRANCH> <REMOTE_NAME>/<REMOTE_BRANCH>
 ```
 Proceed to **Step 6** (skip Step 5 — the branch was just fetched, it's up to date).
 
@@ -162,8 +171,8 @@ This step only runs when the branch already existed locally (Case A in Step 4).
 
 Check if the remote has new commits:
 ```bash
-git fetch <REMOTE_NAME> <TARGET_BRANCH>
-git log HEAD..<REMOTE_NAME>/<TARGET_BRANCH> --oneline
+git fetch <REMOTE_NAME> +refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>
+git log HEAD..<REMOTE_NAME>/<REMOTE_BRANCH> --oneline
 ```
 
 **If there are NO new remote commits:** proceed to **Step 6**.
@@ -172,20 +181,20 @@ git log HEAD..<REMOTE_NAME>/<TARGET_BRANCH> --oneline
 
 ```
 AskUserQuestion:
-  question: "There are N new commit(s) on `<REMOTE_NAME>/<TARGET_BRANCH>` not in your local branch:\n\n<commit list>\n\nPull them?"
+  question: "There are N new commit(s) on `<REMOTE_NAME>/<REMOTE_BRANCH>` not in your local branch:\n\n<commit list>\n\nPull them?"
   header: "Remote has new commits"
   options:
     - label: "Pull (rebase)"
-      description: "git pull --rebase <REMOTE_NAME> <TARGET_BRANCH>"
+      description: "git pull --rebase <REMOTE_NAME> <REMOTE_BRANCH>"
     - label: "Pull (merge)"
-      description: "git pull <REMOTE_NAME> <TARGET_BRANCH>"
+      description: "git pull <REMOTE_NAME> <REMOTE_BRANCH>"
     - label: "Skip"
       description: "Stay on local version without pulling remote changes"
 ```
 
 Handle the user's choice:
-- **Pull (rebase):** `git pull --rebase <REMOTE_NAME> <TARGET_BRANCH>`
-- **Pull (merge):** `git pull <REMOTE_NAME> <TARGET_BRANCH>`
+- **Pull (rebase):** `git pull --rebase <REMOTE_NAME> <REMOTE_BRANCH>`
+- **Pull (merge):** `git pull <REMOTE_NAME> <REMOTE_BRANCH>`
 - **Skip:** do nothing, proceed.
 
 ## Step 6: PR-Specific Post-Switch Tasks
@@ -210,7 +219,7 @@ git log --oneline -10
 # Output format: BEHIND<tab>AHEAD
 #   Column 1 (left)  = commits in REMOTE not in HEAD → BEHIND count
 #   Column 2 (right) = commits in HEAD not in REMOTE → AHEAD count
-git rev-list --left-right --count <REMOTE_NAME>/<TARGET_BRANCH>...HEAD 2>/dev/null
+git rev-list --left-right --count <REMOTE_NAME>/<REMOTE_BRANCH>...HEAD 2>/dev/null
 ```
 
 **If `IS_PR` is true, also show:**
