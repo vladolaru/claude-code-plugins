@@ -5,25 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.123.1] - UNRELEASED
-
-### Fixed
-
-- PR switching and updating obtain consent before operations that can execute another author's code through Git hooks; declining stops the workflow.
-- `/pr-branch-update` pushes to the PR's head branch even from a local alias or an existing fork checkout, and verifies the remote's fetch and push destinations.
-- `/pr-branch-update` validates an unfinished merge against the fetched base commit and initializes verification refs before resuming conflicts.
-- `/switch-to` stops when its fallback branch belongs to unrelated local work and explicitly sets tracking for new PR branches.
-
 ## [1.123.0] - UNRELEASED
 
 ### Added
 
-- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR. It also fast-forwards the local base branch, asks before running a PR's installs and checks when someone else wrote it, and offers to return you to the branch you started on.
+- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR. It also fast-forwards the local base branch, asks before running another author's code through Git hooks, installs, or checks, and offers to return you to the branch you started on.
 
 ### Changed
 
 - `/switch-to` accepts a bare PR number (`3817` or `#3817`) as well as a PR URL.
-- `/switch-to` checks out a fork PR whose branch shares a name with one of yours, such as the contributor's `trunk`, as `pr-<number>` instead of switching to your own branch.
+- `/switch-to` asks before operations that can execute another PR author's code through Git hooks and preserves unrelated remotes when resolving the PR's repository.
+- `/switch-to` checks out a fork PR whose branch shares a name with one of yours, such as the contributor's `trunk`, as `pr-<number>` instead of switching to your own branch; it stops if that fallback also belongs to unrelated work and explicitly sets tracking for new PR branches.
 - `/switch-to` and `/pr-update` no longer assume a `ghe` command exists: they call `gh`, and when it cannot reach a GitHub Enterprise host they use the wrapper, proxy, or environment the user's own instructions name for it, or stop with the error.
 
 ## [1.122.0] - 2026-09-29
