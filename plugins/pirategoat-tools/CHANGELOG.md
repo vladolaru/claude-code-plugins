@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR. It also fast-forwards the local base branch and asks before running a PR's installs and checks when someone else wrote it.
+- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR. It also fast-forwards the local base branch, asks before running a PR's installs and checks when someone else wrote it, and offers to return you to the branch you started on.
 
 ### Changed
 

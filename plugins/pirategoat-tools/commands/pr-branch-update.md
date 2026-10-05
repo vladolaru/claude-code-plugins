@@ -20,9 +20,11 @@ You update a pull request's branch with the latest commits from its base branch,
 
 **GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`. Store the `nameWithOwner` it returns as `BASE_REPO`.
 
+Record where the user is before anything moves: `START_BRANCH=$(git branch --show-current)`.
+
 **Parse arguments:** `$ARGUMENTS`
 
-- A PR number (`3817`, `#3817`) or PR URL: run `/switch-to <argument>` and follow it through. It handles a dirty tree, fork remotes, and pulling new remote commits. If it stops, STOP.
+- A PR number (`3817`, `#3817`) or PR URL: run `/switch-to <argument>` and follow it through. It handles a dirty tree, fork remotes, and pulling new remote commits. Note whether it stashed changes. If it stops, STOP.
 - Empty: resolve the current branch's PR with `$GH_CMD pr view --json number,url,state`. When `state` is `OPEN`, use it and say so in one line ("No PR given; updating #3817 for the current branch"). For a closed or merged PR, no PR, or a failed command, ask the user whether to merge the repository's default branch (`$GH_CMD repo view --json defaultBranchRef`) into the current branch anyway. If yes, use the default branch as `baseRefName`, skip the metadata read below, set `RUN_PR_CODE` to yes (the branch is the user's own work), and push in Step 6 only if the branch has an upstream.
 
 Then read the PR's metadata:
@@ -38,7 +40,7 @@ Set `RUN_PR_CODE` (RULE 2). When `author.login` matches the user's login (`$GH_C
 ## Step 2: Check the working tree
 
 - `git rev-parse -q --verify MERGE_HEAD` succeeds: a merge is already in progress. Confirm with `git log -1 --format=%s MERGE_HEAD` that it merges the PR's base, then go to Step 4 with its conflicts. A merge of anything else, or a rebase in progress (`.git/rebase-merge` or `.git/rebase-apply` exists): STOP and describe the state.
-- `git status --porcelain` is not empty (only reachable when Step 1 did not run `/switch-to`): ask whether to stash (`git stash push --include-untracked`), or stop so the user can commit.
+- `git status --porcelain` is not empty (only reachable when Step 1 did not run `/switch-to`): ask whether to stash (`git stash push --include-untracked`), or stop so the user can commit. Note the stash for Step 8.
 - The branch's upstream has commits the local branch lacks (`git fetch` the upstream, then `git rev-list --count HEAD..@{upstream}`): `git merge --ff-only @{upstream}`. If it cannot fast-forward, STOP: the local and remote branch diverged, and the user decides which wins.
 
 ## Step 3: Merge the base
@@ -114,3 +116,7 @@ Git range for the changes: <PRE_MERGE>...<HEAD>
 ```
 
 Write "Conflicts: none" for a clean merge, and list any fix Step 5 needed under its own `Post-merge fixes:` line. Say plainly what was not verified.
+
+## Step 8: Return to where the user was
+
+If the current branch is no longer `START_BRANCH`, or Step 1 or Step 2 stashed changes, ask whether to switch back (`git checkout <START_BRANCH>`) and restore the stash (`git stash pop`). Do neither without a yes, and end by saying which branch the user is on and whether a stash remains.
