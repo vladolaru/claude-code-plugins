@@ -10,6 +10,10 @@ You update a pull request's branch with the latest commits from its base branch,
 
 **RULE 2: Run code that came with the PR only with consent when someone else wrote it.** Installs, regeneration, builds, tests and lint all execute the PR's code. Step 1 sets `RUN_PR_CODE`; when it is no, skip those commands and report the checks as not run.
 
+**One command at a time from Step 3 to Step 6:** merge, resolve, install, check, commit and push each depend on the one before. Send each as its own tool call and read its result before sending the next; never batch them in parallel.
+
+**Hooks:** `git merge`, `git commit` and `git push` run the repository's git hooks, which can install dependencies or run checks for minutes. Give those commands a long timeout or wait for them in the background, and let each finish before the next step. Do not redo work a hook already did, and never skip hooks with `--no-verify`.
+
 **Expected failures:** git and gh commands fail for normal reasons (network, auth, a branch checked out in another worktree). Report the error with the command that failed and STOP.
 
 ## Step 1: Find the PR and get onto its branch
@@ -82,6 +86,8 @@ A merge that git reports as clean can still break the build: the base may have r
 
 When `RUN_PR_CODE` is no, stop here: report the checks as not run, then go to Step 6.
 
+If the merge changed a lockfile or dependency manifest, bring dependencies in line before the checks. A post-merge hook may have done it already, but git skips that hook after a conflicted merge. Use the install command the repository documents, or the lockfile's frozen install (`pnpm install --frozen-lockfile`, `composer install`). If they are not refreshed, the report says the checks ran against stale dependencies.
+
 Then run the checks the repository's `AGENTS.md` or `CLAUDE.md` names for the files the PR touches and the files that conflicted. When neither names any, use the test and lint entry points the project has: scripts in its manifest or CI config (`package.json`, `composer.json`, `Makefile`, `.github/workflows/`), or test files and directories at the root. Report "no checks found" only when there are none of these. Fix what breaks; a fix goes in the merge commit when the merge is still uncommitted, otherwise in its own commit.
 
 ## Step 6: Commit and push
@@ -101,6 +107,7 @@ Updated #<number> with <baseRefName>: merged <N> commits, pushed <short sha>.
 
 Conflicts:
   <file> — <how it was resolved, one line>
+Dependencies: <refreshed by <command> | refreshed by a hook | unchanged by the merge | stale: <why>>
 Verification: <commands run and their result>
 Local <baseRefName>: <fast-forwarded to <short sha> | created at <short sha> | already current | not updated: <git's reason>>
 Git range for the changes: <PRE_MERGE>...<HEAD>
