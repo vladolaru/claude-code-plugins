@@ -61,7 +61,15 @@ git fetch <BASE_REMOTE> +refs/heads/<baseRefName>:refs/remotes/<BASE_REMOTE>/<ba
 git rev-list --count HEAD..<BASE_REMOTE>/<baseRefName>
 ```
 
-If the count is 0, report "Already up to date with `<baseRefName>`" and STOP. Otherwise record `PRE_MERGE=$(git rev-parse HEAD)` and merge:
+Bring the local base branch up to date too, so local diffs against `<baseRefName>` match the PR. This copies the ref just fetched, creates the branch if it is missing, and only fast-forwards:
+
+```bash
+git fetch . refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>
+```
+
+Git refuses the update when the local base has commits of its own (`non-fast-forward`) or is checked out in another worktree. Leave it as it is, carry on, and name the reason in the report.
+
+If the count is 0, report "Already up to date with `<baseRefName>`" and the local base's state, then STOP. Otherwise record `PRE_MERGE=$(git rev-parse HEAD)` and merge:
 
 ```bash
 git merge --no-edit <BASE_REMOTE>/<baseRefName>
@@ -105,6 +113,7 @@ Updated #<number> with <baseRefName>: merged <N> commits, pushed <short sha>.
 Conflicts:
   <file> - <how it was resolved, one line>
 Verification: <commands run and their result>
+Local <baseRefName>: <fast-forwarded to <short sha> | created at <short sha> | already current | not updated: <git's reason>>
 Git range for the changes: <PRE_MERGE>...<HEAD>
 ```
 
