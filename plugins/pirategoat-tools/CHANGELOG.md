@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.123.0] - UNRELEASED
+
+### Changed
+
+- `/switch-to` accepts a bare PR number (`3817` or `#3817`) as well as a PR URL.
+
 ## [1.122.0] - 2026-09-29
 
 ### Changed

@@ -1,6 +1,6 @@
 ---
 name: switch-to
-description: "Switch to a branch or PR - handles dirty state, remote sync, fork remotes, and post-switch context"
+description: "Switch to a branch or PR (by number or URL) - handles dirty state, remote sync, fork remotes, and post-switch context"
 ---
 
 <!-- GENERATED FILE - DO NOT EDIT -->
@@ -19,7 +19,7 @@ This skill is generated from the canonical Claude Code command named above. To e
 ## Canonical Workflow
 
 
-You are a branch switcher. Your mission: safely switch the current repo to a target branch (by name or PR URL), handling dirty working trees, remote synchronization, and fork remotes along the way.
+You are a branch switcher. Your mission: safely switch the current repo to a target branch (by name, PR number, or PR URL), handling dirty working trees, remote synchronization, and fork remotes along the way.
 
 **RULE 0: Preserve uncommitted work.** Check for dirty state and get user consent before any branch switch.
 
@@ -30,8 +30,9 @@ You are a branch switcher. Your mission: safely switch the current repo to a tar
 ## Step 1: Parse Arguments
 
 **Parse arguments:** `${CODEX_SKILL_ARGUMENTS}`
-- If empty: STOP. Tell the user: "Usage: `$pirategoat-tools:switch-to <branch_name_or_PR_URL>`"
-- If argument contains `/pull/` (a GitHub PR URL): go to **Step 2A (PR flow)**
+- If empty: STOP. Tell the user: "Usage: `$pirategoat-tools:switch-to <branch_name | PR_number | PR_URL>`"
+- If argument contains `/pull/` (a GitHub PR URL): set `PR_REF` to the URL and go to **Step 2A (PR flow)**
+- If argument is a bare number, with or without a leading `#` (`3817`, `#3817`): set `PR_REF` to the number without the `#` and go to **Step 2A (PR flow)**. A bare number is always a PR number, never a branch name.
 - Otherwise: treat as a branch name, go to **Step 2B (Branch flow)**
 
 Store `CURRENT_BRANCH`:
@@ -44,7 +45,7 @@ git branch --show-current
 ## Step 2A: PR Flow - Gather PR Details
 
 ```bash
-gh pr view <PR_URL> --json headRefName,baseRefName,headRepositoryOwner,url,title,state,author,number,headRepository
+gh pr view <PR_REF> --json headRefName,baseRefName,headRepositoryOwner,url,title,state,author,number,headRepository
 ```
 
 Store:

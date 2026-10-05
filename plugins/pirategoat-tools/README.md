@@ -113,7 +113,7 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 | `/iterative-review` | Multi-round independent Codex review with pushback tracking and convergence detection |
 | `/pr-update` | Update PR description with accurate summary of current changes |
 | `/copy-as [content] [slack\|p2]` | Copy content to clipboard — markdown, Slack mrkdwn, or P2 HTML |
-| `/switch-to <branch\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |
+| `/switch-to <branch\|PR_number\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |
 
 Codex installs generated skill adapters for these commands. Invoke them with
 the explicit plugin skill syntax, such as `$pirategoat-tools:pr-review 42`.
