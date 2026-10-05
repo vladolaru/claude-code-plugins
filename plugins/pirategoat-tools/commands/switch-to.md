@@ -27,8 +27,10 @@ git branch --show-current
 
 ## Step 2A: PR Flow — Gather PR Details
 
+**GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`.
+
 ```bash
-gh pr view <PR_REF> --json headRefName,baseRefName,headRepositoryOwner,url,title,state,author,number,headRepository
+<GH_CMD> pr view <PR_REF> --json headRefName,baseRefName,headRepositoryOwner,url,title,state,author,number,headRepository
 ```
 
 Store:
@@ -44,7 +46,7 @@ Store:
 **Validate CWD repo matches the PR's repo:**
 
 ```bash
-gh repo view --json owner,name
+<GH_CMD> repo view --json owner,name
 ```
 
 Compare the CWD repo's `owner.login/name` against the PR's base repository. If they don't match:
@@ -218,7 +220,7 @@ git rev-list --left-right --count <REMOTE_NAME>/<TARGET_BRANCH>...HEAD 2>/dev/nu
 git rev-list --left-right --count origin/<BASE_BRANCH>...HEAD
 
 # PR metadata
-gh pr view <PR_NUMBER> --json title,state,author,labels,reviewDecision,statusCheckRollup
+<GH_CMD> pr view <PR_NUMBER> --json title,state,author,labels,reviewDecision,statusCheckRollup
 ```
 
 **CRITICAL — interpreting `git rev-list --left-right --count A...B`:**

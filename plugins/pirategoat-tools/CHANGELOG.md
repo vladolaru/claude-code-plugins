@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `/switch-to` accepts a bare PR number (`3817` or `#3817`) as well as a PR URL.
+- `/switch-to` and `/pr-update` no longer assume a `ghe` command exists: they call `gh`, and when it cannot reach a GitHub Enterprise host they use the wrapper, proxy, or environment the user's own instructions name for it, or stop with the error.
 
 ## [1.122.0] - 2026-09-29
 
