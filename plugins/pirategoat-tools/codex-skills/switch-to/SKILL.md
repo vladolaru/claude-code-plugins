@@ -72,7 +72,7 @@ Compare the CWD repo's `owner.login/name` against the PR's base repository, the 
 
 STOP. Tell the user: "This PR belongs to `<pr_owner>/<pr_repo>` but you're in `<cwd_owner>/<cwd_repo>`. Navigate to the correct repo first."
 
-Before resolving remotes or changing the checkout, compare `PR_AUTHOR` with `$GH_CMD api user --jq .login` and apply the execution-consent rule above. A failed identity lookup means STOP.
+Before resolving remotes or changing the checkout, compare `PR_AUTHOR` with `$GH_CMD api user --hostname <PR_HOST> --jq .login`, where `PR_HOST` is the host of the PR's `url`, and apply the execution-consent rule above. `gh api` does not take the host from the git remote and defaults to github.com, so an Enterprise PR needs the explicit host. A failed identity lookup means STOP.
 
 ### Resolve PR remotes
 
