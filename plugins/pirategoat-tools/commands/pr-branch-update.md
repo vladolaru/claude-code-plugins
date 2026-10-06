@@ -72,7 +72,12 @@ git fetch . refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>
 
 Git refuses the update when the local base has commits of its own (`non-fast-forward`) or is checked out in another worktree. Leave it as it is, carry on, and name the reason in the report.
 
-For a validated resumed merge, go to Step 4 even if all conflicts are already staged. Otherwise count `git rev-list --count HEAD..$BASE_TIP`. If the count is 0, report "Already up to date with `<baseRefName>`" and the local base's state, then STOP. Otherwise merge:
+For a validated resumed merge, go to Step 4 even if all conflicts are already staged. Otherwise count `git rev-list --count HEAD..$BASE_TIP`. When it is 0, the local branch already contains the base, and what is left depends on the pushed branch. Fetch it (`git fetch <HEAD_REMOTE> +refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>`, or the recorded upstream for the no-PR fallback) and set `PUSHED_TIP` to that ref:
+
+- `PUSHED_TIP` contains the base (`git merge-base --is-ancestor $BASE_TIP $PUSHED_TIP`), or the no-PR branch has no upstream: report "Already up to date with `<baseRefName>`" and the local base's state, then go to Step 8.
+- Otherwise an earlier run merged without pushing. STOP if `git merge-base --is-ancestor $PUSHED_TIP HEAD` fails: the branches diverged. Else set `PRE_MERGE=$PUSHED_TIP`, skip the merge, and go to Step 5 so the result is verified and pushed.
+
+When the count is not 0, merge:
 
 ```bash
 git merge --no-edit -m "Merge branch '<baseRefName>' into <headRefName>" "$BASE_TIP"
@@ -117,7 +122,7 @@ Push to the branch the PR is built from, without force (the rebase in RULE 0 is 
 
 ```
 <"No PR given; updating #<number> for the current branch", when Step 1 resolved the PR itself>
-Updated #<number> with <baseRefName>: merged <N> commits, pushed <short sha>.
+Updated #<number> with <baseRefName>: <merged <N> commits | finished an earlier run's unpushed merge>, pushed <short sha>.
 
 Conflicts:
   <file> — <how it was resolved, one line>
