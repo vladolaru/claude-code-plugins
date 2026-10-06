@@ -43,11 +43,21 @@ With no merge in progress and an explicit PR argument, run `/switch-to <argument
 
 For every PR, including the no-argument and resume paths, apply **Resolve PR remotes** in `/switch-to` Step 2A using the metadata above. Set `HEAD_REMOTE` to its `REMOTE_NAME`, and keep its `BASE_REMOTE`. This must run even when no checkout was needed; never assume an owner-named remote exists. If the fork is not the user's and `maintainerCanModify` is false, STOP before merging and explain that the PR cannot be updated with these permissions.
 
-## Step 2: Check the working tree
+## Step 2: Check the working tree and sync with the PR branch
 
 - `git rev-parse -q --verify MERGE_HEAD` succeeds: preserve the index and working tree and go to Step 3 to initialize and validate the merge refs. Do not fast-forward, stash, or start another merge.
 - `git status --porcelain` is not empty (only reachable when Step 1 did not run `/switch-to`): ask whether to stash (`git stash push --include-untracked`), or stop so the user can commit. Note the stash for Step 8.
-- The branch's upstream has commits the local branch lacks (`git fetch` the upstream, then `git rev-list --count HEAD..@{upstream}`): `git merge --ff-only @{upstream}`. If it cannot fast-forward, STOP: the local and remote branch diverged, and the user decides which wins.
+
+Without a merge in progress, bring the local branch up to what the PR has on GitHub. Sync with the PR's head branch, not `@{upstream}`: a local branch may have no upstream, or track another branch such as `origin/trunk`.
+
+```bash
+git fetch <HEAD_REMOTE> +refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>
+PUSHED_TIP=$(git rev-parse refs/remotes/<HEAD_REMOTE>/<headRefName>)
+```
+
+For the no-PR fallback, fetch the recorded upstream the same way; with no upstream there is nothing to sync and no `PUSHED_TIP`.
+
+If `git rev-list --count HEAD..$PUSHED_TIP` is not 0, run `git merge --ff-only $PUSHED_TIP`. If it cannot fast-forward, STOP: the local and pushed branches diverged, and the user decides which wins. Local commits that are not pushed yet stay and go out with the push in Step 6.
 
 ## Step 3: Merge the base
 
@@ -72,10 +82,10 @@ git fetch . refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>
 
 Git refuses the update when the local base has commits of its own (`non-fast-forward`) or is checked out in another worktree. Leave it as it is, carry on, and name the reason in the report.
 
-For a validated resumed merge, go to Step 4 even if all conflicts are already staged. Otherwise count `git rev-list --count HEAD..$BASE_TIP`. When it is 0, the local branch already contains the base, and what is left depends on the pushed branch. Fetch it (`git fetch <HEAD_REMOTE> +refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>`, or the recorded upstream for the no-PR fallback) and set `PUSHED_TIP` to that ref:
+For a validated resumed merge, go to Step 4 even if all conflicts are already staged. Otherwise count `git rev-list --count HEAD..$BASE_TIP`. When it is 0, the local branch already contains the base, and what is left depends on `PUSHED_TIP` from Step 2:
 
-- `PUSHED_TIP` contains the base (`git merge-base --is-ancestor $BASE_TIP $PUSHED_TIP`), or the no-PR branch has no upstream: report "Already up to date with `<baseRefName>`" and the local base's state, then go to Step 8.
-- Otherwise an earlier run merged without pushing. STOP if `git merge-base --is-ancestor $PUSHED_TIP HEAD` fails: the branches diverged. Else set `PRE_MERGE=$PUSHED_TIP`, skip the merge, and go to Step 5 so the result is verified and pushed.
+- `PUSHED_TIP` contains the base (`git merge-base --is-ancestor $BASE_TIP $PUSHED_TIP`), or there is no `PUSHED_TIP`: report "Already up to date with `<baseRefName>`" and the local base's state, then go to Step 8.
+- Otherwise an earlier run merged without pushing (Step 2 already ruled out divergence). Set `PRE_MERGE=$PUSHED_TIP`, skip the merge, and go to Step 5 so the result is verified and pushed.
 
 When the count is not 0, merge:
 
