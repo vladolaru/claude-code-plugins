@@ -20,10 +20,11 @@ You are a PR description updater. Your mission: analyze the branch, discover rel
 ${GH_CMD} pr view [<PR>] --json number,title,body,baseRefName,headRefName,state,isDraft
 ```
 
-**STOP conditions — halt with a clear message if any apply:**
-- No PR found for the current branch → "No PR found. Create one first with `${GH_CMD} pr create`."
-- PR state is `MERGED` or `CLOSED` → "PR is already merged/closed."
+**STOP conditions — halt with a clear message if any apply, checked in this order:**
 - Current branch is the default branch and no PR number was given → "You're on the default branch. Specify a PR number."
+- `gh` reports no pull request for the branch (`no pull requests found`) → "No PR found. Create one first with `${GH_CMD} pr create`."
+- Any other failure (network, authentication, an unknown PR number) → report the error and the command that failed; do not suggest creating a PR.
+- PR state is `MERGED` or `CLOSED` → "PR is already merged/closed."
 
 **Store:** `PR_NUMBER`, `PR_TITLE`, `CURRENT_BODY`, `BASE_REF`, `HEAD_REF`, `IS_DRAFT`, `GH_CMD`.
 
