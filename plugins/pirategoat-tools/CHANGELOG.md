@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/switch-to` checks out a fork PR whose branch shares a name with one of yours, such as the contributor's `trunk`, as `pr-<number>` instead of switching to your own branch; it stops if that fallback also belongs to unrelated work and explicitly sets tracking for new PR branches.
 - `/switch-to` and `/pr-update` no longer assume a `ghe` command exists: they call `gh`, and when it cannot reach a GitHub Enterprise host they use the wrapper, proxy, or environment the user's own instructions name for it, or stop with the error.
 
+### Fixed
+
+- `/pr-update` reports a failed PR lookup (network, authentication, unknown PR) as an error instead of "No PR found", and on the default branch asks for a PR number before looking one up.
+
 ## [1.122.0] - 2026-09-29
 
 ### Changed
