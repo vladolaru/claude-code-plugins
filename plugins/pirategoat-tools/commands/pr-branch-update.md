@@ -25,7 +25,7 @@ Record where the user is before anything moves: `START_BRANCH=$(git branch --sho
 **Parse arguments:** `$ARGUMENTS`
 
 - A PR number (`3817`, `#3817`) or PR URL: use it as `<PR>` for the metadata read below. Do not run `/switch-to` yet.
-- Empty: resolve the current branch's PR with `$GH_CMD pr view --json number,url,state`. When `state` is `OPEN`, use it and say so in one line ("No PR given; updating #3817 for the current branch"). For a closed or merged PR, no PR, or a failed command, ask the user whether to allow hooks and checks while merging the repository's default branch (`$GH_CMD repo view --json defaultBranchRef`) into the current branch anyway. If yes, use the default branch as `baseRefName` and the current branch as `headRefName` (STOP if detached), skip the PR metadata and PR-specific consent/remote setup below, treat that approval as consent for hooks and checks on the user's current branch, and push in Step 6 only if the branch has an upstream. Record its configured upstream remote and destination branch explicitly; do not assume the local name is the destination.
+- Empty: resolve the current branch's PR with `$GH_CMD pr view --json number,url,state`. When `state` is `OPEN`, use it and say so in one line ("No PR given; updating #3817 for the current branch"). For a closed or merged PR, no PR, or a failed command, offer to merge the repository's default branch (`$GH_CMD repo view --json defaultBranchRef`) instead (STOP if detached). First find the branch's own remote branch: its configured upstream (`branch.<name>.remote` and `branch.<name>.merge`) only when that branch has the same name as the local one. An upstream with another name, such as the `origin/trunk` or `origin/release/X` the branch was created from, is not its own: syncing with it would look like divergence, and pushing to it would update a shared branch. Then ask: "No open PR for `<branch>`. Merge `<default branch>` into it anyway, running this repository's hooks and checks, and <push to `<remote>/<branch>` | keep the result local>?" If yes, use the default branch as `baseRefName` and the current branch as `headRefName`, skip the PR metadata and PR-specific consent/remote setup below, and treat that approval as consent for hooks and checks on the user's current branch.
 
 Then read the PR's metadata:
 
@@ -55,7 +55,7 @@ git fetch <HEAD_REMOTE> +refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<he
 PUSHED_TIP=$(git rev-parse refs/remotes/<HEAD_REMOTE>/<headRefName>)
 ```
 
-For the no-PR fallback, fetch the recorded upstream the same way; with no upstream there is nothing to sync and no `PUSHED_TIP`.
+For the no-PR fallback, fetch the branch's own remote branch from Step 1 the same way; without one there is nothing to sync and no `PUSHED_TIP`.
 
 If `git rev-list --count HEAD..$PUSHED_TIP` is not 0, run `git merge --ff-only $PUSHED_TIP`. If it cannot fast-forward, STOP: the local and pushed branches diverged, and the user decides which wins. Local commits that are not pushed yet stay and go out with the push in Step 6.
 
@@ -125,7 +125,7 @@ Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails
 Push to the branch the PR is built from, without force (the rebase in RULE 0 is the one exception):
 
 - Every PR, same-repository or fork: `git push <HEAD_REMOTE> HEAD:refs/heads/<headRefName>`. Recheck that all push URLs still identify the PR head repository using the Step 1 remote rules. The destination is the metadata head branch even when the local branch is `pr-<number>`.
-- No-PR fallback: push to the recorded upstream remote with `HEAD:refs/heads/<upstream branch>`, or report local-only if there is no upstream.
+- No-PR fallback: push to the branch's own remote branch from Step 1 (`git push <remote> HEAD:refs/heads/<branch>`), or report local-only when it has none.
 - Push rejected because someone pushed to the PR branch in the meantime: STOP and report both heads. Do not force.
 
 ## Step 7: Report
