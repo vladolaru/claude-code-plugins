@@ -20,7 +20,7 @@ You update a pull request's branch with the latest commits from its base branch,
 
 **GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`. Store the `nameWithOwner` it returns as `BASE_REPO`.
 
-Record where the user is before anything moves: `START_BRANCH=$(git branch --show-current)`.
+Record where the user is before anything moves: `START_BRANCH=$(git branch --show-current)` and `START_HEAD=$(git rev-parse HEAD)`.
 
 **Parse arguments:** `$ARGUMENTS`
 
@@ -112,15 +112,20 @@ Git merged the rest of each conflicted file on its own. Check those hunks still 
 
 ## Step 5: Verify the merged result
 
-A merge that git reports as clean can still break the build: the base may have renamed or removed something the PR's new code uses. Collect the names the base removed or renamed: the `-` lines of `git diff $PRE_MERGE...$BASE_TIP` that define a function, class, constant, export, or hook whose name does not come back on a `+` line. A changed definition is not a removal. Grep the PR's changed files (`git diff --name-only $BASE_TIP...$PRE_MERGE`) for each one. A hit in code is breakage; a hit in prose such as a changelog is not.
+A merge that git reports as clean can still break the build. Compare what the base changed (`git diff $PRE_MERGE...$BASE_TIP`) with the PR's files (`git diff --name-only $BASE_TIP...HEAD`, the PR's side on every path) for two things:
 
-If the merge changed a lockfile or dependency manifest, bring dependencies in line before the checks. A post-merge hook may have done it already, but git skips that hook after a conflicted merge. Use the install command the repository documents, or the lockfile's frozen install (`pnpm install --frozen-lockfile`, `composer install`). If they are not refreshed, the report says the checks ran against stale dependencies.
+- **Removed names:** the base removed or renamed a top-level definition (function, class, method, exported symbol, PHP constant, or hook name) that the PR's code still uses. Skip local variables, and skip a definition whose name comes back on a `+` line: that is a change, not a removal. A hit in the PR's code is breakage; a hit in prose such as a changelog is not.
+- **New conventions:** the base applied a rule to every existing case in a file the PR touches, such as a new required argument, wrapper, import, or option on every test. New code the PR adds there must follow it too, even where git merged it cleanly.
 
-Then run the checks the repository's `AGENTS.md` or `CLAUDE.md` names for the files the PR touches and the files that conflicted. When neither names any, use the test and lint entry points the project has: scripts in its manifest or CI config (`package.json`, `composer.json`, `Makefile`, `.github/workflows/`), or test files and directories at the root. Report "no checks found" only when there are none of these. Fix what breaks; a fix goes in the merge commit when the merge is still uncommitted, otherwise in its own commit.
+If a lockfile or dependency manifest differs between `START_HEAD` and `HEAD` (`git diff --name-only $START_HEAD HEAD`), whether `/switch-to`, Step 2's fast-forward, or the merge brought it, bring dependencies in line before the checks. A post-merge hook may have done it already, but git skips that hook after a conflicted merge. Use the install command the repository documents, or the lockfile's frozen install (`pnpm install --frozen-lockfile`, `composer install`). If they are not refreshed, the report says the checks ran against stale dependencies.
+
+Then run the checks the repository's `AGENTS.md` or `CLAUDE.md` names for the files the PR touches and the files that conflicted. When neither names any, use the test and lint entry points the project has: scripts in its manifest or CI config (`package.json`, `composer.json`, `Makefile`, `.github/workflows/`), or test files and directories at the root. Report "no checks found" only when there are none of these. Run them on the PR's files and the conflicted files directly: a script that picks its files from git state (unstaged changes, or a diff against a merge-base) checks nothing or everything around a merge, and a check whose configuration does not cover the PR's files is not applicable. Neither counts as a pass.
+
+Fix what the merge broke; a fix goes in the merge commit when the merge is still uncommitted, otherwise in its own commit. A failure that was already there before the merge (the same check fails at `PRE_MERGE`), or that comes from the base's own code, is reported, not fixed here.
 
 ## Step 6: Commit and push
 
-Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails, leave the merge staged, report it, and STOP without pushing.
+Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails, leave the merge staged, report it, and STOP without pushing. Hooks can add files to a commit, so check the merge commit: `git show --remerge-diff --stat HEAD` must list only files you resolved or fixed. If it lists others, STOP and report them before pushing.
 
 Push to the branch the PR is built from, without force (the rebase in RULE 0 is the one exception):
 
