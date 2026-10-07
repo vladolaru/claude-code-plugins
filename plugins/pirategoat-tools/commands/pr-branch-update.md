@@ -41,7 +41,7 @@ Before switching, inspect `MERGE_HEAD` and the rebase state directories using `g
 
 With no merge in progress and an explicit PR argument, run `/switch-to <argument>` and follow it through, preserving this execution consent. It handles dirty state and remote synchronization. Note any stash. If it stops, STOP.
 
-For every PR, including the no-argument and resume paths, apply **Resolve PR remotes** in `/switch-to` Step 2A using the metadata above. Set `HEAD_REMOTE` to its `REMOTE_NAME`, and keep its `BASE_REMOTE`. This must run even when no checkout was needed; never assume an owner-named remote exists. If the fork is not the user's and `maintainerCanModify` is false, STOP before merging and explain that the PR cannot be updated with these permissions.
+For every PR, including the no-argument and resume paths, apply **Resolve PR remotes** in `/switch-to` Step 2A using the metadata above. Set `HEAD_REMOTE` to its `REMOTE_NAME`, and keep its `BASE_REMOTE`. This must run even when no checkout was needed; never assume an owner-named remote exists. If `isCrossRepository` is true, the fork is not the user's, and `maintainerCanModify` is false, STOP before merging and explain that the PR cannot be updated with these permissions.
 
 ## Step 2: Check the working tree and sync with the PR branch
 
@@ -70,11 +70,11 @@ git fetch <BASE_REMOTE> +refs/heads/<baseRefName>:refs/remotes/<BASE_REMOTE>/<ba
 BASE_TIP=$(git rev-parse refs/remotes/<BASE_REMOTE>/<baseRefName>)
 ```
 
-Record `PRE_MERGE=$(git rev-parse HEAD)` on both fresh and resumed paths, before any merge commit. For an unfinished merge, `HEAD` is still its original first parent; do not use a commit subject or a potentially stale `ORIG_HEAD` to identify it.
+Record `PRE_MERGE=$(git rev-parse HEAD)` on both fresh and resumed paths, before any merge commit (the already-merged case below replaces it). For an unfinished merge, `HEAD` is still its original first parent; do not use a commit subject or a potentially stale `ORIG_HEAD` to identify it.
 
 **Resume validation:** if `MERGE_HEAD` exists, read it from `git rev-parse --git-path MERGE_HEAD`. Require exactly one commit and require its object ID to equal `BASE_TIP`. A different commit, multiple merge heads, or a base that advanced since the merge started means STOP, preserving the merge and reporting both IDs. Do not resolve or commit a merge against a different base.
 
-Bring the local base branch up to date too, so local diffs against `<baseRefName>` match the PR. This copies the ref just fetched, creates the branch if it is missing, and only fast-forwards:
+Bring the local base branch up to date too, so local diffs against `<baseRefName>` match the PR. Note its commit first (`git rev-parse -q --verify refs/heads/<baseRefName>`): the update prints nothing, and the report says whether it moved. This copies the ref just fetched, creates the branch if it is missing, and only fast-forwards:
 
 ```bash
 git fetch . refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>
@@ -85,7 +85,7 @@ Git refuses the update when the local base has commits of its own (`non-fast-for
 For a validated resumed merge, go to Step 4 even if all conflicts are already staged. Otherwise count `git rev-list --count HEAD..$BASE_TIP`. When it is 0, the local branch already contains the base, and what is left depends on `PUSHED_TIP` from Step 2:
 
 - `PUSHED_TIP` contains the base (`git merge-base --is-ancestor $BASE_TIP $PUSHED_TIP`), or there is no `PUSHED_TIP`: report "Already up to date with `<baseRefName>`" and the local base's state, then go to Step 8.
-- Otherwise an earlier run merged without pushing (Step 2 already ruled out divergence). Set `PRE_MERGE=$PUSHED_TIP`, skip the merge, and go to Step 5 so the result is verified and pushed.
+- Otherwise the local branch has the base and GitHub does not, usually because an earlier run merged without pushing (Step 2 already ruled out divergence). Set `PRE_MERGE=$PUSHED_TIP`, skip the merge, and go to Step 5 so the result is verified and pushed.
 
 When the count is not 0, merge:
 
@@ -137,17 +137,20 @@ Push to the branch the PR is built from, without force (the rebase in RULE 0 is 
 
 ```
 <"No PR given; updating #<number> for the current branch", when Step 1 resolved the PR itself>
-Updated #<number> with <baseRefName>: <merged <N> commits | finished an earlier run's unpushed merge>, pushed <short sha>.
+Updated #<number> with <baseRefName>: <merged <N> commits | pushed a local merge of <N> commits not yet on GitHub>; <pushed <short sha> | not pushed: <why>>.
 
+Synced: <fast-forwarded <n> commits from GitHub before merging; only when Step 2 did>
 Conflicts:
   <file> — <how it was resolved, one line>
-Dependencies: <refreshed by <command> | refreshed by a hook | unchanged by the merge | stale: <why>>
+Dependencies: <refreshed by <command> | refreshed by a hook | refreshed while resolving conflicts | unchanged | stale: <why>>
 Verification: <commands run and their result>
+Not verified: <checks not run or not applicable, and why>
 Local <baseRefName>: <fast-forwarded to <short sha> | created at <short sha> | already current | not updated: <git's reason>>
+PR text: <still accurate | stale: <title or body lines the merge made wrong, and files that left the PR's diff>>
 Git range for the changes: <PRE_MERGE>...<HEAD>
 ```
 
-Write "Conflicts: none" for a clean merge, and list any fix Step 5 needed under its own `Post-merge fixes:` line. Say plainly what was not verified.
+`<N>` is the number of base commits the update brings to the PR: `git rev-list --count $PRE_MERGE..$BASE_TIP`. Write "Conflicts: none" for a clean merge, and list any fix Step 5 needed under its own `Post-merge fixes:` line. For `PR text:`, read the PR's title and body (`$GH_CMD pr view <number> --json title,body`) against what the merge changed; when they are stale, suggest `/pr-update` and do not edit them. When the command stopped partway, open with `Stopped updating #<number>: <why>` and keep only the lines that apply.
 
 ## Step 8: Return to where the user was
 
