@@ -14,7 +14,7 @@ The command loads the `image-optimization` skill, which:
 2. works out where each image is used and how large it is shown, and proposes a profile per group;
 3. runs `imgopt.py candidates`: a ladder of encoder settings per file, each measured with SSIM, ssimulacra2 and a banding score;
 4. builds 1:1 difference tiles and a comparison page with `imgopt.py sheet`;
-5. writes the picks with `imgopt.py apply` after your approval, and re-verifies every written file.
+5. writes the picks with `imgopt.py apply` and re-verifies every written file: lossless picks apply once you have confirmed the profile, lossy picks only after you approve them on the comparison page.
 
 ## Profiles
 
@@ -46,7 +46,7 @@ Use `/optimize-images ...` in Claude Code or `$image-optimizer:optimize-images .
 
 ### Dependencies
 
-`python3 plugins/image-optimizer/scripts/imgopt.py doctor --job recompress --profile high` lists what is missing and prints one install command. On macOS:
+`python3 plugins/image-optimizer/scripts/imgopt.py doctor --job recompress --profile high` lists what is missing and prints the install lines for it (a `brew install` line, plus pip or npm lines when Pillow or svgo is missing). On macOS, all of them:
 
 ```bash
 python3 -m pip install --user pillow

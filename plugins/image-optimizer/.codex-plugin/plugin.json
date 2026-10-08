@@ -1,7 +1,7 @@
 {
   "name": "image-optimizer",
   "version": "2.0.0",
-  "description": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF): per-file candidates under quality profiles, banding checks, a 1:1 visual review and reviewer evidence.",
+  "description": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF) with quality profiles, banding checks and a 1:1 review.",
   "author": {
     "name": "Vlad Olaru",
     "url": "https://github.com/vladolaru"
@@ -22,8 +22,8 @@
   "skills": "./codex-skills/",
   "interface": {
     "displayName": "Image Optimizer",
-    "shortDescription": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF): per-file candidates under quality profiles, banding.",
-    "longDescription": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF): per-file candidates under quality profiles, banding checks, a 1:1 visual review and reviewer evidence.",
+    "shortDescription": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF) with quality profiles, banding checks and a 1:1 review.",
+    "longDescription": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF) with quality profiles, banding checks and a 1:1 review.",
     "developerName": "Vlad Olaru",
     "category": "Productivity",
     "capabilities": [

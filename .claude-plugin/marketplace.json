@@ -111,7 +111,7 @@
     {
       "name": "image-optimizer",
       "source": "./plugins/image-optimizer",
-      "description": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF): per-file candidates under quality profiles, banding checks, a 1:1 visual review and reviewer evidence.",
+      "description": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF) with quality profiles, banding checks and a 1:1 review.",
       "version": "2.0.0",
       "author": {
         "name": "Vlad Olaru"
