@@ -50,12 +50,12 @@ Store:
 **Validate CWD repo matches the PR's repo:**
 
 ```bash
-<GH_CMD> repo view --json owner,name
+<GH_CMD> repo view --json owner,name,url
 ```
 
-Compare the CWD repo's `owner.login/name` against the PR's base repository, the `owner/name` in the PR's `url`. If they don't match:
+Compare the CWD repo's `url` host and `owner.login/name` against the PR's `url` host and `owner/name`. The same owner and name can exist on github.com and on a GitHub Enterprise host, and the remotes resolved below follow the PR's host. If either differs:
 
-STOP. Tell the user: "This PR belongs to `<pr_owner>/<pr_repo>` but you're in `<cwd_owner>/<cwd_repo>`. Navigate to the correct repo first."
+STOP. Tell the user: "This PR belongs to `<pr_host>/<pr_owner>/<pr_repo>` but you're in `<cwd_host>/<cwd_owner>/<cwd_repo>`. Navigate to the correct repo first."
 
 Before resolving remotes or changing the checkout, compare `PR_AUTHOR` with `$GH_CMD api user --hostname <PR_HOST> --jq .login`, where `PR_HOST` is the host of the PR's `url`, and apply the execution-consent rule above. `gh api` does not take the host from the git remote and defaults to github.com, so an Enterprise PR needs the explicit host. A failed identity lookup means STOP.
 
