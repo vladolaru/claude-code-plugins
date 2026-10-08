@@ -27,9 +27,10 @@ def staged_files(directory):
     return sorted(p.name for p in Path(directory).glob(".imgopt-*"))
 
 
-def _lossy_record(out, factory, *, name="photo.jpg", folder_name="f--1", scores=None, quality=60, kind="lossy"):
+def _lossy_record(out, factory, *, name="photo.jpg", folder_name="f--1", scores=None, quality=60, kind="lossy",
+                  target=None, resize=None):
     """A record whose pick is a real, smaller JPEG. ``scores`` are the numbers it claims; the default
-    claims nothing a re-measure could match."""
+    claims nothing a re-measure could match. ``target`` defaults to the source (an in-place job)."""
     folder = out / folder_name
     folder.mkdir(parents=True)
     src = factory.photo(name=name)
@@ -39,8 +40,8 @@ def _lossy_record(out, factory, *, name="photo.jpg", folder_name="f--1", scores=
     claimed = scores or {"ssim": 0.5, "ss2": 50.0, "band": 0.0}
     record = {"schema": 1, "source": {"path": str(src), "sha256": C.sha256(src), "size": src.stat().st_size,
                                       "format": "jpeg"},
-              "format": "jpeg", "target": str(src), "uncalibrated": False, "waived": [], "notes": [],
-              "profile": "high", "resize": None,
+              "format": "jpeg", "target": str(target or src), "uncalibrated": False, "waived": [], "notes": [],
+              "profile": "high", "resize": resize,
               "candidates": [{"label": "jpegoptim-m60", "file": "pick.jpg", "kind": kind,
                               "size": (folder / "pick.jpg").stat().st_size, **claimed, "pass": True}],
               "pick": "pick.jpg", "verdict": "apply", "verdict_reason": "x"}
@@ -380,4 +381,37 @@ def test_cli_prints_the_tools_line_and_applies(factory, toolset, tmp_path):
     proc = run_cli(out, "--approved")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ffmpeg" in proc.stdout and "verified" in proc.stdout
+    assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
+
+
+def test_two_records_that_write_one_target_are_refused_before_writing(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    a, _ = _lossy_record(out, factory, name="a.png", folder_name="a--1", target=factory.root / "a.webp")
+    b, _ = _lossy_record(out, factory, name="a.jpg", folder_name="b--1", target=factory.root / "a.webp")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    with pytest.raises(UsageError, match=re.escape(str(factory.root / "a.webp"))):
+        AP.apply(out, tools={}, approved=True, log=lambda _: None)
+    assert not (factory.root / "a.webp").exists()
+
+
+@pytest.mark.parametrize("with_dest", [False, True])
+def test_an_existing_file_that_is_not_the_source_is_never_overwritten(factory, tmp_path, monkeypatch, with_dest):
+    out = tmp_path / "out"
+    dest = tmp_path / "dest"
+    existing = (dest if with_dest else factory.root) / "photo.webp"
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_bytes(b"someone else's file")
+    src, _ = _lossy_record(out, factory, target=factory.root / "photo.webp")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    with pytest.raises(UsageError, match=re.escape(str(existing))) as info:
+        AP.apply(out, tools={}, approved=True, dest=dest if with_dest else None, log=lambda _: None)
+    assert "--dest" in str(info.value)
+    assert existing.read_bytes() == b"someone else's file"
+
+
+def test_a_same_format_resize_may_write_over_its_own_source(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    src, folder = _lossy_record(out, factory, resize=80)
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    assert AP.apply(out, tools={}, approved=True, log=lambda _: None) == 0
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()

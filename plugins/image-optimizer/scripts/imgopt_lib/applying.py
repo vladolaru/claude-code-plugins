@@ -2,10 +2,12 @@
 
 Lossy picks are refused unless --approved is passed, which the skill allows
 only after the human approved on the comparison page. A source that changed
-since `candidates` ran is refused. Each pick is staged beside its target and
-re-measured against the recorded reference there; only a staged file that
-matches the recorded numbers replaces the target. A mismatch deletes the
-staged file and leaves the target's bytes and mtime as they were.
+since `candidates` ran is refused, and so is a selection where two picks
+would land on one path or a pick would replace an existing file other than
+its own source (both before anything is written). Each pick is staged beside
+its target and re-measured against the recorded reference there; only a
+staged file that matches the recorded numbers replaces the target. A mismatch
+deletes the staged file and leaves the target's bytes and mtime as they were.
 """
 
 from __future__ import annotations
@@ -125,6 +127,26 @@ def _write(folder: Path, record: dict, chosen: dict, target: Path, tools: dict) 
         staged.unlink(missing_ok=True)
 
 
+def target_of(record: dict, dest: Path | None) -> Path:
+    """Where ``record``'s pick is written: its recorded target, or that name inside ``dest``."""
+    target = Path(record["target"])
+    return Path(dest) / target.name if dest else target
+
+
+def _refuse_clashes(rows: list[tuple[Path, dict]], dest: Path | None) -> None:
+    """UsageError, before anything is written, when two picks would land on one path or a pick would
+    replace an existing file that is not its own source (a convert output, an unrelated file)."""
+    targets = [(target_of(r, dest).resolve(), r) for _, r in rows]
+    shared = sorted({str(t) for t, _ in targets if sum(t == other for other, _ in targets) > 1})
+    if shared:
+        raise UsageError(f"more than one result writes {', '.join(shared)}; "
+                         "apply them separately with --only, or use --dest")
+    occupied = sorted(str(t) for t, r in targets if t.exists() and t != Path(r["source"]["path"]).resolve())
+    if occupied:
+        raise UsageError(f"{', '.join(occupied)} already exists and is not the file being optimized; "
+                         "pass --dest <folder> or remove it first")
+
+
 def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path | None = None, log=print) -> int:
     selected, unmatched = _selected(Path(out), only)
     for name in unmatched:
@@ -134,12 +156,7 @@ def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path
         if not unmatched:
             log("Nothing to apply.")
         return 1 if unmatched else 0
-    if dest:
-        clashes = sorted({n for n in (Path(r["target"]).name for _, r in rows)
-                          if sum(Path(r["target"]).name == n for _, r in rows) > 1})
-        if clashes:
-            raise UsageError(f"--dest {dest}: more than one result writes a file named {', '.join(clashes)}; "
-                             "apply them separately with --only")
+    _refuse_clashes(rows, dest)
     lossy = [r for _, r in rows if needs_tiles(r)]
     if lossy and not approved:
         log("REFUSED: these picks are lossy and need the human's approval on the comparison page first:")
@@ -158,9 +175,7 @@ def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path
     written = before = after = 0
     for folder, record in rows:
         chosen = pick_of(record)
-        target = Path(record["target"])
-        if dest:
-            target = Path(dest) / target.name
+        target = target_of(record, dest)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             problem = _write(folder, record, chosen, target, tools)
