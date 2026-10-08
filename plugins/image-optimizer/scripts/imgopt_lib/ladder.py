@@ -10,7 +10,8 @@ pick keeps the ICC profile and orientation and needs no approval. Anything
 re-encoded from pixels bakes orientation and sRGB in (and any resize or
 flattening), so it is lossy even when the encoder is not: it needs tiles and
 the human's approval. ``check_job()`` is the one place a request the ladder
-cannot serve becomes a UsageError.
+cannot serve becomes a UsageError; ``tools_for()`` lists every tool a
+request's ladder can run, which is what ``tools.requirements()`` asks for.
 """
 
 from __future__ import annotations
