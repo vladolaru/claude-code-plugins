@@ -5,6 +5,25 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.123.0] - UNRELEASED
+
+### Added
+
+- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR. It also fast-forwards the local base branch, asks before running the code of someone else's fork PR through Git hooks, installs, or checks, asks before pushing to a branch someone else opened, and offers to return you to the branch you started on.
+
+### Changed
+
+- `/switch-to` accepts a bare PR number (`3817` or `#3817`) as well as a PR URL.
+- `/switch-to` asks before operations that can execute the code of someone else's fork PR through Git hooks (a same-repository PR's branch can only be changed by people with write access, so it does not ask) and preserves unrelated remotes when resolving the PR's repository.
+- `/switch-to` checks out a fork PR whose branch shares a name with one of yours, such as the contributor's `trunk`, as `pr-<number>` instead of switching to your own branch; it stops if that fallback also belongs to unrelated work and explicitly sets tracking for new PR branches.
+- `/switch-to` and `/pr-update` no longer assume a `ghe` command exists: they call `gh`, and when it cannot reach a GitHub Enterprise host they use the wrapper, proxy, or environment the user's own instructions name for it, or stop with the error.
+
+### Fixed
+
+- `/pr-update` reports a failed PR lookup (network, authentication, unknown PR) as an error instead of "No PR found", and on the default branch asks for a PR number before looking one up.
+- `/switch-to` single-quotes branch names from PR metadata in shell commands, so a fork PR's branch name cannot run commands on your machine.
+- `/switch-to` checks the PR's GitHub host as well as its owner and name before switching.
+
 ## [1.122.0] - 2026-09-29
 
 ### Changed

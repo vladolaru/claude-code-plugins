@@ -103,7 +103,7 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 | **analyzing-codex-sessions** | Parse Codex CLI rollout JSONL logs, investigate Codex subagent behavior, extract thread metrics |
 | **create-github-pr** | Structured PR creation workflow with pre-flight checks, context gathering, and approval gate |
 
-### 7 Commands
+### 8 Commands
 
 | Command | Purpose |
 |---------|---------|
@@ -113,7 +113,8 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 | `/iterative-review` | Multi-round independent Codex review with pushback tracking and convergence detection |
 | `/pr-update` | Update PR description with accurate summary of current changes |
 | `/copy-as [content] [slack\|p2]` | Copy content to clipboard — markdown, Slack mrkdwn, or P2 HTML |
-| `/switch-to <branch\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |
+| `/switch-to <branch\|PR_number\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |
+| `/pr-branch-update [PR_number\|PR_URL]` | Merge the PR's latest base branch into it, resolve conflicts, verify, and push; defaults to the current branch's PR |
 
 Codex installs generated skill adapters for these commands. Invoke them with
 the explicit plugin skill syntax, such as `$pirategoat-tools:pr-review 42`.

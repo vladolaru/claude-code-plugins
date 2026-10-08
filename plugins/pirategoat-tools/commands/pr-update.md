@@ -12,23 +12,22 @@ You are a PR description updater. Your mission: analyze the branch, discover rel
 - If empty: auto-detect PR from current branch
 - If a PR number or URL: use directly
 
-**Detection:**
+**GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner,defaultBranchRef`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`.
+
+With no PR number given and the current branch (`git branch --show-current`) equal to `defaultBranchRef`, STOP before any lookup: "You're on the default branch. Specify a PR number."
+
+**Detection** (pass the PR number or URL, single-quoted, when one was given):
 
 ```bash
-# Try gh first, then ghe for GitHub Enterprise
-gh pr view --json number,title,body,baseRefName,headRefName,state,isDraft 2>/dev/null || \
-ghe pr view --json number,title,body,baseRefName,headRefName,state,isDraft 2>/dev/null
+${GH_CMD} pr view ['<PR>'] --json number,title,body,baseRefName,headRefName,state,isDraft
 ```
 
-Store which CLI worked as `GH_CMD` (`gh` or `ghe`) for all subsequent calls.
-
 **STOP conditions — halt with a clear message if any apply:**
-- No PR found for the current branch → "No PR found. Create one first with `gh pr create`."
+- `gh` reports no pull request for the branch (`no pull requests found`) → "No PR found. Create one first with `${GH_CMD} pr create`."
+- Any other failure (network, authentication, an unknown PR number) → report the error and the command that failed; do not suggest creating a PR.
 - PR state is `MERGED` or `CLOSED` → "PR is already merged/closed."
-- Current branch is the default branch and no PR number was given → "You're on the default branch. Specify a PR number."
-- Neither `gh` nor `ghe` is available → "GitHub CLI not found. Install `gh` or `ghe`."
 
-**Store:** `PR_NUMBER`, `PR_TITLE`, `CURRENT_BODY`, `BASE_REF`, `HEAD_REF`, `IS_DRAFT`, `GH_CMD`.
+**Store:** `PR_NUMBER`, `PR_TITLE`, `CURRENT_BODY`, `BASE_REF`, `HEAD_REF`, `IS_DRAFT`.
 
 ## Step 2: Gather Branch Context
 

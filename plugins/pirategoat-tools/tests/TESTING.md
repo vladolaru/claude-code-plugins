@@ -749,6 +749,7 @@ The full plugin suite runs in about a minute (`pytest plugins/pirategoat-tools/t
 | Any review command `.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` (validates structure, agent refs, script refs) |
 | `commands/pr-update.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` |
 | `commands/switch-to.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` |
+| `commands/pr-branch-update.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` |
 | `.claude-plugin/marketplace.json` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` (validates command registration, agent cross-refs) |
 | Any marketplace entry, command, or dual-host adapter | `pytest plugins/pirategoat-tools/tests/test_codex_marketplace.py -v` |
 | `scripts/generate_codex_compat.py` | `pytest plugins/pirategoat-tools/tests/test_codex_marketplace.py -v` |

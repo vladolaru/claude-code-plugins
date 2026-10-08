@@ -2,7 +2,7 @@
 # Source: ./commands/switch-to.md
 interface:
   display_name: "Switch To"
-  short_description: "Switch to a branch or PR - handles dirty state, remote sync, fork remotes, and."
+  short_description: "Switch to a branch or PR (by number or URL) - handles dirty state, remote."
   default_prompt: "Use $pirategoat-tools:switch-to."
 policy:
   allow_implicit_invocation: false
