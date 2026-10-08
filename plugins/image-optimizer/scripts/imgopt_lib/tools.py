@@ -109,6 +109,16 @@ class Tool:
     def ok(self) -> bool:
         return self.path is not None
 
+    @property
+    def cache_id(self) -> str:
+        """What the candidates cache keys on: the version line, or, for a binary that prints none
+        (guetzli, ssimulacra2, butteraugli_main), its size and modification time, so an upgrade still
+        invalidates cached results."""
+        if self.version and self.version != "unknown" and not self.version.startswith("unreadable"):
+            return self.version
+        st = os.stat(self.path)
+        return f"{self.version or 'unknown'}:{st.st_size}:{st.st_mtime_ns}"
+
 
 @dataclass(frozen=True)
 class Requirements:

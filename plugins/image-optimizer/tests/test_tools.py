@@ -163,3 +163,19 @@ def test_svgo_older_than_4_is_rejected(tmp_path, version_line):
 def test_svgo_4_is_accepted(tmp_path):
     fake(tmp_path / "bin", "svgo", "4.0.0")
     assert T.resolve("svgo", env([tmp_path / "bin"])).version == "4.0.0"
+
+
+def test_cache_id_is_the_version_when_the_binary_prints_one(tmp_path):
+    exe = tmp_path / "oxipng"
+    exe.write_text("")
+    assert T.Tool("oxipng", str(exe), "oxipng 10.2.1", "path").cache_id == "oxipng 10.2.1"
+
+
+@pytest.mark.parametrize("version", ["unknown", "unreadable (TimeoutExpired)", ""])
+def test_cache_id_follows_the_binary_when_it_prints_no_version(tmp_path, version):
+    """guetzli, ssimulacra2 and butteraugli_main print no version, so an upgrade must still change the key."""
+    exe = tmp_path / "guetzli"
+    exe.write_bytes(b"old build")
+    before = T.Tool("guetzli", str(exe), version, "path").cache_id
+    exe.write_bytes(b"a newer build")
+    assert T.Tool("guetzli", str(exe), version, "path").cache_id != before

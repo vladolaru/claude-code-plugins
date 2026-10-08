@@ -561,3 +561,13 @@ def test_no_pick_reason_names_why_the_closest_failed_and_skips_hints_for_tool_fa
     assert "(failed: SSIM 0.9700 < 0.98)" in C._no_pick_reason([close], o)
     errored = [{"label": "a", "error": "crashed", "pass": False}]
     assert C._no_pick_reason(errored, o) == "no candidate passed the gates; every candidate errored"
+
+
+def test_the_cache_key_changes_when_a_versionless_tool_is_replaced(tmp_path):
+    exe = tmp_path / "ssimulacra2"
+    exe.write_bytes(b"old build")
+    rung = ladder.Rung("oxipng", "oxipng", "lossless", "source", ".png", ())
+    tools = {"ssimulacra2": Tool("ssimulacra2", str(exe), "unknown", "path")}
+    before = C._key("src", "ref", opts(tmp_path / "o"), rung, tools)
+    exe.write_bytes(b"a newer build")
+    assert C._key("src", "ref", opts(tmp_path / "o"), rung, tools) != before

@@ -102,7 +102,7 @@ def _key(src_hash: str, ref_hash: str, opts: Options, rung: ladder.Rung, tools: 
     payload = {"v": CACHE_VERSION, "src": src_hash, "ref": ref_hash, "resize": opts.resize,
                "format": opts.out_format, "rung": [rung.label, rung.tool, list(rung.args), rung.input,
                                                    rung.post_oxipng, rung.post_jpegtran],
-               "tools": {n: tools[n].version for n in names if n in tools and tools[n].ok}}
+               "tools": {n: tools[n].cache_id for n in names if n in tools and tools[n].ok}}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
