@@ -29,7 +29,7 @@ from . import compare as CP
 from . import gates as G
 from . import ladder, metrics
 from .formats import EXT_BY_FORMAT, format_of, subdir_name
-from .imaging import READ_FAILURES, display_pixels, flatten, read_facts, srgb_shift
+from .imaging import READ_FAILURES, ImagingError, display_pixels, flatten, read_facts, srgb_shift
 from .tools import describe
 
 SCHEMA = 1
@@ -190,7 +190,8 @@ def _svg_rung(rung, key, inputs, folder, src, tools) -> dict:
 
 def _reviewer_check(rec: dict, ref_path: Path, ref_facts, folder: Path, tools: dict) -> None:
     """Record the SSIM a reviewer's ffmpeg one-liner (`compare`) prints for this candidate as
-    ``ssim_reviewer``, or None with ``reviewer_note`` saying why ffmpeg alone cannot reproduce it."""
+    ``ssim_reviewer``, or None with ``reviewer_note`` saying why ffmpeg alone cannot reproduce it.
+    A failed ffmpeg run is also marked ``reviewer_failed``, so the next run checks again (see _reuse)."""
     new = folder / rec["file"]
     ri, ni = display_pixels(ref_path), display_pixels(new)
     obstacles = CP.reviewer_obstacles(ref_facts, read_facts(new), ri.size, ni.size)
@@ -202,6 +203,16 @@ def _reviewer_check(rec: dict, ref_path: Path, ref_facts, folder: Path, tools: d
         rec["ssim_reviewer"], _ = CP.reviewer_check(tools["ffmpeg"].path, ref_path, new, ri, ni)
     except metrics.MetricError as error:
         rec["reviewer_note"] = f"ffmpeg could not read the pair ({error})"
+        rec["reviewer_failed"] = True
+
+
+def _reuse(old: dict) -> dict:
+    """A cached candidate as recorded, except a reviewer check whose ffmpeg run failed, which is redone."""
+    rec = dict(old)
+    if rec.pop("reviewer_failed", False):
+        rec.pop("ssim_reviewer", None)
+        rec.pop("reviewer_note", None)
+    return rec
 
 
 def _pick(cands: list[dict], gates: G.Gates, check) -> dict | None:
@@ -222,12 +233,16 @@ def _pick(cands: list[dict], gates: G.Gates, check) -> dict | None:
 
 
 def _no_pick_reason(cands: list[dict], opts: Options) -> str:
-    """Why nothing was picked, with the closest measured candidate so the human can judge the gap."""
+    """Why nothing was picked, with the closest measured candidate so the human can judge the gap.
+    A file whose candidates all errored has a tool problem (run() reports it), not a quality question."""
     why = "no candidate passed the gates"
+    if cands and all(c.get("error") for c in cands):
+        return why + "; every candidate errored"
     measured = [c for c in cands if c.get("ssim") is not None and not c.get("error") and not c.get("discarded")]
     if measured:
         best = max(measured, key=lambda c: (c["ssim"], c["ss2"]))
-        why += f"; closest: {best['label']} at SSIM {best['ssim']:.4f}, ss2 {best['ss2']:.1f}"
+        why += (f"; closest: {best['label']} at SSIM {best['ssim']:.4f}, ss2 {best['ss2']:.1f} "
+                f"(failed: {best['reason']})")
     if opts.resize and opts.profile == "high":
         medium = G.PROFILES["medium"]
         why += (f"; for a resize, --profile medium (SSIM {medium.ssim:g}, ss2 {medium.ss2:g}) is the usual "
@@ -250,6 +265,10 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         folder.mkdir(parents=True, exist_ok=True)
     else:
         facts = read_facts(src)
+        ref_facts = read_facts(ref_path) if opts.ref else facts
+        if opts.resize and opts.resize == facts.display_width == ref_facts.display_width:
+            raise ImagingError(f"{src.name}: already displays {opts.resize} px wide, so there is nothing to "
+                               "resize (optimize it without --resize)")
         plan = ladder.plan(facts, profile=opts.profile, out_format=opts.out_format, resize=opts.resize)
         notes += plan.notes
         rungs, target_fmt = plan.rungs, plan.out_format
@@ -293,7 +312,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         key = _key(src_hash, ref_hash, opts, rung, tools)
         old = previous.get(key)
         if _reusable(old, folder):
-            rec = dict(old)
+            rec = _reuse(old)
         elif fmt == "svg":
             rec = _svg_rung(rung, key, inputs, folder, src, tools)
         else:
@@ -303,7 +322,6 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     if fmt == "svg":
         chosen = G.pick(cands)
     else:
-        ref_facts = read_facts(ref_path) if opts.ref else facts
         chosen = _pick(cands, opts.gates, lambda rec: _reviewer_check(rec, ref_path, ref_facts, folder, tools))
     # A same-format job rewrites the source itself (a resize too); only a new format gets a new name.
     target = src if target_fmt == fmt else src.with_suffix(EXT_BY_FORMAT[target_fmt])
@@ -374,7 +392,8 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
             "every sheet tile is required viewing.")
     larger = [r for r in applied if pick_of(r)["size"] > r["source"]["size"]]
     if larger:
-        log(f"LARGER: {len(larger)} pick(s) are larger than their original (a format change was asked for); "
+        log(f"LARGER: {len(larger)} pick(s) are larger than their original (a resize or format change was "
+            "asked for, so they still apply); "
             "tell the human before applying: " + ", ".join(Path(r["source"]["path"]).name for r in larger))
     waived = sorted({w for r in records for w in r["waived"]})
     if waived:

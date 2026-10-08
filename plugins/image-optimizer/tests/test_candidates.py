@@ -505,3 +505,59 @@ def test_a_resize_that_finds_no_pick_names_the_closest_and_suggests_medium(facto
     assert r["pick"] is None
     assert r["verdict_reason"].startswith("no candidate passed the gates; closest: ")
     assert "SSIM 0." in r["verdict_reason"] and "--profile medium" in r["verdict_reason"]
+
+
+def test_a_resize_to_the_width_both_images_already_have_is_skipped(factory, toolset, tmp_path):
+    tools = toolset("prepare", "high", {"jpeg"})
+    src = factory.photo(size=(160, 120), quality=95).resolve()
+    lines = []
+    assert C.run([src], opts(tmp_path / "out", "high", resize=160), tools, log=lines.append) == []
+    assert any("already displays 160 px wide" in line for line in lines), lines
+
+
+def test_a_file_already_resized_can_be_measured_against_its_larger_original(factory, toolset, tmp_path):
+    """The Baselines follow-up: the merged file is 160 px, --ref is the 320 px pre-merge original."""
+    tools = toolset("prepare", "high", {"jpeg"})
+    original = factory.photo(name="original.jpg", size=(320, 240), quality=95).resolve()
+    merged = factory.root / "merged.jpg"
+    I.resize_width(Image.open(original), 160).save(merged, "JPEG", quality=90)
+    [r] = C.run([merged.resolve()], opts(tmp_path / "out", "high", resize=160, ref=original), tools, log=quiet)
+    assert r["candidates"] and r["ref"]["path"] == str(original)
+
+
+def test_an_mpo_phone_jpeg_gets_the_reviewer_check(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    first = Image.open(factory.photo(name="a.jpg", quality=95))
+    src = factory.root / "phone.jpg"
+    first.save(src, "MPO", save_all=True, append_images=[first.copy()], quality=95)
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
+    chosen = C.pick_of(r)
+    assert chosen and chosen["kind"] == "lossy", r["verdict_reason"]
+    assert chosen["ssim_reviewer"] is not None, chosen.get("reviewer_note")
+
+
+def test_a_failed_ffmpeg_run_is_noted_and_checked_again_next_run(factory, toolset, tmp_path, monkeypatch):
+    from imgopt_lib import compare as CP
+    from imgopt_lib.metrics import MetricError
+    tools = toolset("recompress", "high", {"jpeg"})
+
+    def broken(*a):
+        raise MetricError("ffmpeg timed out")
+    monkeypatch.setattr(CP, "reviewer_check", broken)
+    src = factory.photo(quality=95).resolve()
+    [r] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
+    chosen = C.pick_of(r)
+    assert chosen["ssim_reviewer"] is None and "ffmpeg timed out" in chosen["reviewer_note"]
+    calls = []
+    monkeypatch.setattr(CP, "reviewer_check", lambda *a: calls.append(1) or (0.99, "graph"))
+    [again] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
+    assert calls and C.pick_of(again)["ssim_reviewer"] == 0.99
+    assert "reviewer_failed" not in C.pick_of(again)
+
+
+def test_no_pick_reason_names_why_the_closest_failed_and_skips_hints_for_tool_failures():
+    o = opts(Path("out"), "high", resize=100)
+    close = {"label": "cjpeg-q95", "ssim": 0.97, "ss2": 85.0, "reason": "SSIM 0.9700 < 0.98", "pass": False}
+    assert "(failed: SSIM 0.9700 < 0.98)" in C._no_pick_reason([close], o)
+    errored = [{"label": "a", "error": "crashed", "pass": False}]
+    assert C._no_pick_reason(errored, o) == "no candidate passed the gates; every candidate errored"

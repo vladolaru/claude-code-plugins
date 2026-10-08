@@ -120,7 +120,8 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
     ref, new = fetch(ref_spec, workdir, cwd), fetch(new_spec, workdir, cwd)
     if ref.suffix.lower() == ".svg" or new.suffix.lower() == ".svg":
         raise ValueError("compare measures raster images; SVGs are checked by candidates' render identity")
-    rf, nf = read_facts(ref), read_facts(new)
+    # compare keys nothing on a file's extension, so content under another name is measured as it is.
+    rf, nf = read_facts(ref, check_name=False), read_facts(new, check_name=False)
     ri, ni = display_pixels(ref), display_pixels(new)
     animated = rf.frames > 1 or nf.frames > 1
     identical = (metrics.frames_identical(ref, new) if animated

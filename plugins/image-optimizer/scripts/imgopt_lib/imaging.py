@@ -51,6 +51,11 @@ class Facts:
     progressive: bool
     frames: int
 
+    @property
+    def display_width(self) -> int:
+        """The width a viewer sees: orientations 5 to 8 turn the image a quarter."""
+        return self.height if self.orientation in (5, 6, 7, 8) else self.width
+
 
 def is_srgb(desc: str | None) -> bool:
     return bool(desc) and "srgb" in desc.lower().replace(" ", "").replace("-", "")
@@ -79,27 +84,29 @@ def _refuse_16_bit(im: Image.Image, path: Path) -> None:
 _DECODED_AS = {"mpo": "jpeg"}
 
 
-def decoded_format(im: Image.Image, path: Path) -> str:
-    """The format Pillow decoded, which must agree with the name: every command picks its tools and its
-    output name from the extension (formats.format_of), the ladder from the decoded format."""
+def decoded_format(im: Image.Image, path: Path, *, check_name: bool = True) -> str:
+    """The format Pillow decoded. With ``check_name`` it must agree with the extension: candidates, inspect
+    and apply pick tools and output names from the extension (formats.format_of), the ladder from the
+    decoded format. ``compare`` keys nothing on the name, so it passes False."""
     decoded = (im.format or "").lower()
     decoded = _DECODED_AS.get(decoded, decoded)
     named = format_of(path)
-    if named and decoded != named:
+    if check_name and named and decoded != named:
         raise ImagingError(f"{Path(path).name}: its content is {decoded.upper() or 'unknown'} but its name says "
                            f"{named.upper()}; rename it to match its content first")
     return decoded
 
 
-def read_facts(path: Path) -> Facts:
+def read_facts(path: Path, *, check_name: bool = True) -> Facts:
     with Image.open(path) as im:
         _refuse_16_bit(im, path)
         icc = im.info.get("icc_profile") or None
         desc = profile_description(icc)
         colors = im.convert("RGBA").getcolors(maxcolors=4096)
+        fmt = decoded_format(im, path, check_name=check_name)
         return Facts(
             path=Path(path),
-            format=decoded_format(im, path),
+            format=fmt,
             width=im.width,
             height=im.height,
             mode=im.mode,
@@ -110,7 +117,8 @@ def read_facts(path: Path) -> Facts:
             device_profile=bool(icc) and not is_srgb(desc),
             orientation=int(im.getexif().get(ORIENTATION_TAG, 1) or 1),
             progressive=bool(im.info.get("progressive") or im.info.get("progression")),
-            frames=getattr(im, "n_frames", 1),
+            # An MPO's extra pictures are not shown by browsers (and ffmpeg reads only the first): one frame.
+            frames=1 if fmt == "jpeg" else getattr(im, "n_frames", 1),
         )
 
 
@@ -173,14 +181,10 @@ def resize_width(img: Image.Image, width: int) -> Image.Image:
 
 
 def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
-    """What the viewer sees, scaled down to ``width`` when given; a width at or above the displayed one is
-    refused (an upscale, or a resize that changes nothing but would still re-encode the pixels)."""
+    """What the viewer sees, scaled down to ``width`` when given; a width above the displayed one is refused."""
     im, icc = _oriented(path)
     if width and width > im.width:
         raise ImagingError(f"{Path(path).name}: --resize {width} would upscale it (it displays {im.width} px wide)")
-    if width and width == im.width:
-        raise ImagingError(f"{Path(path).name}: already displays {width} px wide, so there is nothing to resize "
-                           "(optimize it without --resize)")
     if icc and not is_srgb(profile_description(icc)):
         rgba = _convert(im, icc, Path(path).name)
     else:

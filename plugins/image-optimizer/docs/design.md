@@ -35,7 +35,7 @@ A pick is lossless only when a lossless encoder rewrote the source file itself. 
 
 - The smallest passing candidate wins. Ties go to lossless, then to progressive.
 - **In-place jobs** (same format, same size) leave the file untouched when the saving is below max(1 KB, 1%): a few bytes are not worth a binary diff in a repository.
-- **Resizes and format changes** always apply their pick, because the change was asked for. A converted file larger than its original is still applied, but it is flagged LARGER so the human hears about it first.
+- **Resizes and format changes** always apply their pick, because the change was asked for. A resized or converted file larger than its original is still applied, but it is flagged LARGER so the human hears about it first.
 - **When nothing passes**, the verdict names the closest candidate. For a resize under `high`, it also suggests `medium`: shrinking green-glass-jars from #69539 to 240 px under `high` found nothing, with the best candidate at SSIM 0.974.
 
 ## Tooling policy

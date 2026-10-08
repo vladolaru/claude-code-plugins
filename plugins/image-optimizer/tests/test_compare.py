@@ -219,3 +219,12 @@ def test_a_download_that_stalls_times_out_as_exit_2(tmp_path, capsys, toolset, m
     finally:
         silent.close()
     assert "error:" in capsys.readouterr().err
+
+
+def test_compare_measures_content_whatever_its_name(factory, toolset, tmp_path):
+    """compare keys nothing on the extension, so a JPEG named .png is measured, not refused."""
+    tools = toolset("compare")
+    a = factory.photo(name="a.jpg")
+    misnamed = factory.photo(name="b.jpg", quality=60).rename(factory.root / "b.png")
+    r = CP.compare(str(a), str(misnamed), tools, tmp_path)
+    assert not r["identical"] and r["reproducible"] and r["ssim_reviewer"] is not None

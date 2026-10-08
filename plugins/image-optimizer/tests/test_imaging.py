@@ -117,15 +117,10 @@ def test_16_bit_images_are_refused_by_the_shared_read_path(factory, channels):
 
 def test_an_upscaling_resize_is_refused(factory):
     path = factory.photo(size=(40, 20), orientation=6)  # displayed 20 px wide
-    assert I.display_pixels(path, width=10).size == (10, 20)
+    assert I.display_pixels(path, width=20).size == (20, 40)
+    assert I.read_facts(path).display_width == 20
     with pytest.raises(I.ImagingError, match="would upscale"):
         I.display_pixels(path, width=30)
-
-
-def test_a_resize_to_the_displayed_width_is_refused(factory):
-    path = factory.photo(size=(40, 20), orientation=6)  # displayed 20 px wide, stored 40
-    with pytest.raises(I.ImagingError, match="already displays 20 px wide"):
-        I.display_pixels(path, width=20)
 
 
 def test_a_file_whose_content_does_not_match_its_name_is_refused(factory):
@@ -140,7 +135,8 @@ def test_a_jpeg_pillow_decodes_as_mpo_is_a_jpeg(factory):
     path = factory.root / "phone.jpg"
     first.save(path, "MPO", save_all=True, append_images=[first.copy()])
     assert Image.open(path).format == "MPO"
-    assert I.read_facts(path).format == "jpeg"
+    facts = I.read_facts(path)
+    assert facts.format == "jpeg" and facts.frames == 1  # browsers show only the first picture
 
 
 def test_the_16_bit_check_reads_plain_tuple_tiles():
