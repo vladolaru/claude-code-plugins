@@ -370,3 +370,21 @@ def test_a_same_format_resize_targets_the_source_itself(factory, toolset, tmp_pa
     assert r["target"] == str(src)
     if r["verdict"] == "apply":
         assert "replaces the original" in r["verdict_reason"], r["verdict_reason"]
+
+
+def _without(tools, name):
+    return {**tools, name: Tool(name, None, note="not installed")}
+
+
+def test_the_waived_note_names_only_tools_the_human_waived(factory, toolset, tmp_path):
+    tools = _without(toolset("recompress", "high", {"jpeg"}), "guetzli")
+    src = factory.photo().resolve()
+    [r] = C.run([src], opts(tmp_path / "out", "high", waived=("guetzli",)), tools, log=quiet)
+    assert any("tools waived: guetzli" in n for n in r["notes"])
+    assert not any(c["label"].startswith("guetzli") for c in r["candidates"])
+
+
+def test_a_missing_tool_nobody_waived_is_a_bug_not_a_note(factory, toolset, tmp_path):
+    tools = _without(toolset("recompress", "high", {"jpeg"}), "guetzli")
+    with pytest.raises(RuntimeError, match="guetzli"):
+        C.run([factory.photo().resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)

@@ -6,7 +6,8 @@ Each tool resolves through ``resolve()`` in a fixed order (``ORDER``, else
 libjpeg-turbo copy on PATH is rejected because its output was 1.5-4% larger
 in the 2026-10-07 WooCommerce session. ``requirements()`` maps a job, a
 profile and the formats present to required, quality-affecting and optional
-tools. ``check()`` applies the policy: required tools always block,
+tools; the encoders come from ``ladder.tools_for``, so a job asks for exactly
+what its ladder runs (a convert job for the target format's encoders). ``check()`` applies the policy: required tools always block,
 quality-affecting ones block unless waived, optional ones never block.
 Linux package names in ``APT`` are best effort and unverified.
 """
@@ -74,9 +75,6 @@ ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("bundle", "keg", "path"),
 DEFAULT_ORDER = ("path", "bundle")
 MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
 
-LOSSLESS_BY_FORMAT = {"jpeg": ("jpegoptim", "jpegtran"), "png": ("oxipng",),
-                      "gif": ("gifsicle",), "svg": ("svgo",)}
-LOSSY_BY_FORMAT = {"jpeg": ("guetzli", "cjpeg"), "png": ("pngquant",)}
 TARGET_ENCODER = {"jpeg": "cjpeg", "webp": "cwebp", "avif": "avifenc", "png": "oxipng"}
 ALL_FORMATS = ("jpeg", "png", "gif", "svg")
 
@@ -205,18 +203,22 @@ def requirements(job: str, profile: str = "lossless", formats=None, target: str 
     if job == "audit":
         quality += [tool for fmt, tool in (("jpeg", "jpegtran"), ("png", "oxipng")) if fmt in fmts]
         return Requirements(tuple(required), _dedupe(quality), ())
-    if "svg" in fmts:
-        required.append("rsvg-convert")
+    # Imported here: ladder needs Pillow, and this module must import without it (conftest, doctor's report).
+    from .ladder import tools_for
+
+    out_format = target if job == "convert" else "keep"
+    resize = 1 if job == "prepare" else None
     for fmt in fmts:
-        quality += LOSSLESS_BY_FORMAT.get(fmt, ())
+        ladder_tools = tools_for(fmt, profile=profile, out_format=out_format, resize=resize)
+        if fmt == "svg" and ladder_tools:
+            required.append("rsvg-convert")  # the render check that decides every SVG candidate
+        quality += sorted(ladder_tools)
+        if job in ("prepare", "convert") and fmt in ("jpeg", "png"):
+            encoder = TARGET_ENCODER.get(fmt if out_format == "keep" else out_format)
+            required += [encoder] if encoder in ladder_tools else []
     if profile != "lossless":
         required += ["ffmpeg", "ssimulacra2"]
-        for fmt in fmts:
-            quality += LOSSY_BY_FORMAT.get(fmt, ())
         optional += ["butteraugli_main", "chrome"]
-    if job in ("prepare", "convert"):
-        outputs = [target] if target != "keep" else [f for f in fmts if f in ("jpeg", "png")]
-        required += [TARGET_ENCODER[o] for o in outputs if o in TARGET_ENCODER]
     req = _dedupe(required)
     return Requirements(req, tuple(q for q in _dedupe(quality) if q not in req), _dedupe(optional))
 

@@ -126,3 +126,27 @@ def test_doctor_cli_reports_and_exits_by_readiness(factory):
     assert proc.returncode in (0, 2), proc.stderr
     assert "imgopt doctor: job=recompress profile=lossless" in proc.stdout
     assert ("Ready." in proc.stdout) == (proc.returncode == 0)
+
+
+def test_jpeg_to_png_requires_the_png_ladder():
+    req = T.requirements("convert", "high", {"jpeg"}, "png")
+    assert "pngquant" in req.quality and "oxipng" in req.required
+    assert not {"guetzli", "cjpeg", "jpegoptim"} & set(req.all)
+
+
+def test_png_to_jpeg_requires_the_jpeg_encoders():
+    req = T.requirements("convert", "high", {"png"}, "jpeg")
+    assert "cjpeg" in req.required and "guetzli" in req.quality
+    assert not {"pngquant", "oxipng"} & set(req.all)
+
+
+def test_jpeg_to_webp_requires_only_what_the_ladder_runs():
+    req = T.requirements("convert", "high", {"jpeg"}, "webp")
+    assert "cwebp" in req.required
+    assert not {"guetzli", "cjpeg", "jpegoptim", "jpegtran"} & set(req.all)
+
+
+def test_prepare_requires_the_pixel_encoders_not_the_lossless_ones():
+    req = T.requirements("prepare", "high", {"jpeg"})
+    assert "cjpeg" in req.required and "guetzli" in req.quality
+    assert "jpegoptim" not in req.all

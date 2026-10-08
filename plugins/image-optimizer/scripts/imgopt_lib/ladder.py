@@ -159,6 +159,27 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
     return Plan(rungs, pixel, target, notes)
 
 
+def tools_for(fmt: str, *, profile: str, out_format: str = "keep", resize: int | None = None) -> set[str]:
+    """Every tool plan() can run for a source of format ``fmt``; empty when check_job() refuses the request.
+
+    The union over the one fact that adds encoders (a device colour profile sends an in-place lossy job's
+    lossy rungs to pixels); the other facts only drop rungs or change a rung's input.
+    """
+    try:
+        check_job(fmt, profile=profile, out_format=out_format, resize=resize)
+    except UsageError:
+        return set()
+    if fmt == "svg":
+        return set(SVG_RUNG.tools)
+    found: set[str] = set()
+    for device in (False, True):
+        f = Facts(path=Path(fmt), format=fmt, width=1, height=1, mode="RGB", has_alpha=False, colors=None,
+                  icc=None, icc_desc=None, device_profile=device, orientation=1, progressive=False, frames=1)
+        for rung in plan(f, profile=profile, out_format=out_format, resize=resize).rungs:
+            found |= rung.tools
+    return found
+
+
 def _exe(tools: dict, name: str) -> str:
     tool = tools.get(name)
     if tool is None or not tool.ok:

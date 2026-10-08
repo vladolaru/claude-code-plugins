@@ -222,8 +222,12 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     if opts.ref:
         notes.append(f"measured against {opts.ref}")
     skipped = [r for r in rungs if not _available(r, tools)]
+    missing = sorted({n for r in skipped for n in r.tools if not (n in tools and tools[n].ok)})
+    unwaived = [n for n in missing if n not in opts.waived]
+    if unwaived:  # the strict tool check must have blocked these; going on would silently skip rungs
+        raise RuntimeError(f"{src.name}: the ladder needs {', '.join(unwaived)}, which the tool check neither "
+                           "found nor saw waived (an imgopt bug: tools.requirements and the ladder disagree)")
     if skipped:
-        missing = sorted({n for r in skipped for n in r.tools if not (n in tools and tools[n].ok)})
         notes.append(f"skipped {len(skipped)} rung(s), tools waived: {', '.join(missing)}")
     inputs = {"source": src, "pixels": folder / "pixels.png", "pixels_flat": folder / "pixels_flat.png",
               "pixels_ppm": folder / "pixels.ppm", "ref_is_source": ref_hash == src_hash}
