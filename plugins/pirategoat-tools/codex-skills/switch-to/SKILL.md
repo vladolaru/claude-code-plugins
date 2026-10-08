@@ -159,7 +159,7 @@ Check if it exists on the remote:
 git ls-remote --heads <REMOTE_NAME> <REMOTE_BRANCH>
 ```
 
-If it exists on the remote - create a local tracking branch:
+If it exists on the remote - create a local tracking branch. Git sets up tracking only for a remote-tracking ref that the remote's fetch refspecs map, so in a single-branch clone (`git config --get-all remote.<REMOTE_NAME>.fetch` has no `+refs/heads/*:refs/remotes/<REMOTE_NAME>/*`) register the branch first with `git remote set-branches --add <REMOTE_NAME> <REMOTE_BRANCH>`. Otherwise `checkout --track` fails with "cannot set up tracking information".
 ```bash
 git fetch <REMOTE_NAME> +refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>
 git checkout --track -b <TARGET_BRANCH> <REMOTE_NAME>/<REMOTE_BRANCH>
