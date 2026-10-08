@@ -46,12 +46,21 @@ def evaluate(rec: dict, gates: Gates) -> tuple[bool, str]:
     if gates.lossless_only:
         return False, "not pixel-identical"
     fails = []
-    if gates.ssim is not None and rec["ssim"] < gates.ssim:
-        fails.append(f"SSIM {rec['ssim']:.4f} < {gates.ssim:g}")
-    if gates.ss2 is not None and rec["ss2"] < gates.ss2:
-        fails.append(f"ss2 {rec['ss2']:.1f} < {gates.ss2:g}")
-    if gates.band is not None and rec.get("band_gated") and rec["band"] > gates.band:
-        fails.append(f"banding {rec['band']:.1f} > {gates.band:g}")
+    if gates.ssim is not None:
+        if rec.get("ssim") is None:
+            fails.append("ssim not measured")
+        elif rec["ssim"] < gates.ssim:
+            fails.append(f"SSIM {rec['ssim']:.4f} < {gates.ssim:g}")
+    if gates.ss2 is not None:
+        if rec.get("ss2") is None:
+            fails.append("ss2 not measured")
+        elif rec["ss2"] < gates.ss2:
+            fails.append(f"ss2 {rec['ss2']:.1f} < {gates.ss2:g}")
+    if gates.band is not None and rec.get("band_gated"):
+        if rec.get("band") is None:
+            fails.append("band not measured")
+        elif rec["band"] > gates.band:
+            fails.append(f"banding {rec['band']:.1f} > {gates.band:g}")
     return not fails, "; ".join(fails)
 
 

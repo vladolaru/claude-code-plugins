@@ -63,3 +63,87 @@ def test_verdict_skips_trivial_savings_in_place_only():
     assert G.verdict(100_000, rec(size=120_000))[0] == "untouched"
     assert G.verdict(100_000, rec(size=99_900), in_place=False)[0] == "apply"
     assert G.verdict(100_000, None)[0] == "untouched"
+
+
+def without(key, **kw):
+    r = rec(**kw)
+    del r[key]
+    return r
+
+
+@pytest.mark.parametrize("key, kw", [
+    ("ssim", {}), ("ss2", {}), ("band", {"band_gated": True}),
+])
+def test_unmeasured_metric_fails_the_gate_instead_of_raising(key, kw):
+    assert G.evaluate(rec(**{key: None}, **kw), G.PROFILES["high"]) == (False, f"{key} not measured")
+    assert G.evaluate(without(key, **kw), G.PROFILES["high"]) == (False, f"{key} not measured")
+
+
+def test_unmeasured_band_is_ignored_when_the_rung_is_not_palette():
+    assert G.evaluate(rec(band=None), G.PROFILES["high"])[0]
+    assert G.evaluate(without("band"), G.PROFILES["high"])[0]
+
+
+@pytest.mark.parametrize("ssim, passes", [
+    (0.98, True), (0.9799999, False),
+])
+def test_high_ssim_floor_is_inclusive(ssim, passes):
+    assert G.evaluate(rec(ssim=ssim, ss2=85.0, band=1.0), G.PROFILES["high"])[0] is passes
+
+
+@pytest.mark.parametrize("ss2, passes", [
+    (80.0, True), (79.99, False),
+])
+def test_high_ss2_floor_is_inclusive(ss2, passes):
+    assert G.evaluate(rec(ss2=ss2), G.PROFILES["high"])[0] is passes
+
+
+@pytest.mark.parametrize("band, passes", [
+    (3.0, True), (3.01, False),
+])
+def test_high_band_ceiling_is_inclusive(band, passes):
+    assert G.evaluate(rec(band=band, band_gated=True), G.PROFILES["high"])[0] is passes
+
+
+@pytest.mark.parametrize("ssim, passes", [
+    (0.96, True), (0.9599999, False),
+])
+def test_medium_ssim_floor_is_inclusive(ssim, passes):
+    assert G.evaluate(rec(ssim=ssim, ss2=85.0), G.PROFILES["medium"])[0] is passes
+
+
+@pytest.mark.parametrize("ss2, passes", [
+    (60.0, True), (59.99, False),
+])
+def test_medium_ss2_floor_is_inclusive(ss2, passes):
+    assert G.evaluate(rec(ss2=ss2), G.PROFILES["medium"])[0] is passes
+
+
+def test_lossy_record_fails_the_lossless_profile_even_when_it_looks_perfect():
+    assert G.evaluate(rec(kind="lossless", identical=False), G.PROFILES["lossless"]) == (
+        False, "not pixel-identical")
+
+
+def test_pick_breaks_equal_sizes_in_favour_of_progressive():
+    plain = rec(size=900, progressive=False, **{"pass": True})
+    prog = rec(size=900, progressive=True, **{"pass": True})
+    assert G.pick([plain, prog]) is prog
+    assert G.pick([prog, plain]) is prog
+
+
+def test_verdict_applies_at_exactly_the_absolute_floor():
+    assert G.verdict(100_000, rec(size=100_000 - 1024))[0] == "apply"
+    assert G.verdict(100_000, rec(size=100_000 - 1023))[0] == "untouched"
+
+
+def test_verdict_applies_at_exactly_one_percent_of_a_large_source():
+    assert G.verdict(500_000, rec(size=495_000))[0] == "apply"
+    assert G.verdict(500_000, rec(size=495_001))[0] == "untouched"
+
+
+def test_verdict_leaves_equal_size_untouched():
+    assert G.verdict(100_000, rec(size=100_000))[0] == "untouched"
+
+
+def test_verdict_in_place_false_applies_even_a_tiny_saving():
+    assert G.verdict(100_000, rec(size=100_000 - 10), in_place=False)[0] == "apply"
