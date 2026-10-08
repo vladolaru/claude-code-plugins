@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `/pr-update` reports a failed PR lookup (network, authentication, unknown PR) as an error instead of "No PR found", and on the default branch asks for a PR number before looking one up.
+- `/switch-to` single-quotes branch names from PR metadata in shell commands, so a fork PR's branch name cannot run commands on your machine.
+- `/switch-to` checks the PR's GitHub host as well as its owner and name before switching.
 
 ## [1.122.0] - 2026-09-29
 
