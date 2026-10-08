@@ -12,9 +12,11 @@ The one-liner cannot reproduce numbers when dimensions differ or when either
 file carries a device colour profile or an EXIF orientation, because ffmpeg
 ignores both; then the evidence must say "verified locally".
 
-The non-alpha graph converts to rgb24 before gray: that is the path the gate SSIM takes
-(Pillow-decoded RGB), so the two differ only by decoder rounding. Reading a JPEG's Y plane
-directly drifted 7e-4 on a q95-vs-q60 pair.
+The non-alpha graph converts to rgb24 before gray: that is the path the
+gate SSIM takes (Pillow-decoded RGB), so the two differ only by decoder
+rounding. Reading a JPEG's Y plane directly drifted 7e-4 on a q95-vs-q60
+pair. Animations are not reproducible either: Pillow scores the first frame
+and ffmpeg's ssim averages all of them.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from pathlib import Path
 from PIL import Image
 
 from . import metrics
+from .ladder import UsageError
 from .imaging import alpha_used, display_pixels, read_facts
 
 # Through rgb24 first, as the module docstring explains.
@@ -74,7 +77,9 @@ def fetch(spec: str, workdir: Path, cwd: Path | None = None) -> Path:
         if len(parts) != 3 or not parts[1] or not parts[2]:
             raise ValueError(f"{spec}: expected git:<rev>:<path>")
         _, rev, path = parts
-        data = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, check=True, cwd=cwd).stdout
+        if rev.startswith("-"):  # `git show` would take it as an option (--output=... writes files)
+            raise UsageError(f"{spec}: the revision may not start with '-'")
+        data = subprocess.run(["git", "show", "--end-of-options", f"{rev}:{path}"], capture_output=True, check=True, cwd=cwd).stdout
         target = Path(tempfile.mkdtemp(dir=workdir)) / Path(path).name
         target.write_bytes(data)
         return target
@@ -90,8 +95,13 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
         raise ValueError("compare measures raster images; SVGs are checked by candidates' render identity")
     rf, nf = read_facts(ref), read_facts(new)
     ri, ni = display_pixels(ref), display_pixels(new)
-    result = {"ref": ref_spec, "new": new_spec, "identical": ri.size == ni.size and ri.tobytes() == ni.tobytes()}
+    animated = rf.frames > 1 or nf.frames > 1
+    identical = (metrics.frames_identical(ref, new) if animated
+                 else ri.size == ni.size and ri.tobytes() == ni.tobytes())
+    result = {"ref": ref_spec, "new": new_spec, "identical": identical}
     reasons = []
+    if animated:
+        reasons.append("an animation is involved (the scores cover the first frame)")
     if ri.size != ni.size:
         reasons.append("dimensions differ")
         ri = ri.resize(ni.size, Image.LANCZOS)
@@ -99,7 +109,7 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
         reasons.append("a device colour profile is involved")
     if rf.orientation != 1 or nf.orientation != 1:
         reasons.append("an EXIF orientation is involved")
-    if result["identical"]:
+    if identical:
         result.update(ssim=1.0, ssim_white=1.0, ss2=100.0, band=0.0, butteraugli=0.0)
     else:
         s = metrics.measure(ri, ni, tools, workdir)
@@ -109,8 +119,12 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
     result["command"] = result["ssim_reviewer"] = None
     if not reasons:
         graph = reviewer_graph(ni.size, alpha_used(ri) or alpha_used(ni))
-        result["command"] = reviewer_command(graph)
-        result["ssim_reviewer"] = run_reviewer_graph(tools["ffmpeg"].path, ref, new, graph)
+        try:
+            result["ssim_reviewer"] = run_reviewer_graph(tools["ffmpeg"].path, ref, new, graph)
+            result["command"] = reviewer_command(graph)
+        except metrics.MetricError as error:  # ffmpeg cannot decode an input Pillow reads (AVIF, JXL)
+            result["reproducible"] = False
+            result["reason"] = f"ffmpeg could not read the pair ({error})"
     return result
 
 
@@ -122,7 +136,7 @@ def print_result(r: dict, log=print) -> None:
         f"banding {r['band']:.1f} (reported){ba}")
     if r["reproducible"]:
         log(f"Evidence SSIM: {r['ssim_reviewer']:.6f}  (what the reviewer check prints; quote this one)")
-        log("Reviewer check (replace REF and NEW with the two files):")
+        log("Reviewer check (replace REF and NEW with the two files, quoted if the paths contain spaces):")
         log(f"  {r['command']}")
     else:
         log(f"Reviewer check: not reproducible with ffmpeg alone ({r['reason']}); "

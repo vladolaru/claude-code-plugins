@@ -131,7 +131,15 @@ def cmd_apply(args) -> int:
 def cmd_compare(args) -> int:
     chk = T.ensure("compare", "high", None)
     with tempfile.TemporaryDirectory() as tmp:
-        CP.print_result(CP.compare(args.ref, args.new, chk.tools, Path(tmp)))
+        try:
+            result = CP.compare(args.ref, args.new, chk.tools, Path(tmp))
+        except subprocess.CalledProcessError as error:  # git show on a bad revision or path
+            print(f"error: {(error.stderr or b'').decode(errors='replace').strip() or error}", file=sys.stderr)
+            return 2
+        except (OSError, M.MetricError) as error:  # unreadable file, failed download, a tool that failed
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        CP.print_result(result)
     print(T.describe(chk.tools))
     return 0
 
@@ -190,12 +198,5 @@ def main(argv=None) -> int:
         print(error, file=sys.stdout)
         return 2
     except ValueError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
-    except subprocess.CalledProcessError as error:  # git show on a bad revision or path
-        detail = (error.stderr or b"").decode(errors="replace").strip()
-        print(f"error: {detail or error}", file=sys.stderr)
-        return 2
-    except (OSError, M.MetricError) as error:  # unreadable file, failed download, a measuring tool that failed
         print(f"error: {error}", file=sys.stderr)
         return 2

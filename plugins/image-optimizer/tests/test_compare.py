@@ -1,6 +1,5 @@
 import functools
 import http.server
-import os
 import subprocess
 import threading
 
@@ -8,6 +7,8 @@ import pytest
 
 from imgopt_lib import cli
 from imgopt_lib import compare as CP
+from imgopt_lib import metrics
+from imgopt_lib.ladder import UsageError
 
 
 def test_identical_files(factory, toolset, tmp_path):
@@ -132,17 +133,72 @@ def test_cli_prints_the_evidence_number_and_the_tools_line(factory, toolset, tmp
     assert "ffmpeg" in out.splitlines()[-1]
 
 
-def test_cli_maps_failures_to_exit_2(tmp_path, capsys, toolset):
+def test_cli_maps_failures_to_exit_2(tmp_path, capsys, toolset, monkeypatch):
     toolset("compare")
     assert cli.main(["compare", str(tmp_path / "nope.png"), str(tmp_path / "nope.png")]) == 2
     assert "error:" in capsys.readouterr().err
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    cwd = os.getcwd()
-    os.chdir(repo)
-    try:
-        assert cli.main(["compare", "git:HEAD:p.jpg", "git:HEAD:p.jpg"]) == 2
-    finally:
-        os.chdir(cwd)
+    monkeypatch.chdir(repo)
+    assert cli.main(["compare", "git:HEAD:p.jpg", "git:HEAD:p.jpg"]) == 2
     assert "error:" in capsys.readouterr().err
+    assert cli.main(["compare", "http://127.0.0.1:9/a.jpg", "http://127.0.0.1:9/a.jpg"]) == 2
+    assert "error:" in capsys.readouterr().err
+
+
+def test_git_spec_cannot_inject_options(tmp_path):
+    target = tmp_path / "x"
+    with pytest.raises(UsageError, match="git:--output"):
+        CP.fetch(f"git:--output={target}:p", tmp_path / "w", cwd=tmp_path)
+    assert not target.exists()
+
+
+def _gif(path, second, size=(40, 30)):
+    from PIL import Image
+    first = Image.new("RGB", size, (200, 30, 30))
+    first.save(path, save_all=True, append_images=[Image.new("RGB", size, second)], duration=100, loop=0)
+    return path
+
+
+def test_animations_are_compared_by_all_frames_and_not_reproducible(toolset, tmp_path):
+    tools = toolset("compare")
+    a = _gif(tmp_path / "a.gif", (30, 200, 30))
+    same = _gif(tmp_path / "same.gif", (30, 200, 30))
+    other = _gif(tmp_path / "other.gif", (30, 30, 200))
+    r = CP.compare(str(a), str(other), tools, tmp_path / "w")
+    assert not r["identical"] and not r["reproducible"] and "animation" in r["reason"]
+    assert r["command"] is None and r["ssim_reviewer"] is None
+    r = CP.compare(str(a), str(same), tools, tmp_path / "w")
+    assert r["identical"] and not r["reproducible"] and "animation" in r["reason"]
+
+
+def test_an_input_ffmpeg_cannot_decode_keeps_the_gate_numbers(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("compare")
+    a = factory.photo(name="a.jpg", quality=95)
+    b = factory.photo(name="b.jpg", quality=60)
+
+    def refuse(*args):
+        raise metrics.MetricError("Invalid data found when processing input")
+
+    monkeypatch.setattr(CP, "run_reviewer_graph", refuse)
+    r = CP.compare(str(a), str(b), tools, tmp_path / "w")
+    assert not r["reproducible"] and r["ssim_reviewer"] is None and r["command"] is None
+    assert "Invalid data" in r["reason"] and 0 < r["ssim"] < 1
+
+
+def test_paths_with_spaces_reproduce_and_the_hint_says_to_quote(factory, toolset, tmp_path):
+    tools = toolset("compare")
+    from PIL import Image
+    folder = tmp_path / "my images"
+    folder.mkdir()
+    a = factory.photo(name="a.jpg", quality=95)
+    b = folder / "b one.jpg"
+    Image.open(a).save(b, quality=60)
+    r = CP.compare(str(a), str(b), tools, tmp_path / "w")
+    cmd = r["command"].replace("REF", f"'{a}'").replace("NEW", f"'{b}'")
+    out = subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
+    assert f"All:{r['ssim_reviewer']:.6f}" in out
+    lines = []
+    CP.print_result(r, log=lines.append)
+    assert any("quoted if the paths contain spaces" in line for line in lines)
