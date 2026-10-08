@@ -22,7 +22,7 @@ def test_identical_files(factory, toolset, tmp_path):
 def test_reviewer_one_liner_prints_exactly_the_reported_number(factory, toolset, tmp_path, kind):
     """The evidence quotes ssim_reviewer, so the shell one-liner must print it
     digit for digit. ffmpeg's default overlay composites in YUV and drifted
-    5e-4 from Pillow; ffmpeg's JPEG decoder drifts ~1e-4 from Pillow's."""
+    5e-4 from Pillow; ffmpeg's JPEG decoder drifts up to ~1e-3 from Pillow's."""
     tools = toolset("compare")
     from PIL import Image
     if kind == "alpha_png":

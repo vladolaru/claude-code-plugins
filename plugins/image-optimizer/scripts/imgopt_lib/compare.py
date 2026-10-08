@@ -5,9 +5,10 @@ current repository), or http(s) URLs (for the files GitHub serves at pinned
 commits). The reviewer one-liner uses ffmpeg alone; `compare` runs that
 exact graph itself and reports its number as `ssim_reviewer`, which is what
 the evidence quotes, because ffmpeg's JPEG decoder differs from Pillow's by
-about 1e-4 (enough to flip a 0.98 floor in the fourth decimal). Alpha images
-are composited onto white with `overlay=...:format=rgb`: the default YUV
-compositing drifted 5e-4 from Pillow's flatten (self-review, 2026-10-08).
+up to about 1e-3 (9.8e-4 on real JPEGs, 2026-10-08; enough to flip a 0.98
+floor). Alpha images are composited onto white with `overlay=...:format=rgb`:
+the default YUV compositing drifted 5e-4 from Pillow's flatten (self-review,
+2026-10-08).
 The one-liner cannot reproduce numbers when dimensions differ or when either
 file carries a device colour profile or an EXIF orientation, because ffmpeg
 ignores both; then the evidence must say "verified locally".

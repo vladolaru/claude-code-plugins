@@ -1,8 +1,6 @@
 """imgopt: measured image optimization for the image-optimizer plugin.
 
-Spec: .claude/docs/plans/2026-10-08-image-optimizer-2-0-design.md (in the
-plugins repo). Scripts own the mechanics; the image-optimization skill owns
-the judgment.
+Scripts own the mechanics; the image-optimization skill owns the judgment.
+How the pieces fit and what each command does: the plugin's README.md. The
+plugin version lives in .claude-plugin/marketplace.json only.
 """
-
-VERSION = "2.0.0"
