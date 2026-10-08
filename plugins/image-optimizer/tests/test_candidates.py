@@ -360,3 +360,13 @@ def test_cli_lossless_resize_of_a_png_is_a_usage_error_and_writes_nothing(factor
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "lossless profile cannot re-encode pixels" in proc.stderr and src.name in proc.stderr
     assert not (tmp_path / "o").exists()
+
+
+@pytest.mark.parametrize("name", ["photo.jpeg", "photo.JPG"])
+def test_a_same_format_resize_targets_the_source_itself(factory, toolset, tmp_path, name):
+    tools = toolset("prepare", "high", {"jpeg"})
+    src = factory.photo(name=name, size=(320, 240), quality=95).resolve()
+    [r] = C.run([src], opts(tmp_path / "out", "high", resize=160), tools, log=quiet)
+    assert r["target"] == str(src)
+    if r["verdict"] == "apply":
+        assert "replaces the original" in r["verdict_reason"], r["verdict_reason"]

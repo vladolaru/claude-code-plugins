@@ -147,3 +147,9 @@ def test_verdict_leaves_equal_size_untouched():
 
 def test_verdict_in_place_false_applies_even_a_tiny_saving():
     assert G.verdict(100_000, rec(size=100_000 - 10), in_place=False)[0] == "apply"
+
+
+def test_a_job_that_rewrites_the_source_says_it_replaces_the_original():
+    verdict, why = G.verdict(100_000, rec(size=60_000), in_place=False, replaces_source=True)
+    assert verdict == "apply" and "replaces the original" in why and "new file" not in why
+    assert "new file" in G.verdict(100_000, rec(size=60_000), in_place=False)[1]

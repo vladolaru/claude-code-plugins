@@ -72,10 +72,15 @@ def pick(cands: list[dict]) -> dict | None:
                                        0 if c.get("progressive") else 1))
 
 
-def verdict(source_size: int, chosen: dict | None, *, in_place: bool = True) -> tuple[str, str]:
+def verdict(source_size: int, chosen: dict | None, *, in_place: bool = True,
+            replaces_source: bool = False) -> tuple[str, str]:
+    """("apply" or "untouched", why). Only an ``in_place`` job (same format, same size) can be too small a
+    saving to apply; ``replaces_source`` says a resize job writes its pick over the original."""
     if chosen is None:
         return "untouched", "no candidate passed the gates"
     if not in_place:
+        if replaces_source:
+            return "apply", f"replaces the original: {source_size} B -> {chosen['size']} B"
         return "apply", f"new file of {chosen['size']} B"
     saved = source_size - chosen["size"]
     if saved <= 0:

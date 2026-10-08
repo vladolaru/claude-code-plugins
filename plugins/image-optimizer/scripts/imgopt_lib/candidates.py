@@ -240,10 +240,11 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
         cands.append(rec)
     chosen = G.pick(cands)
-    in_place = target_fmt == fmt and not opts.resize
+    # A same-format job rewrites the source itself (a resize too); only a new format gets a new name.
+    target = src if target_fmt == fmt else src.with_suffix(EXT_BY_FORMAT[target_fmt])
     size = src.stat().st_size
-    verdict, why = G.verdict(size, chosen, in_place=in_place)
-    target = src if in_place else src.with_suffix(EXT_BY_FORMAT[target_fmt])
+    verdict, why = G.verdict(size, chosen, in_place=target == src and not opts.resize,
+                             replaces_source=target == src)
     record = {
         "schema": SCHEMA,
         "source": {"path": str(src), "sha256": src_hash, "size": size, **source_info},
