@@ -2,6 +2,13 @@
 
 Puts ``scripts/`` on sys.path so tests import ``imgopt_lib`` directly, and
 builds small deterministic images (no random noise, so metrics are stable).
+
+Pillow is the one third-party dependency. A pytest whose interpreter cannot
+import it (for example a uv-tool pytest) would otherwise turn the repo-wide
+``pytest plugins/`` run into a collection error for every plugin, so this
+suite steps aside instead: its test modules are not collected and the
+terminal summary says why. Everything below that touches ``Image`` runs only
+inside fixtures, so the guarded import is the only change needed.
 """
 
 from __future__ import annotations
@@ -10,7 +17,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw, ImageOps
+
+try:
+    from PIL import Image, ImageDraw, ImageOps
+except ImportError:
+    Image = ImageDraw = ImageOps = None
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -21,6 +32,15 @@ DEVICE_PROFILES = (
     Path("/System/Library/ColorSync/Profiles/Display P3.icc"),
     Path("/usr/share/color/icc/colord/DisplayP3.icc"),
 )
+
+if Image is None:
+    collect_ignore_glob = ["test_*.py"]
+
+    def pytest_terminal_summary(terminalreporter):
+        terminalreporter.write_line(
+            "image-optimizer: tests skipped, this pytest's python cannot import Pillow; "
+            "run `python3 -m pytest plugins/image-optimizer/tests/` with a python3 that has it.",
+            yellow=True)
 
 
 def _photo(size: tuple[int, int]) -> Image.Image:
