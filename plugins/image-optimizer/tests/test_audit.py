@@ -57,19 +57,13 @@ def test_unconvertible_profile_marks_the_row_and_the_run_goes_on(factory, tmp_pa
     assert table.returncode == 1 and "error: " in table.stdout
 
 
-def _truncated_jpeg(factory):
-    path = factory.photo(name="cut.jpg", size=(400, 300))
-    path.write_bytes(path.read_bytes()[:-3000])
-    return path
-
-
 def _not_an_image(factory):
     path = factory.root / "x.png"
     path.write_text("this is not a PNG")
     return path
 
 
-@pytest.mark.parametrize("make_bad, name", [(_truncated_jpeg, "cut.jpg"), (_not_an_image, "x.png")])
+@pytest.mark.parametrize("make_bad, name", [(lambda f: f.truncated_jpeg(), "cut.jpg"), (_not_an_image, "x.png")])
 def test_unreadable_file_marks_the_row_and_the_run_goes_on(factory, make_bad, name):
     bad = make_bad(factory)
     good = factory.logo()

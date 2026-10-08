@@ -96,6 +96,12 @@ class Factory:
         im.save(path, "PNG")
         return path
 
+    def truncated_jpeg(self, name="cut.jpg") -> Path:
+        """A JPEG missing its last 3000 bytes: Pillow opens it and fails while decoding."""
+        path = self.photo(name=name, size=(400, 300))
+        path.write_bytes(path.read_bytes()[:-3000])
+        return path
+
     def deep_png(self, name="deep.png", channels="RGB", size=(16, 8)) -> Path:
         """A 16-bit-per-sample PNG ("L", "RGB" or "RGBA"), written by hand: Pillow cannot save 16-bit colour."""
         colour_type = {"L": 0, "RGB": 2, "RGBA": 6}[channels]

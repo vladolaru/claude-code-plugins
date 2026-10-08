@@ -45,10 +45,10 @@ def test_lossless_jpeg_keeps_orientation(factory, toolset, tmp_path):
     [r] = C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
     assert not any(c.get("discarded") for c in r["candidates"] if c["label"] == "lossless-jpegoptim")
     chosen = C.pick_of(r)
-    if chosen:
-        folder = C.load_records(tmp_path / "out")[0][0]
-        with Image.open(folder / chosen["file"]) as im:
-            assert im.getexif().get(0x0112) == 6
+    assert chosen, "a lossless rung keeps the tag, so one passes"
+    folder = C.load_records(tmp_path / "out")[0][0]
+    with Image.open(folder / chosen["file"]) as im:
+        assert im.getexif().get(0x0112) == 6
 
 
 def test_few_colour_gradient_keeps_the_lossless_floor(factory, toolset, tmp_path):
@@ -239,15 +239,9 @@ def test_cli_exits_1_when_a_file_was_skipped(factory, tmp_path):
     assert len(C.load_records(tmp_path / "o")) == 1
 
 
-def _truncated_jpeg(factory):
-    path = factory.photo(name="cut.jpg", size=(400, 300))
-    path.write_bytes(path.read_bytes()[:-3000])
-    return path
-
-
 def test_unreadable_source_skips_that_file_and_continues(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"jpeg", "png"})
-    bad = _truncated_jpeg(factory)
+    bad = factory.truncated_jpeg()
     good = factory.logo()
     lines = []
     records = C.run([bad.resolve(), good.resolve()], opts(tmp_path / "out"), tools, log=lines.append)
@@ -257,7 +251,7 @@ def test_unreadable_source_skips_that_file_and_continues(factory, toolset, tmp_p
 
 
 def test_cli_exits_1_when_a_source_is_unreadable(factory, tmp_path):
-    _truncated_jpeg(factory)
+    factory.truncated_jpeg()
     factory.logo()
     proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(factory.root), "--out", str(tmp_path / "o")],
                           capture_output=True, text=True)
