@@ -36,3 +36,11 @@ def test_subdir_name_is_stable_and_distinguishes_same_basenames(tmp_path):
     assert subdir_name(a) == subdir_name(a)
     assert subdir_name(a) != subdir_name(b)
     assert "logo.png" in subdir_name(a)
+
+
+@pytest.mark.parametrize("raw", ["/a/x.png", "/x.png"])
+def test_subdir_name_is_one_relative_component_near_the_root(raw):
+    name = subdir_name(Path(raw))
+    assert not Path(name).is_absolute()
+    assert "/" not in name
+    assert name.startswith(("a__x.png--", "x.png--"))

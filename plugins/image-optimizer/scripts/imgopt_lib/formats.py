@@ -47,4 +47,5 @@ def subdir_name(path: Path) -> str:
     """Readable, collision-free folder name for one input inside --out."""
     p = Path(path).resolve()
     digest = hashlib.sha1(str(p).encode()).hexdigest()[:8]
-    return "__".join(p.parts[-3:]) + "--" + digest
+    # Drop the root anchor: near "/" it would make the name absolute and escape --out.
+    return "__".join(p.relative_to(p.anchor).parts[-3:]) + "--" + digest
