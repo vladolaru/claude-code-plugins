@@ -24,7 +24,7 @@ Every command is `python3 "$SKILL_DIR/../../scripts/imgopt.py" <command>`; call 
 | `apply <dir> [--approved] [--only a,b] [--dest dir]` | Write picks and re-verify them |
 | `compare <ref> <new>` | Measure any pair (path, `git:<rev>:<path>`, URL) and get the reviewer check |
 
-**Exit codes.** 0 success; 1 refused, verification failed, or at least one file reported a problem; 2 tooling missing or usage error (nothing was written). An unreadable file never aborts a batch: it gets its own line, the other files finish, and the command exits 1 at the end. Report those lines to the human; do not hide them.
+**Exit codes.** 0 success; 1 refused, verification failed, or at least one file reported a problem; 2 tooling missing or usage error (nothing was written). An unreadable file never aborts a batch: it gets its own line, the other files finish, and the command exits 1 at the end. The same holds for a 16-bit image (not supported yet), a `--resize` wider than the image (it is never upscaled), and a file whose every candidate errored (a tool failure, not a quality verdict). Report those lines to the human; do not hide them.
 
 **Working folder (`--out`).** Claude Code: a folder in the session scratchpad. Codex: `$TMPDIR/image-optimization/<task-slug>/`. Never `/tmp`, never inside the repository. Re-running `candidates` on the same folder reuses everything whose inputs, settings and tool versions are unchanged.
 

@@ -64,8 +64,17 @@ def profile_description(icc: bytes | None) -> str | None:
         return "unreadable profile"
 
 
+def _refuse_16_bit(im: Image.Image, path: Path) -> None:
+    """16-bit samples are read wrong two ways: gray as I;16 (clipped at 255 when converted) and colour as
+    8-bit RGB/RGBA (raw mode "...;16B"), so counts and comparisons would mislead. Checked before load()."""
+    deep = im.mode in ("I", "F") or im.mode.startswith("I;16") or any(";16B" in str(t.args) for t in im.tile)
+    if deep:
+        raise ImagingError(f"{Path(path).name}: 16-bit images are not supported yet")
+
+
 def read_facts(path: Path) -> Facts:
     with Image.open(path) as im:
+        _refuse_16_bit(im, path)
         icc = im.info.get("icc_profile") or None
         desc = profile_description(icc)
         colors = im.convert("RGBA").getcolors(maxcolors=4096)
@@ -103,7 +112,7 @@ def _convert(im: Image.Image, icc: bytes, label: str) -> Image.Image:
         if im.mode in ("LA", "RGBA"):
             alpha = im.getchannel("A")
             im = im.convert(im.mode[:-1])
-        elif im.mode in ("1", "I", "I;16", "F"):
+        elif im.mode == "1":  # 16-bit modes never get here (_refuse_16_bit)
             im = im.convert("L")
         elif im.mode not in _NATIVE_MODES:  # P, PA and anything else decode through RGBA
             rgba = im.convert("RGBA")
@@ -126,6 +135,7 @@ def to_srgb(rgba: Image.Image, icc: bytes) -> Image.Image:
 def _oriented(path: Path) -> tuple[Image.Image, bytes | None]:
     """The file's pixels in their native mode with EXIF orientation applied."""
     with Image.open(path) as im:
+        _refuse_16_bit(im, path)
         im.load()
         icc = im.info.get("icc_profile") or None
         return ImageOps.exif_transpose(im), icc
@@ -144,7 +154,10 @@ def resize_width(img: Image.Image, width: int) -> Image.Image:
 
 
 def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
+    """What the viewer sees, scaled down to ``width`` when given; a width above the displayed one is refused."""
     im, icc = _oriented(path)
+    if width and width > im.width:
+        raise ImagingError(f"{Path(path).name}: --resize {width} would upscale it (it displays {im.width} px wide)")
     if icc and not is_srgb(profile_description(icc)):
         rgba = _convert(im, icc, Path(path).name)
     else:

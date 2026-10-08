@@ -388,3 +388,41 @@ def test_a_missing_tool_nobody_waived_is_a_bug_not_a_note(factory, toolset, tmp_
     tools = _without(toolset("recompress", "high", {"jpeg"}), "guetzli")
     with pytest.raises(RuntimeError, match="guetzli"):
         C.run([factory.photo().resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
+
+
+@pytest.mark.parametrize("make_bad, reason", [
+    (lambda f: f.deep_png(), "16-bit images are not supported yet"),
+    (lambda f: f.photo(name="small.png", size=(40, 30)), "would upscale"),
+])
+def test_a_file_the_job_cannot_serve_is_skipped_and_the_run_goes_on(factory, toolset, tmp_path, make_bad, reason):
+    tools = toolset("prepare", "high", {"png"})
+    bad = make_bad(factory).resolve()
+    good = factory.logo(size=(200, 200)).resolve()
+    lines = []
+    records = C.run([bad, good], opts(tmp_path / "out", "high", resize=100), tools, log=lines.append)
+    assert [r["source"]["path"] for r in records] == [str(good)]
+    assert any(f"== {bad}: skipped:" in line and reason in line for line in lines), lines
+
+
+def _encoders_fail(monkeypatch):
+    def boom(rung, **kw):
+        raise ladder.EncodeError(f"{rung.label}: encoder crashed")
+    monkeypatch.setattr(ladder, "generate", boom)
+
+
+def test_a_file_whose_every_candidate_errored_is_a_problem_not_a_verdict(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    _encoders_fail(monkeypatch)
+    lines = []
+    [r] = C.run([factory.logo().resolve()], opts(tmp_path / "out"), tools, log=lines.append)
+    assert C.all_errored(r)
+    assert any("problem:" in line and "encoder crashed" in line for line in lines), lines
+
+
+def test_cli_exits_1_when_every_candidate_of_a_file_errored(factory, tmp_path, monkeypatch, capsys):
+    from imgopt_lib import cli
+    _encoders_fail(monkeypatch)
+    code = cli.main(["candidates", str(factory.logo()), "--out", str(tmp_path / "o")])
+    if code == 2 and "BLOCKED" in capsys.readouterr().out:
+        pytest.skip("tools missing")
+    assert code == 1

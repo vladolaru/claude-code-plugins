@@ -13,7 +13,9 @@ inside fixtures, so the guarded import is the only change needed.
 
 from __future__ import annotations
 
+import struct
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
@@ -92,6 +94,22 @@ class Factory:
             im = im.quantize(colors).convert("RGB")
         path = self.root / name
         im.save(path, "PNG")
+        return path
+
+    def deep_png(self, name="deep.png", channels="RGB", size=(16, 8)) -> Path:
+        """A 16-bit-per-sample PNG ("L", "RGB" or "RGBA"), written by hand: Pillow cannot save 16-bit colour."""
+        colour_type = {"L": 0, "RGB": 2, "RGBA": 6}[channels]
+        w, h = size
+        rows = b"".join(b"\0" + b"".join(struct.pack(">H", (x * 4099 + y * 997 + c * 13001) % 65536)
+                                          for x in range(w) for c in range(len(channels)))
+                        for y in range(h))
+
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+        path = self.root / name
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 16, colour_type, 0, 0, 0))
+                         + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
         return path
 
     def logo(self, name="logo.png", size=(120, 120)) -> Path:

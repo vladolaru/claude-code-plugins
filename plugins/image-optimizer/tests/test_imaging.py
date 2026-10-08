@@ -104,3 +104,19 @@ def test_display_pixels_converts_a_palette_image_tagged_with_a_grey_profile(tmp_
     path = tmp_path / "palette-grey.png"
     Image.new("L", (4, 4), 100).quantize(2).save(path, icc_profile=icc)
     assert I.display_pixels(path).getpixel((0, 0)) == (119, 119, 119, 255)
+
+
+@pytest.mark.parametrize("channels", ["L", "RGB", "RGBA"])
+def test_16_bit_images_are_refused_by_the_shared_read_path(factory, channels):
+    path = factory.deep_png(channels=channels)
+    with pytest.raises(I.ImagingError, match="16-bit images are not supported yet"):
+        I.read_facts(path)
+    with pytest.raises(I.ImagingError, match="16-bit images are not supported yet"):
+        I.display_pixels(path)
+
+
+def test_an_upscaling_resize_is_refused(factory):
+    path = factory.photo(size=(40, 20), orientation=6)  # displayed 20 px wide
+    assert I.display_pixels(path, width=20).size == (20, 40)
+    with pytest.raises(I.ImagingError, match="would upscale"):
+        I.display_pixels(path, width=30)

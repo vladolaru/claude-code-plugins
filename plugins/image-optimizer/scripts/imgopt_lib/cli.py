@@ -59,7 +59,7 @@ def cmd_candidates(args) -> int:
                      ref=Path(args.ref).resolve() if args.ref else None, resize=args.resize,
                      out_format=args.format, waived=chk.waived)
     records = C.run(inputs, opts, chk.tools, script=SCRIPT)
-    return 0 if len(records) == len(inputs) else 1
+    return 0 if len(records) == len(inputs) and not any(C.all_errored(r) for r in records) else 1
 
 
 def cmd_inspect(args) -> int:

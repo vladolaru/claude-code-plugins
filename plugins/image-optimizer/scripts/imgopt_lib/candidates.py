@@ -8,8 +8,11 @@ versions, so a re-run only redoes what changed) and the record that `sheet`
 and `apply` read. Schema: see SCHEMA and the plan's Task 7 interface block.
 
 A source that cannot be read or whose colour profile cannot be converted
-(imaging.READ_FAILURES) is skipped by run(): it logs the reason, writes
-nothing for that file and carries on, so callers compare len(records) with len(inputs) to learn that files were skipped.
+(imaging.READ_FAILURES: also 16-bit files and a --resize that would upscale)
+is skipped by run(): it logs the reason, writes nothing for that file and
+carries on, so callers compare len(records) with len(inputs) to learn that
+files were skipped. A record whose every candidate errored (all_errored) is a
+problem too.
 """
 
 from __future__ import annotations
@@ -57,6 +60,11 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def all_errored(record: dict) -> bool:
+    """Every candidate failed to encode or measure: a tool problem, not "nothing passed the gates"."""
+    return bool(record["candidates"]) and all("error" in c for c in record["candidates"])
 
 
 def pick_of(record: dict) -> dict | None:
@@ -342,6 +350,9 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
             log(f"\n== {src}: skipped: {error}")
             continue
         print_record(record, log)
+        if all_errored(record):
+            log(f"   problem: every candidate errored, so this file was not optimized "
+                f"(first error: {record['candidates'][0]['error']})")
         records.append(record)
     summarize(records, opts.out, script or Path("imgopt.py"), tools, log)
     return records
