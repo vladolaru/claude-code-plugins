@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import tempfile
 from pathlib import Path
 
+from . import audit as A
 from . import candidates as C
 from . import gates as G
 from . import tools as T
@@ -54,6 +57,19 @@ def cmd_candidates(args) -> int:
     return 0 if len(records) == len(inputs) else 1
 
 
+def cmd_inspect(args) -> int:
+    files = expand_inputs(args.paths)
+    chk = T.ensure("audit", "lossless", {format_of(p) for p in files}, allow_missing=split_csv(args.allow_missing))
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = [A.inspect_file(p, chk.tools, Path(tmp)) for p in files]
+    if args.json:
+        print(json.dumps(rows, indent=1))
+    else:
+        A.print_table(rows)
+        print(T.describe(chk.tools))
+    return 1 if any(r["error"] for r in rows) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
@@ -77,6 +93,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--band", type=float)
     c.add_argument("--allow-missing", help="comma list of quality tools the human chose to go without")
     c.set_defaults(func=cmd_candidates)
+    i = sub.add_parser("inspect", help="facts and lossless headroom per file; changes nothing")
+    i.add_argument("paths", nargs="+")
+    i.add_argument("--json", action="store_true")
+    i.add_argument("--allow-missing")
+    i.set_defaults(func=cmd_inspect)
     return parser
 
 
