@@ -35,7 +35,9 @@ $GH_CMD pr view '<PR>' --json number,url,state,title,body,author,baseRefName,hea
 
 The `/switch-to` rules below use its names; set them from this read: `PR_HOST` is the host of `url`, `PR_NUMBER` is `number`, `HEAD_BRANCH` and `BASE_BRANCH` are `headRefName` and `baseRefName`, `HEAD_OWNER` and `HEAD_REPO` are `headRepositoryOwner.login` and `headRepository.name`, and `CURRENT_BRANCH` is `START_BRANCH`.
 
-Establish execution consent with `/switch-to`'s **Execution consent** rule. It asks only for someone else's fork PR; when it does, name this command's wider reach: "#<number> comes from @<author>'s fork. Updating it can run its code through checkout, merge, commit and push hooks, plus installs and checks. Allow that on this machine?"
+Set `OWN_PR` by comparing `author.login` with the user's login on the PR's host (`$GH_CMD api user --hostname '<PR_HOST>' --jq .login`); a failed lookup means STOP. Step 6 uses it.
+
+Establish execution consent with `/switch-to`'s **Execution consent** rule. It asks only for someone else's fork PR; when it does, name this command's wider reach: "#<number> comes from @<author>'s fork. Updating it can run its code through checkout, merge, commit and push hooks, plus installs and checks, and pushes a merge commit to their fork. Allow that on this machine?"
 
 While `RESUMING` with an explicit argument, the current branch must be this PR's head: STOP unless the current branch's PR (`$GH_CMD pr view --json url`) is the selected one. Without an argument, the read above already resolved it from the current branch.
 
@@ -128,7 +130,11 @@ Fix what the merge broke; a fix goes in the merge commit when the merge is still
 
 Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails, leave the merge staged, report it, and STOP without pushing. Hooks can add files to a commit, so check the merge commit: `git show --remerge-diff --stat HEAD` must list only files you resolved or fixed. If it lists others, STOP and report them before pushing.
 
-Push without force (RULE 0's rebase is the one exception) to the branch the PR is built from: `git push '<HEAD_REMOTE>' 'HEAD:refs/heads/<headRefName>'`. For a PR, first recheck that all of `HEAD_REMOTE`'s push URLs still identify the PR head repository under **Resolve PR remotes**; the destination is the metadata head branch even when the local branch is `pr-<number>`. Without `HEAD_REMOTE`, do not push: the result is local-only. A rejected push means someone pushed to the branch meanwhile: STOP and report both heads.
+Push without force (RULE 0's rebase is the one exception) to the branch the PR is built from: `git push '<HEAD_REMOTE>' 'HEAD:refs/heads/<headRefName>'`. For a PR, first recheck that all of `HEAD_REMOTE`'s push URLs still identify the PR head repository under **Resolve PR remotes**; the destination is the metadata head branch even when the local branch is `pr-<number>`. Without `HEAD_REMOTE`, do not push: the result is local-only.
+
+When `OWN_PR` is false (the no-PR fallback, which pushes only the user's own branch, never asks), ask once before pushing, unless the user's request already said to push: "Push the merge to @<author>'s branch `<headRefName>`?" Someone else's fork PR was asked about in Step 1, and that yes covers the push. A no keeps the merge local; report it as not pushed, and a later run picks it up as a merge that was not pushed.
+
+A rejected push means someone pushed to the branch meanwhile: STOP and report both heads.
 
 ## Step 7: Report
 
