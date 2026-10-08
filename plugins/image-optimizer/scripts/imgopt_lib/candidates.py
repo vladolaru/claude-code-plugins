@@ -28,7 +28,7 @@ from .imaging import READ_FAILURES, display_pixels, flatten, read_facts, srgb_sh
 from .tools import describe
 
 SCHEMA = 1
-CACHE_VERSION = 1
+CACHE_VERSION = 2  # 2: a rung's kind follows its input, so records cached under 1 carry wrong kinds
 UNCALIBRATED = ("webp", "avif")
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
@@ -132,7 +132,7 @@ def _judge(rec, rung, out, inputs, facts, ref_img, tools, can_measure, folder) -
     """Read the encoded file and fill in its metadata verdict and scores."""
     ofacts = read_facts(out)
     rec["progressive"] = ofacts.progressive
-    if rung.kind == "lossless" and rung.input == "source":
+    if rung.kind == "lossless":  # made from the source file, so its metadata must survive
         ok, why = metrics.metadata_preserved(facts, ofacts)
         if not ok:
             rec["discarded"] = why
@@ -186,8 +186,6 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     notes: list[str] = []
     can_measure = all(n in tools and tools[n].ok for n in ("ffmpeg", "ssimulacra2"))
     if fmt == "svg":
-        if opts.resize or opts.out_format != "keep":
-            raise ladder.UsageError(f"{src.name}: SVG supports only in-place lossless optimization")
         if opts.profile != "lossless":
             notes.append("SVG gets the lossless svgo rung only")
         rungs, target_fmt, facts = [ladder.SVG_RUNG], "svg", None
@@ -315,8 +313,21 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
         log("Next: nothing to apply.")
 
 
+def check_inputs(inputs: list[Path], opts: Options) -> None:
+    """Raise UsageError, naming the file, for the first input the ladder cannot serve; nothing is written yet."""
+    for src in inputs:
+        try:
+            ladder.check_job(format_of(src), profile=opts.profile, out_format=opts.out_format, resize=opts.resize)
+        except ladder.UsageError as error:
+            raise ladder.UsageError(f"{Path(src).name}: {error}") from error
+
+
 def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path | None = None) -> list[dict]:
-    """One record per input that could be prepared; a skipped input is logged and left out."""
+    """One record per input that could be prepared; a skipped input is logged and left out.
+
+    A request the ladder cannot serve for any input is a UsageError before anything is written.
+    """
+    check_inputs(inputs, opts)
     opts.out.mkdir(parents=True, exist_ok=True)
     records = []
     for src in inputs:

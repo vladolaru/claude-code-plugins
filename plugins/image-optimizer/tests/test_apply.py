@@ -240,7 +240,8 @@ def test_metadata_is_checked_only_for_picks_made_from_the_source(factory, device
     chosen = {"label": "oxipng"}
     record = {"format": "png", "profile": "lossless", "resize": None}
     assert AP._took_source(record, chosen, facts)
-    assert not AP._took_source({**record, "profile": "high"}, chosen, facts)  # baked to sRGB by design
+    assert AP._took_source({**record, "profile": "high"}, chosen, facts)  # a device profile alone keeps it
+    assert not AP._took_source({**record, "profile": "high", "resize": 80}, chosen, facts)  # baked by design
     assert AP._took_source(record, {"label": "not-a-rung"}, facts)  # unknown: check it
 
 

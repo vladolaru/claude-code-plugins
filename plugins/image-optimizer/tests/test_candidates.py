@@ -3,11 +3,14 @@ import sys
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops, ImageOps, ImageStat
 
+from imgopt_lib import applying as AP
 from imgopt_lib import candidates as C
 from imgopt_lib import gates as G
+from imgopt_lib import imaging as I
 from imgopt_lib import ladder
+from imgopt_lib import sheet as S
 from imgopt_lib.tools import Tool
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
@@ -285,3 +288,75 @@ def test_unreadable_candidate_output_becomes_that_candidates_error(factory, tool
 def test_pick_of_is_none_without_a_pick_even_when_a_candidate_has_no_file():
     record = {"pick": None, "candidates": [{"label": "pngquant-c8", "error": "encoder failed"}]}
     assert C.pick_of(record) is None
+
+
+def _refused_without_approval(out, src):
+    before = src.read_bytes()
+    logs = []
+    assert AP.apply(out, tools={}, log=logs.append) == 1
+    assert "--approved" in "\n".join(logs)
+    assert src.read_bytes() == before
+
+
+def test_display_p3_png_under_high_keeps_its_profile_or_waits_for_approval(factory, device_icc, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.photo(name="p3.png", icc=device_icc).resolve()
+    [r] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
+    assert any("device colour profile" in n and "shifts mean" in n for n in r["notes"])
+    oxipng = next(c for c in r["candidates"] if c["label"] == "oxipng")
+    assert oxipng["kind"] == "lossless" and oxipng["pass"], oxipng
+    folder = C.load_records(tmp_path / "out")[0][0]
+    for c in r["candidates"]:  # whatever is called lossless kept the profile
+        if c["kind"] == "lossless" and c.get("file"):
+            assert I.read_facts(folder / c["file"]).icc == device_icc, c["label"]
+    chosen = C.pick_of(r)
+    assert chosen, "the profile-keeping lossless rung passes, so there is a pick"
+    if chosen["label"] == "oxipng":
+        assert I.read_facts(folder / chosen["file"]).icc == device_icc
+    else:  # a pixel rung won on size: it is lossy, so it is tiled and waits for approval
+        assert chosen["kind"] == "lossy" and S.needs_tiles(r)
+        if r["verdict"] == "apply":
+            _refused_without_approval(tmp_path / "out", src)
+
+
+def test_a_resized_png_is_a_lossy_pick_that_waits_for_approval(factory, toolset, tmp_path):
+    tools = toolset("prepare", "high", {"png"})
+    src = factory.logo(size=(300, 300)).resolve()
+    [r] = C.run([src], opts(tmp_path / "out", "high", resize=150), tools, log=quiet)
+    oxipng = next(c for c in r["candidates"] if c["label"] == "oxipng")
+    assert oxipng["identical"] and oxipng["kind"] == "lossy"
+    chosen = C.pick_of(r)
+    assert chosen and chosen["kind"] == "lossy" and r["verdict"] == "apply" and S.needs_tiles(r)
+    _refused_without_approval(tmp_path / "out", src)
+
+
+def test_rotated_jpeg_under_high_bakes_the_orientation_into_pixel_rungs(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src = factory.photo(name="rot.jpg", size=(160, 120), orientation=6, quality=95).resolve()
+    [r] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
+    folder = C.load_records(tmp_path / "out")[0][0]
+    reference = Image.open(folder / "reference.png")
+    assert reference.size == (120, 160)
+    guetzli = [c for c in r["candidates"] if c["label"].startswith("guetzli-") and c.get("file")]
+    assert guetzli, "guetzli reads oriented pixels on a rotated source"
+    upside_down = ImageOps.flip(ImageOps.mirror(reference.convert("RGB")))
+    for c in guetzli:
+        out = I.read_facts(folder / c["file"])
+        assert (out.orientation, out.width, out.height) == (1, 120, 160), c["label"]
+        assert c["kind"] == "lossy", c
+        shown = I.display_pixels(folder / c["file"]).convert("RGB")
+        assert _mean_diff(shown, reference.convert("RGB")) < _mean_diff(shown, upside_down), c["label"]
+    assert C.pick_of(r), "a rotated JPEG still gets a pick"
+
+
+def _mean_diff(a, b):
+    return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean)
+
+
+def test_cli_lossless_resize_of_a_png_is_a_usage_error_and_writes_nothing(factory, tmp_path):
+    src = factory.logo()
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(src), "--resize", "60",
+                           "--out", str(tmp_path / "o")], capture_output=True, text=True)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "lossless profile cannot re-encode pixels" in proc.stderr and src.name in proc.stderr
+    assert not (tmp_path / "o").exists()

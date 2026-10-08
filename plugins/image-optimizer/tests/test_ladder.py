@@ -52,9 +52,51 @@ def test_resize_encodes_jpeg_from_pixels_with_mozjpeg():
     assert all(r.input == "pixels_ppm" for r in p.rungs if r.tool == "cjpeg")
 
 
-def test_lossless_profile_cannot_reencode_jpeg_pixels():
-    with pytest.raises(L.UsageError, match="lossless profile cannot re-encode JPEG"):
-        L.plan(facts(fmt="png"), profile="lossless", out_format="jpeg")
+@pytest.mark.parametrize("fmt,request_", [
+    ("png", {"out_format": "jpeg"}), ("jpeg", {"resize": 50}), ("png", {"resize": 50}),
+    ("png", {"out_format": "webp"}), ("jpeg", {"out_format": "avif"}),
+])
+def test_lossless_profile_cannot_reencode_pixels(fmt, request_):
+    with pytest.raises(L.UsageError, match="lossless profile cannot re-encode pixels"):
+        L.plan(facts(fmt=fmt), profile="lossless", **request_)
+    with pytest.raises(L.UsageError, match="lossless profile cannot re-encode pixels"):
+        L.check_job(fmt, profile="lossless", **request_)
+
+
+PLANS = [
+    pytest.param(facts(fmt=fmt, **kw), profile, request_, id=f"{fmt}-{kw}-{profile}-{request_}")
+    for fmt in ("jpeg", "png")
+    for kw in ({}, {"device_profile": True}, {"orientation": 6}, {"mode": "L"})
+    for profile in ("lossless", "high")
+    for request_ in ({}, {"resize": 50}, {"out_format": "jpeg"}, {"out_format": "png"},
+                     {"out_format": "webp"}, {"out_format": "avif"})
+    if profile == "high" or not request_ or request_.get("out_format") == fmt
+]
+
+
+@pytest.mark.parametrize("f,profile,request_", PLANS)
+def test_a_rungs_kind_follows_its_input(f, profile, request_):
+    for rung in L.plan(f, profile=profile, **request_).rungs:
+        assert rung.kind == ("lossless" if rung.input == "source" and rung.label.startswith(("lossless-", "oxipng"))
+                             else "lossy"), rung
+
+
+@pytest.mark.parametrize("request_", [{"resize": 50}, {"out_format": "png"}])
+def test_a_lossless_encoder_on_reshaped_pixels_is_lossy(request_):
+    p = L.plan(facts(fmt="jpeg" if request_.get("out_format") else "png"), profile="high", **request_)
+    (oxipng,) = [r for r in p.rungs if r.tool == "oxipng"]
+    assert oxipng.input == "pixels" and oxipng.kind == "lossy"
+
+
+def test_a_device_profile_alone_keeps_the_source_lossless_rungs():
+    png = L.plan(facts(fmt="png", device_profile=True), profile="high")
+    (oxipng,) = [r for r in png.rungs if r.tool == "oxipng"]
+    assert (oxipng.input, oxipng.kind) == ("source", "lossless")
+    assert all(r.input == "pixels" and r.kind == "lossy" for r in png.rungs if r.tool == "pngquant")
+    jpeg = L.plan(facts(device_profile=True), profile="high")
+    assert {r.label for r in jpeg.rungs if r.kind == "lossless"} == {"lossless-jpegoptim", "lossless-jpegtran"}
+    assert all(r.input != "source" for r in jpeg.rungs if r.kind == "lossy")
+    assert not any(r.label.startswith("jpegoptim-m") for r in jpeg.rungs)
 
 
 def test_png_with_few_colours_gets_no_palette_rungs():
@@ -77,7 +119,8 @@ def test_png_to_jpeg_with_alpha_notes_the_white_matte():
 
 
 def test_webp_and_avif_ladders():
-    assert labels(L.plan(facts(fmt="png"), profile="lossless", out_format="webp")) == ["cwebp-lossless"]
+    webp = L.plan(facts(fmt="png"), profile="high", out_format="webp")
+    assert labels(webp)[0] == "cwebp-lossless" and "cwebp-q50" in labels(webp)
     avif = L.plan(facts(fmt="png"), profile="high", out_format="avif")
     assert labels(avif)[0] == "avifenc-lossless" and "avifenc-q50" in labels(avif)
 

@@ -4,9 +4,13 @@
 ladder is testable without encoders. ``generate()`` runs one rung. Inputs
 are named: "source" (the file itself), "pixels" (RGBA PNG of what the viewer
 sees, resized when asked), "pixels_flat" (that, flattened onto white),
-"pixels_ppm" (the same as PPM for cjpeg). Lossless rungs read "source" so
-metadata checks apply; anything re-encoded from pixels bakes orientation and
-sRGB in.
+"pixels_ppm" (the same as PPM for cjpeg). A rung's kind follows its input
+(``Rung.kind``): only a lossless encoder reading "source" is lossless, so its
+pick keeps the ICC profile and orientation and needs no approval. Anything
+re-encoded from pixels bakes orientation and sRGB in (and any resize or
+flattening), so it is lossy even when the encoder is not: it needs tiles and
+the human's approval. ``check_job()`` is the one place a request the ladder
+cannot serve becomes a UsageError.
 """
 
 from __future__ import annotations
@@ -41,13 +45,19 @@ class EncodeError(RuntimeError):
 class Rung:
     label: str
     tool: str
-    kind: str          # "lossless" or "lossy"
+    encoding: str      # what the encoder does: "lossless" or "lossy"
     input: str         # key into generate()'s inputs
     ext: str
     args: tuple[str, ...]
     post_oxipng: bool = False
     palette: bool = False
     post_jpegtran: bool = False
+
+    @property
+    def kind(self) -> str:
+        """"lossless" only for a lossless encoder reading the source file itself; anything made
+        from prepared pixels (sRGB-converted, oriented, resized, flattened) is "lossy"."""
+        return "lossless" if self.encoding == "lossless" and self.input == "source" else "lossy"
 
     @property
     def tools(self) -> set[str]:
@@ -73,35 +83,49 @@ def _jpeg_strip_args(f: Facts) -> tuple[str, ...]:
     return tuple(args)
 
 
+def check_job(fmt: str, *, profile: str, out_format: str = "keep", resize: int | None = None) -> str:
+    """The target format for a source of format ``fmt``, or UsageError when the ladder cannot serve the request.
+
+    Depends on nothing but the request, so `candidates` runs it on every input before writing anything.
+    """
+    target = fmt if out_format == "keep" else out_format
+    if fmt in ("gif", "svg"):
+        if target != fmt or resize:
+            raise UsageError(f"{fmt.upper()} supports only in-place lossless optimization")
+        return target
+    if fmt not in ("jpeg", "png") or target not in ("jpeg", "png", "webp", "avif"):
+        raise UsageError(f"cannot turn {fmt} into {target}")
+    if profile == "lossless" and (resize or target != fmt):
+        raise UsageError("the lossless profile cannot re-encode pixels (resize or format change); "
+                         "use --profile high or medium")
+    return target
+
+
 def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None = None) -> Plan:
-    target = f.format if out_format == "keep" else out_format
+    target = check_job(f.format, profile=profile, out_format=out_format, resize=resize)
     lossy = profile != "lossless"
     notes: list[str] = []
     if f.format == "gif":
-        if target != "gif" or resize:
-            raise UsageError("GIF supports only in-place lossless optimization")
         if lossy:
             notes.append("GIF gets the lossless gifsicle rung only")
         return Plan([Rung("gifsicle", "gifsicle", "lossless", "source", ".gif", ("-O3",))], False, "gif", notes)
-    if f.format not in ("jpeg", "png") or target not in ("jpeg", "png", "webp", "avif"):
-        raise UsageError(f"cannot turn {f.format} into {target}")
-    pixel = bool(resize) or target != f.format or (lossy and f.device_profile)
+    # Reshaped pixels have no source file to keep; a device profile alone sends only the lossy
+    # rungs to sRGB pixels, so the source's lossless rungs still offer a profile-keeping pick.
+    reshaped = bool(resize) or target != f.format
+    pixel = reshaped or (lossy and f.device_profile)
     rungs: list[Rung] = []
     if target == "jpeg":
-        if pixel and not lossy:
-            raise UsageError("the lossless profile cannot re-encode JPEG pixels (resize, colour "
-                             "conversion or format change); use --profile high or medium")
         if f.has_alpha and f.format != "jpeg":
             notes.append("JPEG has no transparency: transparent areas are flattened onto white")
         gray = f.mode in ("L", "LA")
-        if not pixel:
+        if not reshaped:
             rungs.append(Rung("lossless-jpegoptim", "jpegoptim", "lossless", "source", ".jpg", _jpeg_strip_args(f)))
             rungs.append(Rung("lossless-jpegtran", "jpegtran", "lossless", "source", ".jpg",
                               ("-optimize", "-progressive", "-copy", "all" if f.orientation != 1 else "icc")))
-            if lossy:
-                rungs += [Rung(f"jpegoptim-m{q}", "jpegoptim", "lossy", "source", ".jpg",
-                               (f"-m{q}",) + _jpeg_strip_args(f)) for q in JPEG_LEVELS]
-        else:
+        if lossy and not pixel:
+            rungs += [Rung(f"jpegoptim-m{q}", "jpegoptim", "lossy", "source", ".jpg",
+                           (f"-m{q}",) + _jpeg_strip_args(f)) for q in JPEG_LEVELS]
+        if pixel:
             rungs += [Rung(f"cjpeg-q{q}", "cjpeg", "lossy", "pixels_ppm", ".jpg",
                            ("-quality", str(q), "-optimize", "-progressive")) for q in JPEG_LEVELS]
         if lossy:
@@ -111,9 +135,9 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
     elif target == "png":
         # --strip safe drops eXIf, the PNG orientation carrier; a source that has one keeps
         # exactly the chunks --strip safe keeps plus eXIf. Baked pixels have no orientation.
-        keep_orientation = not pixel and f.orientation != 1
+        keep_orientation = not reshaped and f.orientation != 1
         strip = ("--keep", PNG_KEEP_WITH_EXIF) if keep_orientation else ("--strip", "safe")
-        rungs.append(Rung("oxipng", "oxipng", "lossless", "pixels" if pixel else "source", ".png",
+        rungs.append(Rung("oxipng", "oxipng", "lossless", "pixels" if reshaped else "source", ".png",
                           ("-o", "max", *strip)))
         if lossy:
             if f.colors is not None and f.colors <= FEW_COLOURS:
@@ -126,14 +150,12 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
                           for n in PNG_COLOURS if f.colors is None or n < f.colors]
     elif target == "webp":
         rungs.append(Rung("cwebp-lossless", "cwebp", "lossless", "pixels", ".webp", ("-lossless", "-z", "9")))
-        if lossy:
-            rungs += [Rung(f"cwebp-q{q}", "cwebp", "lossy", "pixels", ".webp", ("-q", str(q), "-m", "6"))
-                      for q in WEB_LEVELS]
+        rungs += [Rung(f"cwebp-q{q}", "cwebp", "lossy", "pixels", ".webp", ("-q", str(q), "-m", "6"))
+                  for q in WEB_LEVELS]
     else:
         rungs.append(Rung("avifenc-lossless", "avifenc", "lossless", "pixels", ".avif", ("--lossless",)))
-        if lossy:
-            rungs += [Rung(f"avifenc-q{q}", "avifenc", "lossy", "pixels", ".avif", ("-q", str(q), "-s", "0"))
-                      for q in WEB_LEVELS]
+        rungs += [Rung(f"avifenc-q{q}", "avifenc", "lossy", "pixels", ".avif", ("-q", str(q), "-s", "0"))
+                  for q in WEB_LEVELS]
     return Plan(rungs, pixel, target, notes)
 
 

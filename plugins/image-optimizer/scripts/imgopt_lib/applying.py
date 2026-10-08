@@ -68,12 +68,12 @@ def _took_source(record: dict, chosen: dict, facts) -> bool:
 
     Pixel-input rungs bake orientation and convert device profiles by design, so only the plan
     (the one place that knows each rung's input) can say; a rung it cannot find is checked. The test
-    is `candidates._judge`'s: a lossless-kind rung whose input is the source.
+    is `candidates._judge`'s: a lossless-kind rung (``Rung.kind``).
     """
     plan = ladder.plan(facts, profile=record.get("profile", "lossless"), out_format=record["format"],
                        resize=record.get("resize"))
     rung = next((r for r in plan.rungs if r.label == chosen["label"]), None)
-    return rung is None or (rung.kind == "lossless" and rung.input == "source")
+    return rung is None or rung.kind == "lossless"
 
 
 def _verify(folder: Path, record: dict, chosen: dict, written: Path, tools: dict) -> str:
