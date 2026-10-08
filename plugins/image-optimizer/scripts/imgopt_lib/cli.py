@@ -7,6 +7,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import candidates as C
+from . import gates as G
 from . import tools as T
 from .formats import OUTPUT_FORMATS, expand_inputs, format_of
 
@@ -28,6 +30,26 @@ def cmd_doctor(args) -> int:
     return 2 if chk.blocked else 0
 
 
+def _job_for(args) -> str:
+    if args.format != "keep":
+        return "convert"
+    return "prepare" if args.resize else "recompress"
+
+
+def cmd_candidates(args) -> int:
+    inputs = expand_inputs(args.paths)
+    if args.ref and len(inputs) != 1:
+        raise ValueError("--ref works with exactly one input file")
+    waive = split_csv(args.allow_missing)
+    chk = T.ensure(_job_for(args), args.profile, {format_of(p) for p in inputs}, args.format, waive)
+    gates = G.gates_for(args.profile, ssim=args.ssim, ss2=args.ss2, band=args.band)
+    opts = C.Options(profile=args.profile, out=Path(args.out).resolve(), gates=gates,
+                     ref=Path(args.ref).resolve() if args.ref else None, resize=args.resize,
+                     out_format=args.format, waived=chk.waived)
+    records = C.run(inputs, opts, chk.tools, script=SCRIPT)
+    return 0 if len(records) == len(inputs) else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
@@ -39,6 +61,18 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--format", choices=OUTPUT_FORMATS, default="keep")
     d.add_argument("paths", nargs="*", help="narrow the check to the formats present")
     d.set_defaults(func=cmd_doctor)
+    c = sub.add_parser("candidates", help="try encoder settings per file, measure, gate and pick")
+    c.add_argument("paths", nargs="+", help="files or folders")
+    c.add_argument("--out", required=True, help="working folder (scratchpad, never the repo)")
+    c.add_argument("--profile", choices=PROFILE_NAMES, default="lossless")
+    c.add_argument("--ref", help="baseline to measure against (single input only)")
+    c.add_argument("--resize", type=int, metavar="WIDTH", help="Lanczos resize to this width first")
+    c.add_argument("--format", choices=OUTPUT_FORMATS, default="keep")
+    c.add_argument("--ssim", type=float)
+    c.add_argument("--ss2", type=float)
+    c.add_argument("--band", type=float)
+    c.add_argument("--allow-missing", help="comma list of quality tools the human chose to go without")
+    c.set_defaults(func=cmd_candidates)
     return parser
 
 

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `imgopt.py doctor` checks every tool a job needs, names what each missing one adds, and prints one install command.
+- `imgopt.py candidates` tries a ladder of encoder settings per file, measures each against a quality profile (`lossless` by default, `high`, `medium`), and picks the smallest that passes.
 
 ## [1.2.0] - 2026-07-23
 
