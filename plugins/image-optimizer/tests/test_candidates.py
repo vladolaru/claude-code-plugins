@@ -426,3 +426,14 @@ def test_cli_exits_1_when_every_candidate_of_a_file_errored(factory, tmp_path, m
     if code == 2 and "BLOCKED" in capsys.readouterr().out:
         pytest.skip("tools missing")
     assert code == 1
+
+
+@pytest.mark.parametrize("inside", ["", "work/deeper"])
+def test_cli_refuses_an_out_folder_inside_an_input_folder(factory, inside):
+    factory.logo()
+    out = factory.root / inside if inside else factory.root
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(factory.root), "--out", str(out)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "--out" in proc.stderr and str(factory.root.resolve()) in proc.stderr
+    assert sorted(p.name for p in factory.root.iterdir()) == ["logo.png"]

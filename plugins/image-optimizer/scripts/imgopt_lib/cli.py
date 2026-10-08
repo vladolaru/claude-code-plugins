@@ -45,7 +45,17 @@ def _job_for(args) -> str:
     return "prepare" if args.resize else "recompress"
 
 
+def _refuse_out_inside_inputs(out: Path, paths) -> None:
+    """A working folder inside an input folder would be read as input on the next run (its own candidates)."""
+    for raw in paths:
+        folder = Path(raw).resolve()
+        if folder.is_dir() and out.is_relative_to(folder):
+            raise UsageError(f"--out {out} is inside the input folder {folder}; use the session scratchpad "
+                             "(or $TMPDIR/image-optimization/<task>/), never a folder being optimized")
+
+
 def cmd_candidates(args) -> int:
+    _refuse_out_inside_inputs(Path(args.out).resolve(), args.paths)
     inputs = expand_inputs(args.paths)
     if args.ref and len(inputs) != 1:
         raise ValueError("--ref works with exactly one input file")
