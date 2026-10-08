@@ -27,6 +27,12 @@ class ImagingError(ValueError):
     """A file's pixels cannot be prepared (unreadable profile, no usable transform)."""
 
 
+# What can go wrong reading one file: unreadable or truncated bytes (OSError, which includes
+# PIL.UnidentifiedImageError) or a colour profile that cannot be converted. Commands treat
+# these as a per-file outcome and carry on with the other files.
+READ_FAILURES = (OSError, ImagingError)
+
+
 @dataclass(frozen=True)
 class Facts:
     path: Path

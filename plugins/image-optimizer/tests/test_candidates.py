@@ -234,3 +234,49 @@ def test_cli_exits_1_when_a_file_was_skipped(factory, tmp_path):
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "skipped:" in proc.stdout and "Next:" in proc.stdout
     assert len(C.load_records(tmp_path / "o")) == 1
+
+
+def _truncated_jpeg(factory):
+    path = factory.photo(name="cut.jpg", size=(400, 300))
+    path.write_bytes(path.read_bytes()[:-3000])
+    return path
+
+
+def test_unreadable_source_skips_that_file_and_continues(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"jpeg", "png"})
+    bad = _truncated_jpeg(factory)
+    good = factory.logo()
+    lines = []
+    records = C.run([bad.resolve(), good.resolve()], opts(tmp_path / "out"), tools, log=lines.append)
+    assert [r["source"]["path"] for r in records] == [str(good.resolve())]
+    assert any(f"== {bad.resolve()}: skipped:" in line for line in lines)
+    assert len(list((tmp_path / "out").iterdir())) == 1, "the skipped source left a folder behind"
+
+
+def test_cli_exits_1_when_a_source_is_unreadable(factory, tmp_path):
+    _truncated_jpeg(factory)
+    factory.logo()
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(factory.root), "--out", str(tmp_path / "o")],
+                          capture_output=True, text=True)
+    if proc.returncode == 2 and "BLOCKED" in proc.stdout:
+        pytest.skip("tools missing: " + proc.stdout.splitlines()[-1])
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "skipped:" in proc.stdout
+    assert len(C.load_records(tmp_path / "o")) == 1
+
+
+def test_unreadable_candidate_output_becomes_that_candidates_error(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo().resolve()
+    real = C.read_facts
+
+    def flaky(path):
+        if Path(path).name == "oxipng.png":
+            raise OSError("image file is truncated")
+        return real(path)
+
+    monkeypatch.setattr(C, "read_facts", flaky)
+    [r] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
+    [cand] = r["candidates"]
+    assert "truncated" in cand["error"] and not cand["pass"]
+    assert r["pick"] is None

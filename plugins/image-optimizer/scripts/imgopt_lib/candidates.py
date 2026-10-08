@@ -7,9 +7,9 @@ inputs, the candidates and metrics.json. metrics.json is both the cache
 versions, so a re-run only redoes what changed) and the record that `sheet`
 and `apply` read. Schema: see SCHEMA and the plan's Task 7 interface block.
 
-A source whose colour profile cannot be converted (ImagingError) is skipped
-by run(): it logs the reason, writes nothing for that file and carries on, so
-callers compare len(records) with len(inputs) to learn that files were skipped.
+A source that cannot be read or whose colour profile cannot be converted
+(imaging.READ_FAILURES) is skipped by run(): it logs the reason, writes
+nothing for that file and carries on, so callers compare len(records) with len(inputs) to learn that files were skipped.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pathlib import Path
 from . import gates as G
 from . import ladder, metrics
 from .formats import EXT_BY_FORMAT, format_of, subdir_name
-from .imaging import ImagingError, display_pixels, flatten, read_facts, srgb_shift
+from .imaging import READ_FAILURES, display_pixels, flatten, read_facts, srgb_shift
 from .tools import describe
 
 SCHEMA = 1
@@ -118,6 +118,15 @@ def _run_rung(rung, key, inputs, folder, facts, ref_img, tools, can_measure) -> 
         rec["error"] = "pngquant could not reach this quality range"
         return rec
     rec["file"], rec["size"] = out.name, out.stat().st_size
+    try:
+        return _judge(rec, rung, out, inputs, facts, ref_img, tools, can_measure, folder)
+    except READ_FAILURES as error:
+        rec["error"] = str(error)
+        return rec
+
+
+def _judge(rec, rung, out, inputs, facts, ref_img, tools, can_measure, folder) -> dict:
+    """Read the encoded file and fill in its metadata verdict and scores."""
     ofacts = read_facts(out)
     rec["progressive"] = ofacts.progressive
     if rung.kind == "lossless" and rung.input == "source":
@@ -133,11 +142,7 @@ def _run_rung(rung, key, inputs, folder, facts, ref_img, tools, can_measure) -> 
         else:
             _perfect(rec)
         return rec
-    try:
-        cand = display_pixels(out)
-    except ImagingError as error:
-        rec["error"] = str(error)
-        return rec
+    cand = display_pixels(out)
     rec["identical"] = cand.size == ref_img.size and cand.tobytes() == ref_img.tobytes()
     if rec["identical"]:
         return _perfect(rec)
@@ -314,7 +319,7 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     for src in inputs:
         try:
             record = _process(Path(src), opts, tools)
-        except ImagingError as error:
+        except READ_FAILURES as error:
             log(f"\n== {src}: skipped: {error}")
             continue
         print_record(record, log)
