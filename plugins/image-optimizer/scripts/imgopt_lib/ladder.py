@@ -31,6 +31,10 @@ PNG_KEEP_WITH_EXIF = "eXIf,cICP,iCCP,sRGB,pHYs,acTL,fcTL,fdAT"
 GUETZLI_LEVELS = (84, 90)
 WEB_LEVELS = tuple(range(95, 45, -5))           # 95 .. 50
 GUETZLI_PROGRESSIVE = True                      # jpegtran -progressive shrank guetzli output 4-6% on all three samples
+# jpegli beside guetzli: on 31 WooCommerce photos under `high` it was the smallest passing encoder on 13,
+# and the ladder with both was 1.7 points smaller than with guetzli alone (docs/design.md). Its best
+# settings reached q40 under `high` and below q35 under `medium`, hence the range.
+JPEGLI_LEVELS = tuple(range(90, 20, -5))        # 90 .. 25
 # oxipng's zopfli mode saved 1.8% more on 13 small PNGs (oxipng 10) but took 25-45x longer on 5-7
 # megapixel screenshots for 0.4% or less, so it runs only up to this size.
 ZOPFLI_MAX_PIXELS = 2_000_000
@@ -133,6 +137,8 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             rungs += [Rung(f"cjpeg-q{q}", "cjpeg", "lossy", "pixels_ppm", ".jpg",
                            ("-quality", str(q), "-optimize", "-progressive")) for q in JPEG_LEVELS]
         if lossy:
+            rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", "pixels_flat", ".jpg", ("-q", str(q)))
+                      for q in JPEGLI_LEVELS]
             g_in = "source" if (not pixel and f.orientation == 1 and not gray) else "pixels_flat"
             rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),
                            post_jpegtran=GUETZLI_PROGRESSIVE) for q in GUETZLI_LEVELS]
@@ -236,6 +242,8 @@ def _encode(rung: Rung, exe: str, src: Path, out: Path, scratch: Path, tools: di
         argv = [exe, *rung.args, "-outfile", str(out), str(src)]
     elif rung.tool == "guetzli":
         argv = [exe, *rung.args, str(src), str(out)]
+    elif rung.tool == "cjpegli":
+        argv = [exe, str(src), str(out), *rung.args]
     elif rung.tool == "oxipng":
         argv = [exe, *rung.args, "-q", "--out", str(out), str(src)]
     elif rung.tool == "pngquant":

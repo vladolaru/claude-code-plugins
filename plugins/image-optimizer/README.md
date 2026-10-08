@@ -54,6 +54,14 @@ brew install mozjpeg jpegoptim oxipng pngquant guetzli gifsicle librsvg ffmpeg j
 npm install -g svgo   # svgo 4 or newer
 ```
 
+The lossy JPEG ladder also uses jpegli's `cjpegli`, which no package manager ships yet. Build it once (needs git, cmake and a C++ compiler; `brew install cmake` if missing) and put the binary on `PATH`:
+
+```bash
+git clone --recursive https://github.com/google/jpegli && cd jpegli
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+cmake --build build --target cjpegli    # then copy build/tools/cjpegli somewhere on PATH
+```
+
 ImageOptim.app, if installed, supplies native builds of jpegoptim, the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`).
 
 Tested on macOS only. On Linux the install lines `doctor` prints are best effort, and no run has been verified. Inside the Codex sandbox every command works except `sheet --browser`, because headless Chrome cannot start there; open the comparison page instead.

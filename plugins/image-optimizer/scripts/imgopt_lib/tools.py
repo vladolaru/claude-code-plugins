@@ -34,7 +34,7 @@ JOBS = ("audit", "recompress", "prepare", "convert", "compare")
 
 VERSION_ARGS: dict[str, list[str] | None] = {
     "jpegoptim": ["--version"], "jpegtran": ["-version"], "cjpeg": ["-version"],
-    "oxipng": ["--version"], "pngquant": ["--version"], "guetzli": None,
+    "oxipng": ["--version"], "pngquant": ["--version"], "guetzli": None, "cjpegli": None,
     "gifsicle": ["--version"], "svgo": ["--version"], "rsvg-convert": ["--version"],
     "ffmpeg": ["-version"], "ssimulacra2": None, "butteraugli_main": None,
     "cwebp": ["-version"], "avifenc": ["--version"], "chrome": ["--version"],
@@ -48,6 +48,7 @@ ADDS = {
     "oxipng": "lossless PNG optimization",
     "pngquant": "palette PNG candidates, usually the largest PNG savings",
     "guetzli": "perceptual JPEG encoder; often the best size for larger photos",
+    "cjpegli": "jpegli JPEG encoder; the smallest passing JPEG on 13 of 31 test photos, in milliseconds",
     "gifsicle": "lossless GIF optimization",
     "svgo": "SVG optimization",
     "rsvg-convert": "renders SVG before and after so a changed drawing is rejected",
@@ -70,6 +71,10 @@ APT = {"jpegoptim": "jpegoptim", "pngquant": "pngquant", "guetzli": "guetzli",
 OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install -g svgo",
          "jpegtran": "build mozjpeg: https://github.com/mozilla/mozjpeg",
          "cjpeg": "build mozjpeg: https://github.com/mozilla/mozjpeg",
+         "cjpegli": "build jpegli (not packaged by Homebrew or apt; needs git, cmake and a C++ compiler): "
+                    "git clone --recursive https://github.com/google/jpegli && cd jpegli && "
+                    "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && "
+                    "cmake --build build --target cjpegli, then put build/tools/cjpegli on PATH",
          "oxipng": "cargo install oxipng", "chrome": "install Google Chrome or Chromium"}
 
 # The ImageOptim bundle comes first only for jpegoptim: it is the one build linked against mozjpeg (Homebrew's

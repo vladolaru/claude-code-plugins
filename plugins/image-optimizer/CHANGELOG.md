@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `/optimize-images` now follows the new `image-optimization` skill: it measures every candidate against a quality profile (`lossless` by default, `high` or `medium` on request) and picks per file instead of running one lossless pass.
-- Encoders are called directly (mozjpeg, oxipng, pngquant, guetzli, gifsicle, svgo) instead of through the x86-only `imageoptim` CLI, and work stops until missing tools are installed or explicitly waived.
+- Encoders are called directly (mozjpeg, jpegli, oxipng, pngquant, guetzli, gifsicle, svgo) instead of through the x86-only `imageoptim` CLI, and work stops until missing tools are installed or explicitly waived.
 - Homebrew's tools are preferred to the copies bundled with ImageOptim.app (except jpegoptim, whose bundled build is the one linked to mozjpeg), and `imgopt.py doctor` suggests the Homebrew install when only an older bundled copy is found.
 - Runtime requirements: `python3` with Pillow for everything, plus ffmpeg and ssimulacra2 (from jpeg-xl) for the `high` and `medium` profiles; `imgopt.py doctor` lists the rest per job.
 
@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Resizing to a target width, PNG-to-JPEG, and WebP or AVIF output (labelled uncalibrated) under the `high` or `medium` gates; like any pick made from re-encoded pixels, these wait for approval on the comparison page, and a resized or converted file that comes out larger than its original is flagged LARGER.
 - `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles and a comparison page, verified writes, and a reviewer-runnable SSIM check.
+- Lossy JPEG jobs also try jpegli, which neither Homebrew nor apt packages: `imgopt.py doctor` prints the build steps, and the job waits until it is built or explicitly waived.
 - PNGs up to 2 megapixels also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because it took minutes on screenshots for 0.4% or less.
 - Under `high` and `medium`, a lossy pick's Evidence SSIM (what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
 

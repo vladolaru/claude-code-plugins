@@ -189,6 +189,14 @@ def test_cache_id_follows_the_binary_when_it_prints_no_version(tmp_path, version
     assert T.Tool("guetzli", str(exe), version, "path").cache_id != before
 
 
+def test_lossy_jpeg_jobs_ask_for_jpegli_with_build_steps():
+    req = T.requirements("recompress", "high", {"jpeg"})
+    assert "cjpegli" in req.quality
+    assert "cjpegli" not in T.requirements("recompress", "lossless", {"jpeg"}).all
+    [line] = T.install_lines(["cjpegli"], platform="darwin")
+    assert "github.com/google/jpegli" in line and "cjpegli on PATH" in line
+
+
 def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):
     fake(tmp_path / "bundle", "oxipng", "oxipng 9.0.0")
     fake(tmp_path / "bundle", "jpegoptim", "jpegoptim v1.4.4")

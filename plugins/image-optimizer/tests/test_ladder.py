@@ -239,3 +239,22 @@ def test_the_zopfli_rung_runs_only_up_to_the_pixel_limit():
     assert labels(big) == ["oxipng"]
     (zopfli,) = [r for r in L.plan(facts(fmt="png"), profile="lossless").rungs if r.label == "oxipng-zopfli"]
     assert "--zopfli" in zopfli.args and "--fast" in zopfli.args
+
+
+def test_lossy_jpeg_adds_jpegli_from_the_flattened_pixels():
+    jpegli = [r for r in L.plan(facts(), profile="high").rungs if r.tool == "cjpegli"]
+    assert [r.label for r in jpegli] == [f"cjpegli-q{q}" for q in L.JPEGLI_LEVELS]
+    assert all(r.input == "pixels_flat" and r.kind == "lossy" for r in jpegli)
+    assert not any(r.tool == "cjpegli" for r in L.plan(facts(), profile="lossless").rungs)
+    assert "cjpegli" in L.tools_for("png", profile="medium", out_format="jpeg")
+
+
+def test_cjpegli_encodes_a_progressive_jpeg(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src = factory.photo()
+    flat = tmp_path / "pixels_flat.png"
+    I.flatten(I.display_pixels(src), "white").save(flat)
+    rung = next(r for r in L.plan(I.read_facts(src), profile="high").rungs if r.label == "cjpegli-q80")
+    out = L.generate(rung, inputs={"pixels_flat": flat}, out_dir=tmp_path, tools=tools)
+    got = I.read_facts(out)
+    assert got.format == "jpeg" and got.progressive and (got.width, got.height) == (160, 120)
