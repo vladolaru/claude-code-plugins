@@ -22,6 +22,7 @@ JPEG_LEVELS = tuple(range(95, 35, -5))          # 95 .. 40
 PNG_QUALITY_RANGES = ("95-100", "90-100", "85-100", "80-95", "70-95", "60-85", "50-80")
 PNG_COLOURS = (256, 192, 128, 96, 64, 48, 32, 16)
 FEW_COLOURS = 32
+PNG_KEEP_WITH_EXIF = "eXIf,cICP,iCCP,sRGB,pHYs,acTL,fcTL,fdAT"
 GUETZLI_LEVELS = (84, 90)
 WEB_LEVELS = tuple(range(95, 45, -5))           # 95 .. 50
 GUETZLI_PROGRESSIVE = True                      # jpegtran -progressive shrank guetzli output 4-6% on all three samples
@@ -108,8 +109,12 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),
                            post_jpegtran=GUETZLI_PROGRESSIVE) for q in GUETZLI_LEVELS]
     elif target == "png":
+        # --strip safe drops eXIf, the PNG orientation carrier; a source that has one keeps
+        # exactly the chunks --strip safe keeps plus eXIf. Baked pixels have no orientation.
+        keep_orientation = not pixel and f.orientation != 1
+        strip = ("--keep", PNG_KEEP_WITH_EXIF) if keep_orientation else ("--strip", "safe")
         rungs.append(Rung("oxipng", "oxipng", "lossless", "pixels" if pixel else "source", ".png",
-                          ("-o", "max", "--strip", "safe")))
+                          ("-o", "max", *strip)))
         if lossy:
             if f.colors is not None and f.colors <= FEW_COLOURS:
                 notes.append(f"source has {f.colors} colours: palette candidates skipped, lossless is the floor")
@@ -139,15 +144,41 @@ def _exe(tools: dict, name: str) -> str:
     return tool.path
 
 
-def _run(argv: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=3600)
+def _run(argv: list[str], label: str, tool: str) -> subprocess.CompletedProcess:
+    """Run one encoder; every way it can fail to run surfaces as EncodeError naming ``label`` and ``tool``."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=3600)
+    except subprocess.TimeoutExpired as error:
+        raise EncodeError(f"{label}: {tool} timed out after {error.timeout:.0f}s") from error
+    except OSError as error:
+        raise EncodeError(f"{label}: cannot run {tool}: {error}") from error
+
+
+def _tail(proc: subprocess.CompletedProcess) -> str:
+    return (proc.stderr or proc.stdout).strip()[-300:]
 
 
 def generate(rung: Rung, *, inputs: dict, out_dir: Path, tools: dict) -> Path | None:
+    """Run one rung and return its output, or None when pngquant cannot reach its quality range.
+
+    Raises EncodeError when an encoder or post-pass cannot run or exits non-zero; no partial
+    output is left in ``out_dir`` in that case.
+    """
     exe = _exe(tools, rung.tool)
     src = Path(inputs[rung.input])
     out = Path(out_dir) / f"{rung.label}{rung.ext}"
-    out.unlink(missing_ok=True)
+    scratch = out.with_suffix(".prog.jpg")
+    for leftover in (out, scratch):
+        leftover.unlink(missing_ok=True)
+    try:
+        return _encode(rung, exe, src, out, scratch, tools)
+    except BaseException:
+        for leftover in (out, scratch):
+            leftover.unlink(missing_ok=True)
+        raise
+
+
+def _encode(rung: Rung, exe: str, src: Path, out: Path, scratch: Path, tools: dict) -> Path | None:
     if rung.tool == "jpegoptim":
         shutil.copyfile(src, out)
         argv = [exe, "-q", *rung.args, str(out)]
@@ -169,18 +200,21 @@ def generate(rung: Rung, *, inputs: dict, out_dir: Path, tools: dict) -> Path | 
         argv = [exe, *rung.args, str(src), str(out)]
     else:
         raise EncodeError(f"no runner for {rung.tool}")
-    proc = _run(argv)
+    proc = _run(argv, rung.label, rung.tool)
     if rung.tool == "pngquant" and proc.returncode == 99:
         return None
     if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
-        raise EncodeError(f"{rung.label}: {Path(exe).name} exited {proc.returncode}: "
-                          f"{(proc.stderr or proc.stdout).strip()[-300:]}")
+        raise EncodeError(f"{rung.label}: {Path(exe).name} exited {proc.returncode}: {_tail(proc)}")
     if rung.post_oxipng:
-        _run([_exe(tools, "oxipng"), "-o", "max", "--strip", "safe", "-q", str(out)])
+        post = _exe(tools, "oxipng")
+        proc = _run([post, "-o", "max", "--strip", "safe", "-q", str(out)], rung.label, "oxipng")
+        if proc.returncode != 0:
+            raise EncodeError(f"{rung.label}: post-pass {Path(post).name} exited {proc.returncode}: {_tail(proc)}")
     if rung.post_jpegtran:
-        tmp = out.with_suffix(".prog.jpg")
-        proc = _run([_exe(tools, "jpegtran"), "-optimize", "-progressive", "-copy", "none",
-                     "-outfile", str(tmp), str(out)])
-        if proc.returncode == 0 and tmp.is_file():
-            tmp.replace(out)
+        post = _exe(tools, "jpegtran")
+        proc = _run([post, "-optimize", "-progressive", "-copy", "none", "-outfile", str(scratch), str(out)],
+                    rung.label, "jpegtran")
+        if proc.returncode != 0 or not scratch.is_file():
+            raise EncodeError(f"{rung.label}: post-pass {Path(post).name} exited {proc.returncode}: {_tail(proc)}")
+        scratch.replace(out)
     return out

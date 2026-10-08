@@ -1,3 +1,4 @@
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pytest
 
 from imgopt_lib import imaging as I
 from imgopt_lib import ladder as L
+from imgopt_lib import tools as T
 
 
 def facts(fmt="jpeg", **kw):
@@ -108,3 +110,77 @@ def test_guetzli_rung_ends_with_a_progressive_jpeg(factory, toolset, tmp_path):
     rung = next(r for r in L.plan(I.read_facts(jpg), profile="high").rungs if r.label == "guetzli-q84")
     out = L.generate(rung, inputs={"source": jpg}, out_dir=tmp_path, tools=tools)
     assert I.read_facts(out).progressive
+
+
+def test_lossless_png_rung_keeps_orientation_and_icc(factory, device_icc, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    png = factory.photo(name="rot.png", orientation=6, icc=device_icc)
+    before = I.read_facts(png)
+    assert before.orientation == 6 and before.icc == device_icc
+    (rung,) = L.plan(before, profile="lossless").rungs
+    after = I.read_facts(L.generate(rung, inputs={"source": png}, out_dir=tmp_path, tools=tools))
+    assert after.orientation == 6 and after.icc == device_icc
+
+
+def test_lossless_png_rung_still_strips_without_orientation():
+    (rung,) = L.plan(facts(fmt="png"), profile="lossless").rungs
+    assert rung.args[-2:] == ("--strip", "safe")
+
+
+def test_lossless_jpeg_rungs_keep_orientation_and_icc(factory, device_icc, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"jpeg"})
+    jpg = factory.photo(orientation=6, icc=device_icc)
+    rungs = L.plan(I.read_facts(jpg), profile="lossless").rungs
+    assert len(rungs) == 2
+    for rung in rungs:
+        out = L.generate(rung, inputs={"source": jpg}, out_dir=tmp_path, tools=tools)
+        got = I.read_facts(out)
+        assert got.orientation == 6 and got.icc == device_icc, rung.label
+
+
+def _failing_tool(tmp_path, name):
+    script = tmp_path / f"fake-{name}"
+    script.write_text("#!/bin/sh\necho 'boom from fake' >&2\nexit 1\n")
+    script.chmod(0o755)
+    return T.Tool(name, str(script), "fake", "path")
+
+
+def test_failed_jpegtran_post_pass_raises_and_leaves_no_files(factory, toolset, tmp_path):
+    tools = dict(toolset("recompress", "lossless", {"jpeg"}))
+    tools["jpegtran"] = _failing_tool(tmp_path, "jpegtran")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    rung = L.Rung("jo", "jpegoptim", "lossy", "source", ".jpg", ("-m90",), post_jpegtran=True)
+    with pytest.raises(L.EncodeError, match="jpegtran.*boom from fake"):
+        L.generate(rung, inputs={"source": factory.photo()}, out_dir=out_dir, tools=tools)
+    assert list(out_dir.iterdir()) == []
+
+
+def test_failed_oxipng_post_pass_raises_and_leaves_no_files(factory, toolset, tmp_path):
+    tools = dict(toolset("recompress", "lossless", {"jpeg"}))
+    tools["oxipng"] = _failing_tool(tmp_path, "oxipng")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    rung = L.Rung("jo", "jpegoptim", "lossy", "source", ".jpg", ("-m90",), post_oxipng=True)
+    with pytest.raises(L.EncodeError, match="oxipng.*boom from fake"):
+        L.generate(rung, inputs={"source": factory.photo()}, out_dir=out_dir, tools=tools)
+    assert list(out_dir.iterdir()) == []
+
+
+def test_missing_executable_raises_encode_error(factory, tmp_path):
+    ghost = T.Tool("jpegoptim", str(tmp_path / "does-not-exist"), "ghost", "path")
+    rung = L.Rung("jo", "jpegoptim", "lossy", "source", ".jpg", ("-m90",))
+    with pytest.raises(L.EncodeError, match="jpegoptim") as info:
+        L.generate(rung, inputs={"source": factory.photo()}, out_dir=tmp_path, tools={"jpegoptim": ghost})
+    assert isinstance(info.value.__cause__, OSError)
+
+
+def test_timeout_raises_encode_error(factory, tmp_path, monkeypatch):
+    def boom(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 1)
+    monkeypatch.setattr(L.subprocess, "run", boom)
+    tool = T.Tool("jpegoptim", "/bin/true", "x", "path")
+    rung = L.Rung("jo", "jpegoptim", "lossy", "source", ".jpg", ("-m90",))
+    with pytest.raises(L.EncodeError, match="timed out") as info:
+        L.generate(rung, inputs={"source": factory.photo()}, out_dir=tmp_path, tools={"jpegoptim": tool})
+    assert isinstance(info.value.__cause__, subprocess.TimeoutExpired)
