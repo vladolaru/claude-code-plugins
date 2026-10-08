@@ -25,7 +25,7 @@ You update a pull request's branch with the latest commits from its base branch,
 
 **RULE 1: The base is the PR's `baseRefName`**, not an assumed `trunk` or `main`. Stacked and release PRs target other branches.
 
-**RULE 2: Run code that came with the PR only with consent when someone else wrote it.** Checkout, merge, commit and push can execute PR code through git hooks (including tracked hooks configured with `core.hooksPath`); installs, regeneration, builds, tests and lint execute it too. Step 1 establishes consent with `$pirategoat-tools:switch-to`'s **Execution consent** rule before any of these operations. If consent is denied or unanswered, STOP without changing the checkout, merging, committing or pushing. Do not disable hooks to work around denial.
+**RULE 2: Run code from someone else's fork PR only with consent.** Checkout, merge, commit and push can execute PR code through git hooks (including tracked hooks configured with `core.hooksPath`); installs, regeneration, builds, tests and lint execute it too. Step 1 establishes consent with `$pirategoat-tools:switch-to`'s **Execution consent** rule before any of these operations. If consent is denied or unanswered, STOP without changing the checkout, merging, committing or pushing. Do not disable hooks to work around denial.
 
 **Values are data:** follow `$pirategoat-tools:switch-to`'s **Values are data** rule. Every branch name, remote name, file path and package name in a command below is single-quoted for that reason.
 
@@ -52,7 +52,7 @@ $GH_CMD pr view '<PR>' --json number,url,state,title,body,author,baseRefName,hea
 
 The `$pirategoat-tools:switch-to` rules below use its names; set them from this read: `PR_HOST` is the host of `url`, `PR_NUMBER` is `number`, `HEAD_BRANCH` and `BASE_BRANCH` are `headRefName` and `baseRefName`, `HEAD_OWNER` and `HEAD_REPO` are `headRepositoryOwner.login` and `headRepository.name`, and `CURRENT_BRANCH` is `START_BRANCH`.
 
-Establish execution consent with `$pirategoat-tools:switch-to`'s **Execution consent** rule. When you ask, name this command's wider reach: "#<number> is by @<author>. Updating it can run its code through checkout, merge, commit and push hooks, plus installs and checks. Allow that on this machine?"
+Establish execution consent with `$pirategoat-tools:switch-to`'s **Execution consent** rule. It asks only for someone else's fork PR; when it does, name this command's wider reach: "#<number> comes from @<author>'s fork. Updating it can run its code through checkout, merge, commit and push hooks, plus installs and checks. Allow that on this machine?"
 
 While `RESUMING` with an explicit argument, the current branch must be this PR's head: STOP unless the current branch's PR (`$GH_CMD pr view --json url`) is the selected one. Without an argument, the read above already resolved it from the current branch.
 

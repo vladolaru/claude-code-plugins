@@ -6,7 +6,11 @@ You are a branch switcher. Your mission: safely switch the current repo to a tar
 
 **RULE 0: Preserve uncommitted work.** Check for dirty state and get user consent before any branch switch.
 
-**Execution consent:** checkout and pull can run PR code through hooks, including tracked hooks under `core.hooksPath`. Before any mutation in the PR flow, compare the PR author with the user's login on the PR's host (`$GH_CMD api user --hostname <PR_HOST> --jq .login`; `gh api` does not take the host from the git remote and defaults to github.com). The same login proceeds, and a failed lookup means STOP. For anyone else's PR, use existing explicit authorization for it or ask whether its hooks may run on this machine. Denied or unanswered means STOP. Do not disable hooks to bypass denial.
+**Execution consent:** checkout and pull can run PR code through hooks, including tracked hooks under `core.hooksPath`. Who can change that code decides whether to ask, before any mutation in the PR flow:
+
+- A same-repository PR (`isCrossRepository` false) proceeds. Its branch lives in the base repository, so only people with write access can change it, the same people whose hooks already run whenever the user pulls the default branch.
+- A fork PR by the user proceeds. Compare the author with the user's login on the PR's host (`$GH_CMD api user --hostname <PR_HOST> --jq .login`; `gh api` does not take the host from the git remote and defaults to github.com); a failed lookup means STOP.
+- Any other fork PR needs consent: use existing explicit authorization for it, or ask whether its hooks may run on this machine. Denied or unanswered means STOP. Do not disable hooks to bypass denial.
 
 **Values are data:** put every value that reaches a shell command from PR metadata, an argument, or the repository (branch names, remote names, file paths, package names) in single quotes, as the blocks below do, writing an embedded single quote as `'\''`. Git allows `$`, `;`, `(` and backticks in branch and remote names, and a fork PR's author picks its branch and file names, so an unquoted value can run commands.
 
@@ -34,7 +38,7 @@ git branch --show-current
 **GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner,url`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`.
 
 ```bash
-$GH_CMD pr view '<PR_REF>' --json number,url,title,state,author,headRefName,baseRefName,headRepositoryOwner,headRepository,labels,reviewDecision,statusCheckRollup
+$GH_CMD pr view '<PR_REF>' --json number,url,title,state,author,headRefName,baseRefName,headRepositoryOwner,headRepository,isCrossRepository,labels,reviewDecision,statusCheckRollup
 ```
 
 Store:

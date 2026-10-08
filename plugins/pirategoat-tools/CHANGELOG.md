@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR. It also fast-forwards the local base branch, asks before running another author's code through Git hooks, installs, or checks, and offers to return you to the branch you started on.
+- `/pr-branch-update [PR number or URL]` merges a PR's latest base branch into it, resolves conflicts, verifies the result, and pushes; with no argument it updates the current branch's open PR. It also fast-forwards the local base branch, asks before running the code of someone else's fork PR through Git hooks, installs, or checks, and offers to return you to the branch you started on.
 
 ### Changed
 
 - `/switch-to` accepts a bare PR number (`3817` or `#3817`) as well as a PR URL.
-- `/switch-to` asks before operations that can execute another PR author's code through Git hooks and preserves unrelated remotes when resolving the PR's repository.
+- `/switch-to` asks before operations that can execute the code of someone else's fork PR through Git hooks (a same-repository PR's branch can only be changed by people with write access, so it does not ask) and preserves unrelated remotes when resolving the PR's repository.
 - `/switch-to` checks out a fork PR whose branch shares a name with one of yours, such as the contributor's `trunk`, as `pr-<number>` instead of switching to your own branch; it stops if that fallback also belongs to unrelated work and explicitly sets tracking for new PR branches.
 - `/switch-to` and `/pr-update` no longer assume a `ghe` command exists: they call `gh`, and when it cannot reach a GitHub Enterprise host they use the wrapper, proxy, or environment the user's own instructions name for it, or stop with the error.
 
