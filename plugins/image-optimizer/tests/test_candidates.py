@@ -485,3 +485,14 @@ def test_a_pick_ffmpeg_cannot_reproduce_says_why(factory, toolset, tmp_path):
     chosen = C.pick_of(r)
     assert chosen and chosen["kind"] == "lossy", r["verdict_reason"]
     assert chosen["ssim_reviewer"] is None and "EXIF orientation" in chosen["reviewer_note"]
+
+
+def test_the_summary_flags_picks_larger_than_their_original(tmp_path):
+    def record(name, before, after):
+        return {"source": {"path": f"/x/{name}", "size": before}, "verdict": "apply", "pick": "p",
+                "candidates": [{"file": "p", "size": after, "kind": "lossy"}], "uncalibrated": False,
+                "waived": []}
+    lines = []
+    C.summarize([record("a.png", 100, 120), record("b.png", 100, 80)], tmp_path, Path("imgopt.py"), {},
+                log=lines.append)
+    assert any(line.startswith("LARGER: 1 pick(s)") and line.endswith("a.png") for line in lines), lines

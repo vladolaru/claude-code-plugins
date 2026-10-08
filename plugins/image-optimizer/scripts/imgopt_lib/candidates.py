@@ -356,6 +356,10 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     if any(r["uncalibrated"] for r in records):
         log("UNCALIBRATED FORMAT: WebP/AVIF output was never calibrated against these gates; "
             "every sheet tile is required viewing.")
+    larger = [r for r in applied if pick_of(r)["size"] > r["source"]["size"]]
+    if larger:
+        log(f"LARGER: {len(larger)} pick(s) are larger than their original (a format change was asked for); "
+            "tell the human before applying: " + ", ".join(Path(r["source"]["path"]).name for r in larger))
     waived = sorted({w for r in records for w in r["waived"]})
     if waived:
         log("WAIVED TOOLS (state this in any report): " + ", ".join(waived))

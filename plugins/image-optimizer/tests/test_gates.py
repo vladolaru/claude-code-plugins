@@ -160,3 +160,11 @@ def test_the_reviewer_ssim_is_held_to_the_ssim_floor_when_measured(reviewer, pas
     ok, why = G.evaluate(rec(ssim=0.9801, ssim_reviewer=reviewer), G.PROFILES["high"])
     assert ok is passes
     assert passes or why == "reviewer SSIM 0.979999 < 0.98"
+
+
+def test_a_larger_pick_outside_an_in_place_job_says_so():
+    _, why = G.verdict(100_000, rec(size=112_000), in_place=False)
+    assert why == "new file of 112000 B, 12% LARGER than the original"
+    _, why = G.verdict(100_000, rec(size=112_000), in_place=False, replaces_source=True)
+    assert why.endswith("12% LARGER than the original")
+    assert "LARGER" not in G.verdict(100_000, rec(size=100_000), in_place=False)[1]
