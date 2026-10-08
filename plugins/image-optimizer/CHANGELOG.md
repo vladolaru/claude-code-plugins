@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `imgopt.py inspect` reports each file's format, dimensions, colours, profile, orientation, estimated JPEG quality and lossless headroom without changing anything.
 - `imgopt.py sheet` cuts 1:1 difference tiles for the agent to view (never wider than about 1000 px) and builds a local comparison page with before, pick and an optional alternative.
 - `imgopt.py apply` writes the picks, refuses lossy ones without `--approved`, refuses files that changed since `candidates`, and re-measures every pick before it replaces the original, which stays untouched on a mismatch.
+- `imgopt.py compare` measures any two images (paths, `git:<rev>:<path>`, or URLs) and prints an ffmpeg command a reviewer can run, or says when only a local check can reproduce the numbers.
 
 ## [1.2.0] - 2026-07-23
 

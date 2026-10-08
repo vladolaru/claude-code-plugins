@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -12,7 +13,9 @@ from pathlib import Path
 from . import applying as AP
 from . import audit as A
 from . import candidates as C
+from . import compare as CP
 from . import gates as G
+from . import metrics as M
 from . import sheet as S
 from . import tools as T
 from .formats import OUTPUT_FORMATS, expand_inputs, format_of
@@ -125,6 +128,14 @@ def cmd_apply(args) -> int:
                     dest=Path(args.dest).resolve() if args.dest else None)
 
 
+def cmd_compare(args) -> int:
+    chk = T.ensure("compare", "high", None)
+    with tempfile.TemporaryDirectory() as tmp:
+        CP.print_result(CP.compare(args.ref, args.new, chk.tools, Path(tmp)))
+    print(T.describe(chk.tools))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
@@ -164,6 +175,10 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--approved", action="store_true", help="the human approved the lossy picks on the page")
     a.add_argument("--dest", help="folder for prepare/convert outputs instead of next to the source")
     a.set_defaults(func=cmd_apply)
+    m = sub.add_parser("compare", help="measure a pair and print a reviewer-runnable check")
+    m.add_argument("ref", help="path, git:<rev>:<path>, or URL")
+    m.add_argument("new", help="path, git:<rev>:<path>, or URL")
+    m.set_defaults(func=cmd_compare)
     return parser
 
 
@@ -175,5 +190,12 @@ def main(argv=None) -> int:
         print(error, file=sys.stdout)
         return 2
     except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    except subprocess.CalledProcessError as error:  # git show on a bad revision or path
+        detail = (error.stderr or b"").decode(errors="replace").strip()
+        print(f"error: {detail or error}", file=sys.stderr)
+        return 2
+    except (OSError, M.MetricError) as error:  # unreadable file, failed download, a measuring tool that failed
         print(f"error: {error}", file=sys.stderr)
         return 2
