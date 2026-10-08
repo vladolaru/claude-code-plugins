@@ -22,6 +22,7 @@ and ffmpeg's ssim averages all of them.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import tempfile
 import urllib.request
@@ -36,6 +37,7 @@ from .imaging import alpha_used, display_pixels, read_facts
 # Through rgb24 first, as the module docstring explains.
 PLAIN_GRAPH = "[0:v]format=rgb24,format=gray[a];[1:v]format=rgb24,format=gray[b];[a][b]ssim"
 SSIM_RE = re.compile(r"All:([0-9.]+)")
+FETCH_TIMEOUT = 60  # seconds without data before a download fails (OSError, so `compare` exits 2)
 
 
 def reviewer_graph(size: tuple[int, int], alpha: bool) -> str:
@@ -70,7 +72,8 @@ def fetch(spec: str, workdir: Path, cwd: Path | None = None) -> Path:
     workdir.mkdir(parents=True, exist_ok=True)
     if spec.startswith(("http://", "https://")):
         target = Path(tempfile.mkdtemp(dir=workdir)) / (Path(spec.split("?")[0]).name or "download")
-        urllib.request.urlretrieve(spec, target)
+        with urllib.request.urlopen(spec, timeout=FETCH_TIMEOUT) as response, open(target, "wb") as fh:
+            shutil.copyfileobj(response, fh)
         return target
     if spec.startswith("git:"):
         parts = spec.split(":", 2)

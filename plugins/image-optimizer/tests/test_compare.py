@@ -202,3 +202,20 @@ def test_paths_with_spaces_reproduce_and_the_hint_says_to_quote(factory, toolset
     lines = []
     CP.print_result(r, log=lines.append)
     assert any("quoted if the paths contain spaces" in line for line in lines)
+
+
+def test_a_download_that_stalls_times_out_as_exit_2(tmp_path, capsys, toolset, monkeypatch):
+    import socket
+    toolset("compare")
+    silent = socket.socket()
+    silent.bind(("127.0.0.1", 0))
+    silent.listen(1)  # accepts the connection, never answers
+    monkeypatch.setattr(CP, "FETCH_TIMEOUT", 0.5)
+    url = f"http://127.0.0.1:{silent.getsockname()[1]}/a.jpg"
+    try:
+        with pytest.raises(OSError):
+            CP.fetch(url, tmp_path / "w")
+        assert cli.main(["compare", url, url]) == 2
+    finally:
+        silent.close()
+    assert "error:" in capsys.readouterr().err
