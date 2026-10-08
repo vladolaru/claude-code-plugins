@@ -84,14 +84,15 @@ def test_a_rungs_kind_follows_its_input(f, profile, request_):
 @pytest.mark.parametrize("request_", [{"resize": 50}, {"out_format": "png"}])
 def test_a_lossless_encoder_on_reshaped_pixels_is_lossy(request_):
     p = L.plan(facts(fmt="jpeg" if request_.get("out_format") else "png"), profile="high", **request_)
-    (oxipng,) = [r for r in p.rungs if r.tool == "oxipng"]
-    assert oxipng.input == "pixels" and oxipng.kind == "lossy"
+    oxipng = [r for r in p.rungs if r.tool == "oxipng"]
+    assert [r.label for r in oxipng] == ["oxipng", "oxipng-zopfli"]
+    assert all(r.input == "pixels" and r.kind == "lossy" for r in oxipng)
 
 
 def test_a_device_profile_alone_keeps_the_source_lossless_rungs():
     png = L.plan(facts(fmt="png", device_profile=True), profile="high")
-    (oxipng,) = [r for r in png.rungs if r.tool == "oxipng"]
-    assert (oxipng.input, oxipng.kind) == ("source", "lossless")
+    oxipng = [r for r in png.rungs if r.tool == "oxipng"]
+    assert len(oxipng) == 2 and all((r.input, r.kind) == ("source", "lossless") for r in oxipng)
     assert all(r.input == "pixels" and r.kind == "lossy" for r in png.rungs if r.tool == "pngquant")
     jpeg = L.plan(facts(device_profile=True), profile="high")
     assert {r.label for r in jpeg.rungs if r.kind == "lossless"} == {"lossless-jpegoptim", "lossless-jpegtran"}
@@ -101,7 +102,7 @@ def test_a_device_profile_alone_keeps_the_source_lossless_rungs():
 
 def test_png_with_few_colours_gets_no_palette_rungs():
     p = L.plan(facts(fmt="png", colors=24), profile="high")
-    assert labels(p) == ["oxipng"]
+    assert labels(p) == ["oxipng", "oxipng-zopfli"]
     assert any("palette candidates skipped" in n for n in p.notes)
 
 
@@ -160,14 +161,16 @@ def test_lossless_png_rung_keeps_orientation_and_icc(factory, device_icc, toolse
     png = factory.photo(name="rot.png", orientation=6, icc=device_icc)
     before = I.read_facts(png)
     assert before.orientation == 6 and before.icc == device_icc
-    (rung,) = L.plan(before, profile="lossless").rungs
-    after = I.read_facts(L.generate(rung, inputs={"source": png}, out_dir=tmp_path, tools=tools))
-    assert after.orientation == 6 and after.icc == device_icc
+    rungs = L.plan(before, profile="lossless").rungs
+    assert [r.label for r in rungs] == ["oxipng", "oxipng-zopfli"]
+    for rung in rungs:
+        after = I.read_facts(L.generate(rung, inputs={"source": png}, out_dir=tmp_path, tools=tools))
+        assert after.orientation == 6 and after.icc == device_icc, rung.label
 
 
 def test_lossless_png_rung_still_strips_without_orientation():
-    (rung,) = L.plan(facts(fmt="png"), profile="lossless").rungs
-    assert rung.args[-2:] == ("--strip", "safe")
+    rungs = L.plan(facts(fmt="png"), profile="lossless").rungs
+    assert rungs and all(r.args[-2:] == ("--strip", "safe") for r in rungs)
 
 
 def test_lossless_jpeg_rungs_keep_orientation_and_icc(factory, device_icc, toolset, tmp_path):
@@ -227,3 +230,12 @@ def test_timeout_raises_encode_error(factory, tmp_path, monkeypatch):
     with pytest.raises(L.EncodeError, match="timed out") as info:
         L.generate(rung, inputs={"source": factory.photo()}, out_dir=tmp_path, tools={"jpegoptim": tool})
     assert isinstance(info.value.__cause__, subprocess.TimeoutExpired)
+
+
+def test_the_zopfli_rung_runs_only_up_to_the_pixel_limit():
+    side = int(L.ZOPFLI_MAX_PIXELS ** 0.5)
+    assert "oxipng-zopfli" in labels(L.plan(facts(fmt="png", width=side, height=side), profile="lossless"))
+    big = L.plan(facts(fmt="png", width=side + 1, height=side + 1), profile="lossless")
+    assert labels(big) == ["oxipng"]
+    (zopfli,) = [r for r in L.plan(facts(fmt="png"), profile="lossless").rungs if r.label == "oxipng-zopfli"]
+    assert "--zopfli" in zopfli.args and "--fast" in zopfli.args

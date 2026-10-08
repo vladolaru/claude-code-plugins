@@ -55,7 +55,7 @@ def test_few_colour_gradient_keeps_the_lossless_floor(factory, toolset, tmp_path
     tools = toolset("recompress", "high", {"png"})
     src = factory.gradient(colors=24)
     [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
-    assert [c["label"] for c in r["candidates"]] == ["oxipng"]
+    assert [c["label"] for c in r["candidates"]] == ["oxipng", "oxipng-zopfli"]
     assert any("palette candidates skipped" in n for n in r["notes"])
 
 
@@ -111,7 +111,7 @@ def test_cache_invalidates_when_pillow_changes(factory, toolset, tmp_path, monke
     C.run([src], opts(tmp_path / "out"), tools, log=quiet)
     assert calls == []
     C.run([src], opts(tmp_path / "out"), with_version(tools, "pillow", "99.0"), log=quiet)
-    assert calls == ["oxipng"]
+    assert calls == ["oxipng", "oxipng-zopfli"]
 
 
 def test_cache_invalidates_when_rsvg_convert_changes(tmp_path, toolset, monkeypatch):
@@ -131,13 +131,14 @@ def test_cache_invalidates_when_rsvg_convert_changes(tmp_path, toolset, monkeypa
 def test_cache_regenerates_a_candidate_whose_file_was_deleted(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo().resolve()
-    C.run([src], opts(tmp_path / "out"), tools, log=quiet)
+    [first] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
+    picked = C.pick_of(first)
     folder = C.load_records(tmp_path / "out")[0][0]
-    (folder / "oxipng.png").unlink()
+    (folder / picked["file"]).unlink()
     calls = counting_generate(monkeypatch)
     [r] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
-    assert calls == ["oxipng"]
-    assert (folder / "oxipng.png").is_file() and C.pick_of(r)["file"] == "oxipng.png"
+    assert calls == [picked["label"]]
+    assert (folder / picked["file"]).is_file() and C.pick_of(r)["file"] == picked["file"]
 
 
 def test_same_format_conversion_of_an_optimized_png_is_left_untouched(factory, toolset, tmp_path):
@@ -268,14 +269,14 @@ def test_unreadable_candidate_output_becomes_that_candidates_error(factory, tool
     real = C.read_facts
 
     def flaky(path):
-        if Path(path).name == "oxipng.png":
+        if Path(path).name.startswith("oxipng"):
             raise OSError("image file is truncated")
         return real(path)
 
     monkeypatch.setattr(C, "read_facts", flaky)
     [r] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
-    [cand] = r["candidates"]
-    assert "truncated" in cand["error"] and not cand["pass"]
+    assert [c["label"] for c in r["candidates"]] == ["oxipng", "oxipng-zopfli"]
+    assert all("truncated" in c["error"] and not c["pass"] for c in r["candidates"])
     assert r["pick"] is None
 
 

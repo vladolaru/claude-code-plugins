@@ -31,6 +31,9 @@ PNG_KEEP_WITH_EXIF = "eXIf,cICP,iCCP,sRGB,pHYs,acTL,fcTL,fdAT"
 GUETZLI_LEVELS = (84, 90)
 WEB_LEVELS = tuple(range(95, 45, -5))           # 95 .. 50
 GUETZLI_PROGRESSIVE = True                      # jpegtran -progressive shrank guetzli output 4-6% on all three samples
+# oxipng's zopfli mode saved 1.8% more on 13 small PNGs (oxipng 10) but took 25-45x longer on 5-7
+# megapixel screenshots for 0.4% or less, so it runs only up to this size.
+ZOPFLI_MAX_PIXELS = 2_000_000
 SVGO_CONFIG = Path(__file__).resolve().parents[1] / "svgo.config.mjs"
 
 
@@ -138,8 +141,11 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
         # exactly the chunks --strip safe keeps plus eXIf. Baked pixels have no orientation.
         keep_orientation = not reshaped and f.orientation != 1
         strip = ("--keep", PNG_KEEP_WITH_EXIF) if keep_orientation else ("--strip", "safe")
-        rungs.append(Rung("oxipng", "oxipng", "lossless", "pixels" if reshaped else "source", ".png",
-                          ("-o", "max", *strip)))
+        png_in = "pixels" if reshaped else "source"
+        rungs.append(Rung("oxipng", "oxipng", "lossless", png_in, ".png", ("-o", "max", *strip)))
+        if f.width * f.height <= ZOPFLI_MAX_PIXELS:
+            rungs.append(Rung("oxipng-zopfli", "oxipng", "lossless", png_in, ".png",
+                              ("-o", "max", "--fast", "--zopfli", *strip)))
         if lossy:
             if f.colors is not None and f.colors <= FEW_COLOURS:
                 notes.append(f"source has {f.colors} colours: palette candidates skipped, lossless is the floor")
