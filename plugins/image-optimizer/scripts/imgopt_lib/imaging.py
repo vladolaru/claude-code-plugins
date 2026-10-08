@@ -23,6 +23,10 @@ IJG_LUMA = (16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55,
             49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99)
 
 
+class ImagingError(ValueError):
+    """A file's pixels cannot be prepared (unreadable profile, no usable transform)."""
+
+
 @dataclass(frozen=True)
 class Facts:
     path: Path
@@ -49,7 +53,8 @@ def profile_description(icc: bytes | None) -> str | None:
         return None
     try:
         return ImageCms.getProfileDescription(ImageCms.ImageCmsProfile(io.BytesIO(icc))).strip()
-    except Exception:  # unreadable profile: treat as a device profile
+    except Exception:  # unreadable profile: read_facts reports it as a device profile
+        # (it is not sRGB), and display_pixels() raises ImagingError for the file.
         return "unreadable profile"
 
 
@@ -75,20 +80,56 @@ def read_facts(path: Path) -> Facts:
         )
 
 
-def to_srgb(rgba: Image.Image, icc: bytes) -> Image.Image:
-    src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
-    dst = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
-    rgb = ImageCms.profileToProfile(rgba.convert("RGB"), src, dst, outputMode="RGB")
-    out = rgb.convert("RGBA")
-    out.putalpha(rgba.getchannel("A"))
+# Pillow modes a profile can be applied to directly; the transform runs in the
+# file's own mode, because a gray or CMYK profile cannot take RGB input.
+_NATIVE_MODES = ("L", "CMYK", "RGB")
+
+
+def _convert(im: Image.Image, icc: bytes, label: str) -> Image.Image:
+    """Convert ``im`` from its embedded profile to sRGB, returned as RGBA.
+
+    Alpha stays out of the transform. ``label`` names the file in errors.
+    """
+    alpha = None
+    try:
+        src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+        gray = src.profile.xcolor_space.strip() == "GRAY"
+        if im.mode in ("LA", "RGBA"):
+            alpha = im.getchannel("A")
+            im = im.convert(im.mode[:-1])
+        elif im.mode in ("1", "I", "I;16", "F"):
+            im = im.convert("L")
+        elif im.mode not in _NATIVE_MODES:  # P, PA and anything else decode through RGBA
+            rgba = im.convert("RGBA")
+            alpha, im = rgba.getchannel("A"), rgba.convert("L" if gray else "RGB")
+        dst = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
+        transform = ImageCms.buildTransform(src, dst, im.mode, "RGB")
+        out = ImageCms.applyTransform(im, transform).convert("RGBA")
+    except (ImageCms.PyCMSError, OSError) as exc:
+        raise ImagingError(f"{label}: cannot convert its colour profile to sRGB ({exc})") from exc
+    if alpha is not None:
+        out.putalpha(alpha)
     return out
 
 
-def _oriented_rgba(path: Path) -> tuple[Image.Image, bytes | None]:
+def to_srgb(rgba: Image.Image, icc: bytes) -> Image.Image:
+    """Convert an RGB or RGBA image from the profile ``icc`` to sRGB (RGBA out)."""
+    return _convert(rgba, icc, "image")
+
+
+def _oriented(path: Path) -> tuple[Image.Image, bytes | None]:
+    """The file's pixels in their native mode with EXIF orientation applied."""
     with Image.open(path) as im:
         im.load()
         icc = im.info.get("icc_profile") or None
-        return ImageOps.exif_transpose(im).convert("RGBA"), icc
+        return ImageOps.exif_transpose(im), icc
+
+
+def _display(path: Path) -> tuple[Image.Image, Image.Image | None]:
+    """(oriented RGBA as stored, the same converted to sRGB or None without a profile)."""
+    im, icc = _oriented(path)
+    raw = im.convert("RGBA")
+    return raw, (_convert(im, icc, Path(path).name) if icc else None)
 
 
 def resize_width(img: Image.Image, width: int) -> Image.Image:
@@ -97,9 +138,11 @@ def resize_width(img: Image.Image, width: int) -> Image.Image:
 
 
 def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
-    rgba, icc = _oriented_rgba(path)
+    im, icc = _oriented(path)
     if icc and not is_srgb(profile_description(icc)):
-        rgba = to_srgb(rgba, icc)
+        rgba = _convert(im, icc, Path(path).name)
+    else:
+        rgba = im.convert("RGBA")
     if width and width != rgba.width:
         rgba = resize_width(rgba, width)
     return rgba
@@ -107,10 +150,10 @@ def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
 
 def srgb_shift(path: Path) -> tuple[float, int]:
     """How far converting the device profile to sRGB moves pixels (mean, max of 255)."""
-    raw, icc = _oriented_rgba(path)
-    if not icc:
+    raw, converted = _display(path)
+    if converted is None:
         return 0.0, 0
-    diff = ImageChops.difference(raw.convert("RGB"), to_srgb(raw, icc).convert("RGB"))
+    diff = ImageChops.difference(raw.convert("RGB"), converted.convert("RGB"))
     mean = sum(ImageStat.Stat(diff).mean) / 3
     peak = max(high for _, high in diff.getextrema())
     return mean, peak

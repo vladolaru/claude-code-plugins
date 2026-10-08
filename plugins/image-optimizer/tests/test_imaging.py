@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import pytest
 from PIL import Image
 
 from imgopt_lib import imaging as I
@@ -52,3 +55,52 @@ def test_flatten_and_backgrounds():
 def test_resize_width_keeps_aspect():
     img = Image.new("RGBA", (200, 100))
     assert I.resize_width(img, 100).size == (100, 50)
+
+
+PROFILES = Path("/System/Library/ColorSync/Profiles")
+
+
+def _system_profile(name: str) -> bytes:
+    path = PROFILES / name
+    if not path.is_file():
+        pytest.skip(f"needs the system profile {path}")
+    return path.read_bytes()
+
+
+def test_display_pixels_converts_a_grey_profile_in_its_native_mode(tmp_path):
+    icc = _system_profile("Generic Gray Profile.icc")
+    path = tmp_path / "grey.png"
+    Image.new("L", (4, 4), 100).save(path, icc_profile=icc)
+    assert I.display_pixels(path).getpixel((0, 0)) == (119, 119, 119, 255)
+    assert I.srgb_shift(path)[1] > 0
+
+
+def test_display_pixels_keeps_alpha_out_of_a_grey_profile_transform(tmp_path):
+    icc = _system_profile("Generic Gray Profile.icc")
+    path = tmp_path / "grey-alpha.png"
+    Image.new("LA", (4, 4), (100, 90)).save(path, icc_profile=icc)
+    assert I.display_pixels(path).getpixel((0, 0)) == (119, 119, 119, 90)
+
+
+def test_display_pixels_converts_a_cmyk_profile(tmp_path):
+    icc = _system_profile("Generic CMYK Profile.icc")
+    path = tmp_path / "cmyk.jpg"
+    Image.new("CMYK", (8, 8), (200, 10, 10, 0)).save(path, icc_profile=icc)
+    out = I.display_pixels(path)
+    assert out.mode == "RGBA" and out.size == (8, 8)
+
+
+def test_display_pixels_names_the_file_when_the_profile_is_unreadable(tmp_path):
+    path = tmp_path / "garbage-icc.png"
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(path, icc_profile=b"not a profile")
+    with pytest.raises(I.ImagingError, match="garbage-icc.png"):
+        I.display_pixels(path)
+    with pytest.raises(I.ImagingError, match="garbage-icc.png"):
+        I.srgb_shift(path)
+
+
+def test_display_pixels_converts_a_palette_image_tagged_with_a_grey_profile(tmp_path):
+    icc = _system_profile("Generic Gray Profile.icc")
+    path = tmp_path / "palette-grey.png"
+    Image.new("L", (4, 4), 100).quantize(2).save(path, icc_profile=icc)
+    assert I.display_pixels(path).getpixel((0, 0)) == (119, 119, 119, 255)
