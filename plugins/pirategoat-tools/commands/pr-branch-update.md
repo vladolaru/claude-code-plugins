@@ -10,7 +10,7 @@ You update a pull request's branch with the latest commits from its base branch,
 
 **RULE 2: Run code that came with the PR only with consent when someone else wrote it.** Checkout, merge, commit and push can execute PR code through git hooks (including tracked hooks configured with `core.hooksPath`); installs, regeneration, builds, tests and lint execute it too. Step 1 establishes consent with `/switch-to`'s **Execution consent** rule before any of these operations. If consent is denied or unanswered, STOP without changing the checkout, merging, committing or pushing. Do not disable hooks to work around denial.
 
-**Values are data:** follow `/switch-to`'s **Values are data** rule. Every branch name, file path and package name in a command below is single-quoted for that reason.
+**Values are data:** follow `/switch-to`'s **Values are data** rule. Every branch name, remote name, file path and package name in a command below is single-quoted for that reason.
 
 **One command at a time:** from Step 3 to Step 6 each command depends on the one before; send it as its own tool call and read its result first. `git checkout`, `git merge`, `git commit` and `git push` run hooks that can install dependencies or run checks for minutes: give them a long timeout or wait in the background, do not redo work a hook already did, and never skip hooks with `--no-verify`.
 
@@ -59,7 +59,7 @@ Then ask: "No open PR for `<branch>`. Merge `<default branch>` into it anyway, r
 Bring the local branch up to what GitHub has, from the PR's head branch rather than `@{upstream}`, which may be missing or track another branch. Without `HEAD_REMOTE` there is nothing to sync.
 
 ```bash
-git fetch <HEAD_REMOTE> '+refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>'
+git fetch '<HEAD_REMOTE>' '+refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>'
 PUSHED_TIP=$(git rev-parse 'refs/remotes/<HEAD_REMOTE>/<headRefName>')
 ```
 
@@ -70,7 +70,7 @@ If `git rev-list --count HEAD..$PUSHED_TIP` is not 0, run `git merge --ff-only $
 The explicit refspec updates the remote-tracking ref even in a single-branch clone:
 
 ```bash
-git fetch <BASE_REMOTE> '+refs/heads/<baseRefName>:refs/remotes/<BASE_REMOTE>/<baseRefName>'
+git fetch '<BASE_REMOTE>' '+refs/heads/<baseRefName>:refs/remotes/<BASE_REMOTE>/<baseRefName>'
 BASE_TIP=$(git rev-parse 'refs/remotes/<BASE_REMOTE>/<baseRefName>')
 ```
 
@@ -128,7 +128,7 @@ Fix what the merge broke; a fix goes in the merge commit when the merge is still
 
 Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails, leave the merge staged, report it, and STOP without pushing. Hooks can add files to a commit, so check the merge commit: `git show --remerge-diff --stat HEAD` must list only files you resolved or fixed. If it lists others, STOP and report them before pushing.
 
-Push without force (RULE 0's rebase is the one exception) to the branch the PR is built from: `git push <HEAD_REMOTE> 'HEAD:refs/heads/<headRefName>'`. For a PR, first recheck that all of `HEAD_REMOTE`'s push URLs still identify the PR head repository under **Resolve PR remotes**; the destination is the metadata head branch even when the local branch is `pr-<number>`. Without `HEAD_REMOTE`, do not push: the result is local-only. A rejected push means someone pushed to the branch meanwhile: STOP and report both heads.
+Push without force (RULE 0's rebase is the one exception) to the branch the PR is built from: `git push '<HEAD_REMOTE>' 'HEAD:refs/heads/<headRefName>'`. For a PR, first recheck that all of `HEAD_REMOTE`'s push URLs still identify the PR head repository under **Resolve PR remotes**; the destination is the metadata head branch even when the local branch is `pr-<number>`. Without `HEAD_REMOTE`, do not push: the result is local-only. A rejected push means someone pushed to the branch meanwhile: STOP and report both heads.
 
 ## Step 7: Report
 

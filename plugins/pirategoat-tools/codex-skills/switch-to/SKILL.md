@@ -25,7 +25,7 @@ You are a branch switcher. Your mission: safely switch the current repo to a tar
 
 **Execution consent:** checkout and pull can run PR code through hooks, including tracked hooks under `core.hooksPath`. Before any mutation in the PR flow, compare the PR author with the user's login on the PR's host (`$GH_CMD api user --hostname <PR_HOST> --jq .login`; `gh api` does not take the host from the git remote and defaults to github.com). The same login proceeds, and a failed lookup means STOP. For anyone else's PR, use existing explicit authorization for it or ask whether its hooks may run on this machine. Denied or unanswered means STOP. Do not disable hooks to bypass denial.
 
-**Values are data:** put every value that reaches a shell command from PR metadata, an argument, or the repository (branch names, file paths, package names) in single quotes, as the blocks below do, writing an embedded single quote as `'\''`. Git allows `$`, `;`, `(` and backticks in a branch name, and a fork PR's author picks its branch and file names, so an unquoted value can run commands.
+**Values are data:** put every value that reaches a shell command from PR metadata, an argument, or the repository (branch names, remote names, file paths, package names) in single quotes, as the blocks below do, writing an embedded single quote as `'\''`. Git allows `$`, `;`, `(` and backticks in branch and remote names, and a fork PR's author picks its branch and file names, so an unquoted value can run commands.
 
 **RULE 1: Always show meaningful post-switch context.** The user should know where they landed.
 
@@ -76,7 +76,7 @@ Before resolving remotes or changing the checkout, apply **Execution consent**.
 `$pirategoat-tools:pr-branch-update` uses these rules too. Resolve each repository by its host and exact owner/repository path, accepting SSH or HTTPS and an optional `.git` suffix; a substring match is not identity.
 
 - `BASE_REMOTE`: an existing remote whose fetch URL matches `PR_HOST` and the base repository. If none exists, STOP and report the missing remote.
-- `REMOTE_NAME`: for the head repository (`PR_HOST` plus `headRepositoryOwner.login/headRepository.name`), reuse a remote only when its fetch URL and **all** `git remote get-url --push --all <remote>` URLs identify that repository. This checks explicit `pushurl` overrides too. Prefer `BASE_REMOTE` when it qualifies.
+- `REMOTE_NAME`: for the head repository (`PR_HOST` plus `headRepositoryOwner.login/headRepository.name`), reuse a remote only when its fetch URL and **all** `git remote get-url --push --all '<remote>'` URLs identify that repository. This checks explicit `pushurl` overrides too. Prefer `BASE_REMOTE` when it qualifies.
 - If no remote qualifies, add an unused remote name (`HEAD_OWNER`, then `pr-<PR_NUMBER>-head`, then a numeric suffix) with `https://<PR_HOST>/<HEAD_OWNER>/<HEAD_REPO>.git`. Never repoint an existing unrelated remote. Verify the effective fetch and push URLs after adding it, since Git URL rewrites can change them; STOP on a mismatch. A missing/deleted `headRepository` means STOP.
 
 Set `REMOTE_BRANCH` = `HEAD_BRANCH` and `IS_PR = true`.
@@ -151,9 +151,9 @@ Proceed to **Step 5**.
 
 **Case B - Branch does NOT exist locally:**
 
-Fetch it, then create a local tracking branch. Git sets up tracking only for a remote-tracking ref that the remote's fetch refspecs map, so in a single-branch clone (`git config --get-all remote.<REMOTE_NAME>.fetch` has no `+refs/heads/*:refs/remotes/<REMOTE_NAME>/*`) register the branch between the two commands with `git remote set-branches --add <REMOTE_NAME> '<REMOTE_BRANCH>'`; otherwise `checkout --track` fails with "cannot set up tracking information". Register it only after the fetch succeeds: a registered branch that does not exist breaks every later `git fetch <REMOTE_NAME>`.
+Fetch it, then create a local tracking branch. Git sets up tracking only for a remote-tracking ref that the remote's fetch refspecs map, so in a single-branch clone (`git config --get-all 'remote.<REMOTE_NAME>.fetch'` has no `+refs/heads/*:refs/remotes/<REMOTE_NAME>/*`) register the branch between the two commands with `git remote set-branches --add '<REMOTE_NAME>' '<REMOTE_BRANCH>'`; otherwise `checkout --track` fails with "cannot set up tracking information". Register it only after the fetch succeeds: a registered branch that does not exist breaks every later `git fetch '<REMOTE_NAME>'`.
 ```bash
-git fetch <REMOTE_NAME> '+refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>'
+git fetch '<REMOTE_NAME>' '+refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>'
 git checkout --track -b '<TARGET_BRANCH>' '<REMOTE_NAME>/<REMOTE_BRANCH>'
 ```
 Proceed to **Step 6** (skip Step 5 - the branch was just fetched, it's up to date).
@@ -170,7 +170,7 @@ This step only runs when the branch already existed locally (Case A in Step 4).
 
 Check if the remote has new commits:
 ```bash
-git fetch <REMOTE_NAME> '+refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>'
+git fetch '<REMOTE_NAME>' '+refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>'
 git log 'HEAD..<REMOTE_NAME>/<REMOTE_BRANCH>' --oneline
 ```
 
@@ -184,16 +184,16 @@ the host's user-input mechanism:
   header: "Remote has new commits"
   options:
     - label: "Pull (rebase)"
-      description: "git pull --rebase <REMOTE_NAME> <REMOTE_BRANCH>"
+      description: "git pull --rebase '<REMOTE_NAME>' '<REMOTE_BRANCH>'"
     - label: "Pull (merge)"
-      description: "git pull <REMOTE_NAME> <REMOTE_BRANCH>"
+      description: "git pull '<REMOTE_NAME>' '<REMOTE_BRANCH>'"
     - label: "Skip"
       description: "Stay on local version without pulling remote changes"
 ```
 
 Handle the user's choice:
-- **Pull (rebase):** `git pull --rebase <REMOTE_NAME> '<REMOTE_BRANCH>'`
-- **Pull (merge):** `git pull <REMOTE_NAME> '<REMOTE_BRANCH>'`
+- **Pull (rebase):** `git pull --rebase '<REMOTE_NAME>' '<REMOTE_BRANCH>'`
+- **Pull (merge):** `git pull '<REMOTE_NAME>' '<REMOTE_BRANCH>'`
 - **Skip:** do nothing, proceed.
 
 ## Step 6: PR-Specific Post-Switch Tasks
@@ -202,7 +202,7 @@ Handle the user's choice:
 
 Fetch the target base branch so the user has it locally for comparisons:
 ```bash
-git fetch <BASE_REMOTE> '+refs/heads/<BASE_BRANCH>:refs/remotes/<BASE_REMOTE>/<BASE_BRANCH>'
+git fetch '<BASE_REMOTE>' '+refs/heads/<BASE_BRANCH>:refs/remotes/<BASE_REMOTE>/<BASE_BRANCH>'
 ```
 
 ## Step 7: Post-Switch Context
