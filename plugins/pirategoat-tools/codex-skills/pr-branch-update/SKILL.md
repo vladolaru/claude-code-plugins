@@ -19,68 +19,70 @@ This skill is generated from the canonical Claude Code command named above. To e
 ## Canonical Workflow
 
 
-You update a pull request's branch with the latest commits from its base branch, resolve any merge conflicts, verify the result, and push, the same job as GitHub's "Update branch" button plus the conflict work it cannot do.
+You update a pull request's branch with the latest commits from its base branch, resolve any merge conflicts, verify the result, and push, the same job as GitHub's "Update branch" button plus the conflict work it cannot do. You follow named rules from `$pirategoat-tools:switch-to`; read that command first.
 
 **RULE 0: Merge the base into the branch.** A merge keeps review threads anchored and pushes without force. Rebase only when the user's input asks for one, and then push with `--force-with-lease`.
 
 **RULE 1: The base is the PR's `baseRefName`**, not an assumed `trunk` or `main`. Stacked and release PRs target other branches.
 
-**RULE 2: Run code that came with the PR only with consent when someone else wrote it.** Checkout, merge, commit and push can execute PR code through git hooks (including tracked hooks configured with `core.hooksPath`); installs, regeneration, builds, tests and lint execute it too. Step 1 establishes consent before any of these operations. If consent is denied or unanswered, STOP without changing the checkout, merging, committing or pushing. Do not disable hooks to work around denial.
+**RULE 2: Run code that came with the PR only with consent when someone else wrote it.** Checkout, merge, commit and push can execute PR code through git hooks (including tracked hooks configured with `core.hooksPath`); installs, regeneration, builds, tests and lint execute it too. Step 1 establishes consent with `$pirategoat-tools:switch-to`'s **Execution consent** rule before any of these operations. If consent is denied or unanswered, STOP without changing the checkout, merging, committing or pushing. Do not disable hooks to work around denial.
 
-**Branch names are data:** `headRefName` and `baseRefName` come from the PR, and on a fork PR its author picks them. Git allows `$`, `;`, `(` and backticks in a branch name, so a name pasted unquoted into a shell command can run commands. Put every branch name in single quotes in shell commands, as the blocks below do, and STOP if a name contains a single quote.
+**Values are data:** follow `$pirategoat-tools:switch-to`'s **Values are data** rule. Every branch name, file path and package name in a command below is single-quoted for that reason.
 
-**One command at a time from Step 3 to Step 6:** merge, resolve, install, check, commit and push each depend on the one before. Send each as its own tool call and read its result before sending the next; never batch them in parallel.
+**One command at a time:** from Step 3 to Step 6 each command depends on the one before; send it as its own tool call and read its result first. `git checkout`, `git merge`, `git commit` and `git push` run hooks that can install dependencies or run checks for minutes: give them a long timeout or wait in the background, do not redo work a hook already did, and never skip hooks with `--no-verify`.
 
-**Hooks:** `git checkout`, `git merge`, `git commit` and `git push` run the repository's git hooks, which can install dependencies or run checks for minutes. Give those commands a long timeout or wait for them in the background, and let each finish before the next step. Do not redo work a hook already did, and never skip hooks with `--no-verify`.
+**Expected failures:** git and gh commands fail for normal reasons (network, auth, a branch checked out in another worktree). Report the error with the command that failed and STOP. Once the checkout has changed (a switch, stash, sync or merge), every exit, a STOP included, ends through Step 7's report and Step 8.
 
-**Expected failures:** git and gh commands fail for normal reasons (network, auth, a branch checked out in another worktree). Report the error with the command that failed and STOP.
+## Step 1: Find the PR and pin what the update needs
 
-## Step 1: Find the PR and establish execution consent
+**GitHub CLI:** set `GH_CMD` with `$pirategoat-tools:switch-to`'s **GitHub CLI** rule, checking with `gh repo view --json nameWithOwner,url,defaultBranchRef`. Store `nameWithOwner` as `BASE_REPO`, the host of `url` as the checkout's host, and `defaultBranchRef` for the no-PR fallback.
 
-**GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`. Store the `nameWithOwner` it returns as `BASE_REPO`.
+Record where the user is before anything moves: `START_BRANCH=$(git branch --show-current)` and `START_HEAD=$(git rev-parse HEAD)`. Inspect the merge and rebase state with `git rev-parse --git-path` (it works in linked worktrees): a rebase in progress means STOP, and an existing `MERGE_HEAD` sets `RESUMING`. While `RESUMING`, nothing switches, stashes, syncs, or starts another merge.
 
-Record where the user is before anything moves: `START_BRANCH=$(git branch --show-current)` and `START_HEAD=$(git rev-parse HEAD)`.
-
-**Parse arguments:** `${CODEX_SKILL_ARGUMENTS}`
-
-- A PR number (`3817`, `#3817`) or PR URL: use it as `<PR>` for the metadata read below. Do not run `$pirategoat-tools:switch-to` yet.
-- Empty: resolve the current branch's PR with `$GH_CMD pr view --json number,url,state`. When `state` is `OPEN`, use it and say so in one line ("No PR given; updating #3817 for the current branch"). When `gh` reports no pull request for the branch (`no pull requests found`), or the PR is closed or merged, offer to merge the repository's default branch (`$GH_CMD repo view --json defaultBranchRef`) instead (STOP if detached). First find the branch's own remote branch: its configured upstream (`branch.<name>.remote` and `branch.<name>.merge`) only when that branch has the same name as the local one. An upstream with another name, such as the `origin/trunk` or `origin/release/X` the branch was created from, is not its own: syncing with it would look like divergence, and pushing to it would update a shared branch. Then ask: "No open PR for `<branch>`. Merge `<default branch>` into it anyway, running this repository's hooks and checks, and <push to `<remote>/<branch>` | keep the result local>?" The command fills in that last part from what it found: "push" only when the branch has its own remote branch. Step 6 does exactly what the question said. If yes, use the default branch as `baseRefName` and the current branch as `headRefName`, skip the PR metadata and PR-specific consent/remote setup below, and treat that approval as consent for hooks and checks on the user's current branch. Any other `gh pr view` failure (network, authentication) is an error, not a missing PR: report it with the command and STOP, since an open PR may target a different base.
-
-Then read the PR's metadata:
+**Parse arguments:** `${CODEX_SKILL_ARGUMENTS}` is a PR number (`3817`, `#3817`), a PR URL, or empty. Read the PR, passing the argument as `'<PR>'`; with no argument, leave `'<PR>'` out so `gh` resolves the current branch's PR:
 
 ```bash
-$GH_CMD pr view <PR> --json number,url,state,author,baseRefName,headRefName,headRepositoryOwner,headRepository,isCrossRepository,maintainerCanModify
+$GH_CMD pr view '<PR>' --json number,url,state,title,body,author,baseRefName,headRefName,headRepositoryOwner,headRepository,isCrossRepository,maintainerCanModify
 ```
 
-STOP if `state` is not `OPEN`, or if the PR URL's host and base repository do not match this checkout's `BASE_REPO` and GitHub host.
+- With no argument, an `OPEN` PR is the one to update; say so in one line ("No PR given; updating #3817 for the current branch"). `no pull requests found`, or a PR that is not `OPEN`, starts the **no-PR fallback** below.
+- With an argument, STOP if `state` is not `OPEN`.
+- Any other failure (network, authentication) is an error, not a missing PR: report it with the command and STOP, since an open PR may target a different base.
+- STOP if the PR URL's host and base repository do not match the checkout's host and `BASE_REPO`.
 
-Establish execution consent (RULE 2). When `author.login` matches the user's login on the PR's host (`$GH_CMD api user --hostname <host of the PR url> --jq .login`; `gh api` does not take the host from the git remote and defaults to github.com), proceed. A failed identity lookup means STOP. Otherwise use existing explicit authorization for this PR's code if the session has it, or ask once: "#<number> is by @<author>. Updating it can run its code through checkout, merge, commit and push hooks, plus installs and checks. Allow that on this machine?" Only proceed with a yes; denial or no answer means STOP before any mutation.
+The `$pirategoat-tools:switch-to` rules below use its names; set them from this read: `PR_HOST` is the host of `url`, `PR_NUMBER` is `number`, `HEAD_BRANCH` and `BASE_BRANCH` are `headRefName` and `baseRefName`, `HEAD_OWNER` and `HEAD_REPO` are `headRepositoryOwner.login` and `headRepository.name`, and `CURRENT_BRANCH` is `START_BRANCH`.
 
-Before switching, inspect `MERGE_HEAD` and the rebase state directories using `git rev-parse --git-path` (also works in linked worktrees). A rebase in progress means STOP. With a merge in progress, do not switch, stash or synchronize: confirm the current branch's PR (`$GH_CMD pr view --json url`) is the selected PR, or STOP without changing the merge. Then use the resume path in Step 2. For the no-PR fallback, STOP on an existing merge because its PR identity cannot be confirmed.
+Establish execution consent with `$pirategoat-tools:switch-to`'s **Execution consent** rule. When you ask, name this command's wider reach: "#<number> is by @<author>. Updating it can run its code through checkout, merge, commit and push hooks, plus installs and checks. Allow that on this machine?"
 
-With no merge in progress and an explicit PR argument, run `$pirategoat-tools:switch-to <argument>` and follow it through, preserving this execution consent. It handles dirty state and remote synchronization. Note any stash. If it stops, STOP.
+While `RESUMING` with an explicit argument, the current branch must be this PR's head: STOP unless the current branch's PR (`$GH_CMD pr view --json url`) is the selected one. Without an argument, the read above already resolved it from the current branch.
 
-For every PR, including the no-argument and resume paths, apply **Resolve PR remotes** in `$pirategoat-tools:switch-to` Step 2A using the metadata above. Set `HEAD_REMOTE` to its `REMOTE_NAME`, and keep its `BASE_REMOTE`. This must run even when no checkout was needed; never assume an owner-named remote exists. If `isCrossRepository` is true, the fork is not the user's, and `maintainerCanModify` is false, STOP before merging and explain that the PR cannot be updated with these permissions.
+Apply `$pirategoat-tools:switch-to`'s **Resolve PR remotes** to the metadata: `HEAD_REMOTE` is its `REMOTE_NAME`, and keep its `BASE_REMOTE`. If `isCrossRepository` is true, the fork is not the user's, and `maintainerCanModify` is false, STOP: the PR cannot be updated with these permissions.
 
-## Step 2: Check the working tree and sync with the PR branch
+Unless `RESUMING`, when the PR's branch is not checked out (an explicit argument), check it out with `$pirategoat-tools:switch-to`'s **Choose the local branch name**, Step 3 (dirty working tree) and Step 4 (switch), using the metadata, consent and remotes above. Skip its Steps 5 to 7: Steps 2 and 3 here sync and fetch. Note any stash. If it stops, STOP; when it stopped after restoring its own stash, Step 8 has no stash to restore.
 
-- `git rev-parse -q --verify MERGE_HEAD` succeeds: preserve the index and working tree and go to Step 3 to initialize and validate the merge refs. Do not fast-forward, stash, or start another merge.
-- `git status --porcelain` is not empty (only reachable when Step 1 did not run `$pirategoat-tools:switch-to`): ask whether to stash (`git stash push --include-untracked`), or stop so the user can commit. Note the stash for Step 8.
+**No-PR fallback:** offer to merge the default branch into the current branch instead; STOP if detached or `RESUMING`, since no PR confirms that merge's identity. Set what the PR path sets:
 
-Without a merge in progress, bring the local branch up to what the PR has on GitHub. Sync with the PR's head branch, not `@{upstream}`: a local branch may have no upstream, or track another branch such as `origin/trunk`.
+- `baseRefName` is the default branch and `headRefName` the current branch.
+- `BASE_REMOTE` comes from the **Resolve PR remotes** `BASE_REMOTE` rule, with the checkout's host as `PR_HOST` and `BASE_REPO` as the repository.
+- `HEAD_REMOTE` is the branch's own remote: its configured upstream remote (`branch.<name>.remote`) only when `branch.<name>.merge` names a branch of the same name. An upstream with another name, such as the `origin/trunk` or `origin/release/X` the branch was created from, is not its own: syncing with it would look like divergence, and pushing to it would update a shared branch. Otherwise `HEAD_REMOTE` stays unset.
+
+Then ask: "No open PR for `<branch>`. Merge `<default branch>` into it anyway, running this repository's hooks and checks, and <push to `<HEAD_REMOTE>/<branch>` | keep the result local>?", choosing "push" exactly when `HEAD_REMOTE` is set. A yes is consent for hooks and checks on the user's branch; skip the PR consent, remotes and checkout above.
+
+## Step 2: Check the working tree and sync with GitHub
+
+- `RESUMING`: preserve the index and working tree and go to Step 3.
+- `git status --porcelain` is not empty (only when Step 1 did not check out): ask whether to stash (`git stash push --include-untracked`), or stop so the user can commit. Note the stash for Step 8.
+
+Bring the local branch up to what GitHub has, from the PR's head branch rather than `@{upstream}`, which may be missing or track another branch. Without `HEAD_REMOTE` there is nothing to sync.
 
 ```bash
 git fetch <HEAD_REMOTE> '+refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>'
 PUSHED_TIP=$(git rev-parse 'refs/remotes/<HEAD_REMOTE>/<headRefName>')
 ```
 
-For the no-PR fallback, fetch the branch's own remote branch from Step 1 the same way; without one there is nothing to sync and no `PUSHED_TIP`.
-
 If `git rev-list --count HEAD..$PUSHED_TIP` is not 0, run `git merge --ff-only $PUSHED_TIP`. If it cannot fast-forward, STOP: the local and pushed branches diverged, and the user decides which wins. Local commits that are not pushed yet stay and go out with the push in Step 6.
 
 ## Step 3: Merge the base
-
-Use `BASE_REMOTE` resolved in Step 1. For the no-PR fallback, resolve it by matching the GitHub host and exact `BASE_REPO` path against the remote URL (allow SSH or HTTPS and an optional `.git` suffix). If none matches, STOP and report the missing base remote.
 
 The explicit refspec updates the remote-tracking ref even in a single-branch clone:
 
@@ -89,11 +91,11 @@ git fetch <BASE_REMOTE> '+refs/heads/<baseRefName>:refs/remotes/<BASE_REMOTE>/<b
 BASE_TIP=$(git rev-parse 'refs/remotes/<BASE_REMOTE>/<baseRefName>')
 ```
 
-Record `PRE_MERGE=$(git rev-parse HEAD)` on both fresh and resumed paths, before any merge commit (the already-merged case below replaces it). For an unfinished merge, `HEAD` is still its original first parent; do not use a commit subject or a potentially stale `ORIG_HEAD` to identify it.
+Set `PRE_MERGE` to `PUSHED_TIP`, the branch as GitHub has it, or to `HEAD` when Step 2 fetched none. While `RESUMING`, `HEAD` is still the unfinished merge's first parent.
 
-**Resume validation:** if `MERGE_HEAD` exists, read it from `git rev-parse --git-path MERGE_HEAD`. Require exactly one commit and require its object ID to equal `BASE_TIP`. A different commit, multiple merge heads, or a base that advanced since the merge started means STOP, preserving the merge and reporting both IDs. Do not resolve or commit a merge against a different base.
+While `RESUMING`, require exactly one `MERGE_HEAD` commit (read it from `git rev-parse --git-path MERGE_HEAD`) equal to `BASE_TIP`. Anything else means STOP, preserving the merge and reporting both IDs: never resolve or commit a merge against a different base.
 
-Bring the local base branch up to date too, so local diffs against `<baseRefName>` match the PR. Note its commit first (`git rev-parse -q --verify 'refs/heads/<baseRefName>'`): the update prints nothing, and the report says whether it moved. This copies the ref just fetched, creates the branch if it is missing, and only fast-forwards:
+Bring the local base branch up to date too, so local diffs against `<baseRefName>` match the PR. Note its commit first (`git rev-parse -q --verify 'refs/heads/<baseRefName>'`), because the update prints nothing and the report says whether it moved:
 
 ```bash
 git fetch . 'refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>'
@@ -101,66 +103,58 @@ git fetch . 'refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>'
 
 Git refuses the update when the local base has commits of its own (`non-fast-forward`) or is checked out in another worktree. Leave it as it is, carry on, and name the reason in the report.
 
-For a validated resumed merge, go to Step 4 even if all conflicts are already staged. Otherwise count `git rev-list --count HEAD..$BASE_TIP`. When it is 0, the local branch already contains the base, and what is left depends on `PUSHED_TIP` from Step 2:
+A valid resume goes to Step 4, even if all conflicts are already staged. Otherwise:
 
-- `PUSHED_TIP` contains the base (`git merge-base --is-ancestor $BASE_TIP $PUSHED_TIP`), or there is no `PUSHED_TIP`: report "Already up to date with `<baseRefName>`" and the local base's state, then go to Step 8.
-- Otherwise the local branch has the base and GitHub does not, usually because an earlier run merged without pushing (Step 2 already ruled out divergence). Set `PRE_MERGE=$PUSHED_TIP`, skip the merge, and go to Step 5 so the result is verified and pushed.
-
-When the count is not 0, merge:
+- `PRE_MERGE` contains the base (`git merge-base --is-ancestor $BASE_TIP $PRE_MERGE`): go to Step 7, whose report opens "Already up to date with `<baseRefName>`" and keeps the lines that apply, then Step 8.
+- `HEAD` contains the base and `PRE_MERGE` does not: an earlier run merged without pushing. Skip the merge and go to Step 5.
+- Otherwise merge, naming the PR's head branch, which can differ from the local name `$pirategoat-tools:switch-to` chose:
 
 ```bash
 git merge --no-edit -m 'Merge branch '\''<baseRefName>'\'' into <headRefName>' "$BASE_TIP"
 ```
 
-The message names the PR's own head branch, which can differ from the local name `$pirategoat-tools:switch-to` chose; git keeps it for a merge that stops on conflicts.
-
 A clean merge goes straight to Step 5.
 
 ## Step 4: Resolve conflicts
 
-List them with `git diff --name-only --diff-filter=U`. For each file, read what each side meant before editing: `git log --merge --oneline -- <file>` names the commits on both sides, and `git diff $(git merge-base HEAD MERGE_HEAD) MERGE_HEAD -- <file>` shows the base's change.
+List them with `git diff --name-only --diff-filter=U`. For each file, read what each side meant before editing: `git log --merge --oneline -- '<file>'` names the commits on both sides, and `git diff $(git merge-base HEAD MERGE_HEAD) MERGE_HEAD -- '<file>'` shows the base's change.
 
 - **Code and prose changed on both sides:** keep both intents in one result. Neither side wins wholesale.
-- **Generated files other than lockfiles** (build output, generated adapters): take the base version with `git checkout --theirs -- <file>` (in a merge, "theirs" is the base), then regenerate it with the repository's own command so the PR's changes are reapplied.
-- **Lockfiles** (`pnpm-lock.yaml`, `composer.lock`), even when marked generated: a PR can change locked versions without touching the manifest, such as a security or transitive update, and regenerating from the base keeps the base's older versions without any error. Before resolving, list the packages whose locked version the PR changed: `git diff $(git merge-base HEAD MERGE_HEAD) HEAD -- <lockfile>`. Take the base version (`git checkout --theirs -- <file>`), update it for the merged manifest (`pnpm install` does; Composer needs `composer update <name>` for each package whose constraint the merge changed, since `composer install` only warns), then move each listed package back to the PR's version with the package manager's targeted update, leaving the manifest unchanged (for example, `composer update <name> --with <name>:<version>`). Check that each PR version is in the result; when the base now rules one out, name it in the report next to the file.
-- **Modified on one side, deleted or moved on the other:** find where the base moved the code (`git log --diff-filter=DR --oneline MERGE_HEAD -- <file>`) and port the PR's change there. When the base deleted the code instead of moving it, the two sides want contradictory behavior (below).
+- **Lockfiles** (`pnpm-lock.yaml`, `composer.lock`): a PR can change locked versions without touching the manifest, such as a security or transitive update, and regenerating from the base keeps the base's older versions without any error. Before resolving, list the packages whose locked version the PR changed: `git diff $(git merge-base HEAD MERGE_HEAD) HEAD -- '<lockfile>'`. Take the base version (`git checkout --theirs -- '<file>'`), update it for the merged manifest (`pnpm install` does; Composer needs `composer update '<name>'` for each package whose constraint the merge changed, since `composer install` only warns), then move each listed package back to the PR's version with the package manager's targeted update, leaving the manifest unchanged (for example, `composer update '<name>' --with '<name>:<version>'`). Check that each PR version is in the result; when the base now rules one out, name it in the report next to the file.
+- **Other generated files** (build output, generated adapters): take the base version with `git checkout --theirs -- '<file>'` (in a merge, "theirs" is the base), then regenerate it with the repository's own command so the PR's changes are reapplied.
+- **Modified on one side, moved on the other:** find where the base moved the code (`git log --diff-filter=DR --oneline MERGE_HEAD -- '<file>'`) and port the PR's change there. Code the base deleted outright is the contradictory case below.
 - **Combining both intents needs a choice neither side made** (the order two changes apply in, which default wins): make it, and name it in the report next to the file.
 - **The two sides want contradictory behavior** (both changed the same value or rule to different results, or one side deleted what the other changed): STOP before committing. Resolve and stage the other files first, leave the merge in progress, then show both versions and ask which behavior the PR should keep. The answer resumes the merge, and so does rerunning this command.
 
-Git merged the rest of each conflicted file on its own. Check those hunks still fit the resolution: they can carry the other half of one side's intent, such as a fixture only a deleted test used. Stage each resolved file. Before moving on, `git diff --cached --check -- <resolved files>` must print no `leftover conflict marker` lines; whitespace warnings either side brought in are not this command's concern.
+Git merged the rest of each conflicted file on its own. Check those hunks still fit the resolution: they can carry the other half of one side's intent, such as a fixture only a deleted test used. Stage each resolved file. Before moving on, `git diff --cached --check -- '<resolved file>'...` must print no `leftover conflict marker` lines; whitespace warnings either side brought in are not this command's concern.
 
 ## Step 5: Verify the merged result
 
-A merge that git reports as clean can still break the build. Compare what the base changed (`git diff $PRE_MERGE...$BASE_TIP`) with the PR's files (`git diff --name-only $BASE_TIP...HEAD`, the PR's side on every path) for two things:
+A merge that git reports as clean can still break the build. The PR's files are `git diff --name-only $BASE_TIP...HEAD`, the PR's side on every path. Check two things against them:
 
-- **Removed names:** the base removed or renamed a top-level definition (function, class, method, exported symbol, PHP constant, or hook name) that the PR's code still uses. Skip local variables, and skip a definition whose name comes back on a `+` line: that is a change, not a removal. A hit in the PR's code is breakage; a hit in prose such as a changelog is not.
-- **New conventions:** the base applied a rule to every existing case in a file the PR touches, such as a new required argument, wrapper, import, or option on every test. New code the PR adds there must follow it too, even where git merged it cleanly.
+- **Removed names:** from the lines the base deleted (`git diff -U0 $PRE_MERGE...$BASE_TIP | grep '^-'`), take the top-level definitions: functions, classes, methods, exported symbols, PHP constants and hook names. A name is removed when `git grep -w '<name>' $BASE_TIP` no longer finds it defined anywhere, and it is breakage when the PR's code, not its prose, still uses it.
+- **New conventions:** the base applied a rule to every existing case in a file the PR touches (`git diff $PRE_MERGE...$BASE_TIP -- '<PR file>'`), such as a new required argument, wrapper, import, or option on every test. New code the PR adds there must follow it too, even where git merged it cleanly.
 
-If a lockfile or dependency manifest differs between `START_HEAD` and the working tree (`git diff --name-only $START_HEAD`, which also sees a conflicted merge that is not committed yet), whether `$pirategoat-tools:switch-to`, Step 2's fast-forward, or the merge brought it, bring dependencies in line before the checks. A post-merge hook may have done it already, but git skips that hook after a conflicted merge. Use the install command the repository documents, or the lockfile's frozen install (`pnpm install --frozen-lockfile`, `composer install`). If they are not refreshed, the report says the checks ran against stale dependencies.
+If `git diff --name-only $START_HEAD` lists a lockfile or dependency manifest (it compares with the working tree, so a conflicted merge that is not committed yet counts), bring dependencies in line before the checks. A post-merge hook may have done it already, but git skips that hook after a conflicted merge. Use the install command the repository documents, or the lockfile's frozen install (`pnpm install --frozen-lockfile`, `composer install`). If they are not refreshed, the report says the checks ran against stale dependencies.
 
 Then run the checks the repository's `AGENTS.md` or `CLAUDE.md` names for the files the PR touches and the files that conflicted. When neither names any, use the test and lint entry points the project has: scripts in its manifest or CI config (`package.json`, `composer.json`, `Makefile`, `.github/workflows/`), or test files and directories at the root. Report "no checks found" only when there are none of these. Run them on the PR's files and the conflicted files directly: a script that picks its files from git state (unstaged changes, or a diff against a merge-base) checks nothing or everything around a merge, and a check whose configuration does not cover the PR's files is not applicable. Neither counts as a pass.
 
-Fix what the merge broke; a fix goes in the merge commit when the merge is still uncommitted, otherwise in its own commit. A failure that was already there before the merge (the same check fails at `PRE_MERGE`), or that comes from the base's own code, is reported, not fixed here.
+Fix what the merge broke; a fix goes in the merge commit when the merge is still uncommitted, otherwise in its own commit. A failure that was already there before the merge (the same check fails at the merge's first parent, or at `HEAD` before Step 3 when this run made no merge), or that comes from the base's own code, is reported, not fixed here.
 
 ## Step 6: Commit and push
 
 Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails, leave the merge staged, report it, and STOP without pushing. Hooks can add files to a commit, so check the merge commit: `git show --remerge-diff --stat HEAD` must list only files you resolved or fixed. If it lists others, STOP and report them before pushing.
 
-Push to the branch the PR is built from, without force (the rebase in RULE 0 is the one exception):
-
-- Every PR, same-repository or fork: `git push <HEAD_REMOTE> 'HEAD:refs/heads/<headRefName>'`. Recheck that all push URLs still identify the PR head repository using the Step 1 remote rules. The destination is the metadata head branch even when the local branch is `pr-<number>`.
-- No-PR fallback: push to the branch's own remote branch from Step 1 (`git push <remote> 'HEAD:refs/heads/<branch>'`) when the question said so; otherwise report the result as local-only.
-- Push rejected because someone pushed to the PR branch in the meantime: STOP and report both heads. Do not force.
+Push without force (RULE 0's rebase is the one exception) to the branch the PR is built from: `git push <HEAD_REMOTE> 'HEAD:refs/heads/<headRefName>'`. For a PR, first recheck that all of `HEAD_REMOTE`'s push URLs still identify the PR head repository under **Resolve PR remotes**; the destination is the metadata head branch even when the local branch is `pr-<number>`. Without `HEAD_REMOTE`, do not push: the result is local-only. A rejected push means someone pushed to the branch meanwhile: STOP and report both heads.
 
 ## Step 7: Report
 
 ```
-<"No PR given; updating #<number> for the current branch", when Step 1 resolved the PR itself>
-Updated <#<number> | `<branch>`, which has no PR,> with <baseRefName>: <merged <N> commits | pushed a local merge of <N> commits not yet on GitHub>; <pushed <short sha> | not pushed: <why>>.
+Updated <#<number> | `<branch>`, which has no PR,> with <baseRefName>: <merged <N> commits | found <N> base commits merged locally but not on GitHub>; <pushed <short sha> | not pushed: <why>>.
 
 Synced: <fast-forwarded <n> commits from GitHub before merging; only when Step 2 did>
-Conflicts:
-  <file> - <how it was resolved, one line>
+Conflicts: <none | one line per file: <file> - <how it was resolved>>
+Post-merge fixes: <what Step 5 fixed; only when it fixed something>
 Dependencies: <refreshed by <command> | refreshed by a hook | refreshed while resolving conflicts | unchanged | stale: <why>>
 Verification: <commands run and their result>
 Not verified: <checks not run or not applicable, and why>
@@ -169,7 +163,7 @@ PR text: <still accurate | stale: <title or body lines the merge made wrong, and
 Git range for the changes: <PRE_MERGE>...<HEAD>
 ```
 
-`<N>` is the number of base commits the update brings to the PR: `git rev-list --count $PRE_MERGE..$BASE_TIP`. Write "Conflicts: none" for a clean merge, and list any fix Step 5 needed under its own `Post-merge fixes:` line. For `PR text:`, read the PR's title and body (`$GH_CMD pr view <number> --json title,body`) against what the merge changed; when they are stale, suggest `$pirategoat-tools:pr-update` and do not edit them. When the command stopped partway, open with `Stopped updating <#<number> | `<branch>`>: <why>` and keep only the lines that apply.
+`<N>` is the number of base commits the update brings: `git rev-list --count $PRE_MERGE..$BASE_TIP`. For `PR text:`, compare the title and body from Step 1 with what the merge changed; when they are stale, suggest `$pirategoat-tools:pr-update` and do not edit them. When the command stopped partway, open with `Stopped updating <#<number> | `<branch>`>: <why>` and keep only the lines that apply.
 
 ## Step 8: Return to where the user was
 

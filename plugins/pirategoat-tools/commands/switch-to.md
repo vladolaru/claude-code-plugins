@@ -6,9 +6,9 @@ You are a branch switcher. Your mission: safely switch the current repo to a tar
 
 **RULE 0: Preserve uncommitted work.** Check for dirty state and get user consent before any branch switch.
 
-**Execution consent for PRs:** checkout and pull can run PR code through hooks, including tracked hooks under `core.hooksPath`. Before any mutation in the PR flow, establish consent when someone else authored the PR: use existing explicit authorization for this PR, or ask whether its hooks may run on this machine. If denied or unanswered, STOP. Do not disable hooks to bypass denial.
+**Execution consent:** checkout and pull can run PR code through hooks, including tracked hooks under `core.hooksPath`. Before any mutation in the PR flow, compare the PR author with the user's login on the PR's host (`$GH_CMD api user --hostname <PR_HOST> --jq .login`; `gh api` does not take the host from the git remote and defaults to github.com). The same login proceeds, and a failed lookup means STOP. For anyone else's PR, use existing explicit authorization for it or ask whether its hooks may run on this machine. Denied or unanswered means STOP. Do not disable hooks to bypass denial.
 
-**Branch names are data:** `HEAD_BRANCH`, `BASE_BRANCH` and a branch-name argument come from the PR, and on a fork PR its author picks them. Git allows `$`, `;`, `(` and backticks in a branch name, so a name pasted unquoted into a shell command can run commands. Put every branch name in single quotes in shell commands, as the blocks below do, and STOP if a name contains a single quote.
+**Values are data:** put every value that reaches a shell command from PR metadata, an argument, or the repository (branch names, file paths, package names) in single quotes, as the blocks below do, writing an embedded single quote as `'\''`. Git allows `$`, `;`, `(` and backticks in a branch name, and a fork PR's author picks its branch and file names, so an unquoted value can run commands.
 
 **RULE 1: Always show meaningful post-switch context.** The user should know where they landed.
 
@@ -31,14 +31,15 @@ git branch --show-current
 
 ## Step 2A: PR Flow — Gather PR Details
 
-**GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`.
+**GitHub CLI:** check that `gh` can reach this repository with `gh repo view --json nameWithOwner,url`; `gh` picks the host from the git remote. If it can, `GH_CMD` is `gh`. If it cannot reach the host (a GitHub Enterprise server behind a proxy, for example) and the user's instructions or skills name a wrapper, proxy, or environment for that host, use it to build `GH_CMD` (for example, `gh` run with the proxy in `HTTPS_PROXY`) and repeat the check. Otherwise STOP and report the error. Run every later GitHub call in this command with `GH_CMD`.
 
 ```bash
-<GH_CMD> pr view <PR_REF> --json headRefName,baseRefName,headRepositoryOwner,url,title,state,author,number,headRepository,isCrossRepository
+$GH_CMD pr view '<PR_REF>' --json number,url,title,state,author,headRefName,baseRefName,headRepositoryOwner,headRepository,labels,reviewDecision,statusCheckRollup
 ```
 
 Store:
 - `PR_NUMBER` = number
+- `PR_HOST` = the host of url
 - `PR_TITLE` = title
 - `PR_STATE` = state
 - `PR_AUTHOR` = author.login
@@ -47,34 +48,28 @@ Store:
 - `HEAD_OWNER` = headRepositoryOwner.login
 - `HEAD_REPO` = headRepository.name
 
-**Validate CWD repo matches the PR's repo:**
+**Validate CWD repo matches the PR's repo:** compare the host and `nameWithOwner` from the **GitHub CLI** check with `PR_HOST` and the `owner/name` in the PR's `url`. The same owner and name can exist on github.com and on a GitHub Enterprise host, and the remotes resolved below follow the PR's host. If either differs:
 
-```bash
-<GH_CMD> repo view --json owner,name,url
-```
+STOP. Tell the user: "This PR belongs to `<PR_HOST>/<pr_owner>/<pr_repo>` but you're in `<cwd_host>/<cwd_owner>/<cwd_repo>`. Navigate to the correct repo first."
 
-Compare the CWD repo's `url` host and `owner.login/name` against the PR's `url` host and `owner/name`. The same owner and name can exist on github.com and on a GitHub Enterprise host, and the remotes resolved below follow the PR's host. If either differs:
-
-STOP. Tell the user: "This PR belongs to `<pr_host>/<pr_owner>/<pr_repo>` but you're in `<cwd_host>/<cwd_owner>/<cwd_repo>`. Navigate to the correct repo first."
-
-Before resolving remotes or changing the checkout, compare `PR_AUTHOR` with `$GH_CMD api user --hostname <PR_HOST> --jq .login`, where `PR_HOST` is the host of the PR's `url`, and apply the execution-consent rule above. `gh api` does not take the host from the git remote and defaults to github.com, so an Enterprise PR needs the explicit host. A failed identity lookup means STOP.
+Before resolving remotes or changing the checkout, apply **Execution consent**.
 
 ### Resolve PR remotes
 
-These rules are also used by `/pr-branch-update` without switching branches. Use `isCrossRepository` from PR metadata to distinguish forks, including forks under the same owner. Resolve each repository by its host and exact owner/repository path, accepting SSH or HTTPS and an optional `.git` suffix; a substring match is not identity. Treat all metadata as data and quote shell arguments.
+`/pr-branch-update` uses these rules too. Resolve each repository by its host and exact owner/repository path, accepting SSH or HTTPS and an optional `.git` suffix; a substring match is not identity.
 
-- `BASE_REMOTE`: an existing remote whose fetch URL matches the PR URL's host and base repository. If none exists, STOP and report the missing remote.
-- `REMOTE_NAME`: for the head repository (the PR URL's host plus `headRepositoryOwner.login/headRepository.name`), reuse a remote only when its fetch URL and **all** `git remote get-url --push --all <remote>` URLs identify that repository. This checks explicit `pushurl` overrides too. Prefer `BASE_REMOTE` for same-repository PRs when it qualifies.
-- If no remote qualifies, add an unused remote name (`HEAD_OWNER`, then `pr-<PR_NUMBER>-head`, then a numeric suffix) with `https://<PR host>/<HEAD_OWNER>/<HEAD_REPO>.git`. Never repoint an existing unrelated remote. Verify the effective fetch and push URLs after adding it, since Git URL rewrites can change them; STOP on a mismatch. A missing/deleted `headRepository` means STOP.
+- `BASE_REMOTE`: an existing remote whose fetch URL matches `PR_HOST` and the base repository. If none exists, STOP and report the missing remote.
+- `REMOTE_NAME`: for the head repository (`PR_HOST` plus `headRepositoryOwner.login/headRepository.name`), reuse a remote only when its fetch URL and **all** `git remote get-url --push --all <remote>` URLs identify that repository. This checks explicit `pushurl` overrides too. Prefer `BASE_REMOTE` when it qualifies.
+- If no remote qualifies, add an unused remote name (`HEAD_OWNER`, then `pr-<PR_NUMBER>-head`, then a numeric suffix) with `https://<PR_HOST>/<HEAD_OWNER>/<HEAD_REPO>.git`. Never repoint an existing unrelated remote. Verify the effective fetch and push URLs after adding it, since Git URL rewrites can change them; STOP on a mismatch. A missing/deleted `headRepository` means STOP.
 
 Set `REMOTE_BRANCH` = `HEAD_BRANCH` and `IS_PR = true`.
 
-Choose the local branch name `TARGET_BRANCH`. A local branch named `HEAD_BRANCH` is this PR's branch only when it tracks `<REMOTE_NAME>/<HEAD_BRANCH>`; a fork PR opened from the contributor's `trunk` must not land on your own `trunk`:
+### Choose the local branch name
 
-Check local existence with `git show-ref --verify --quiet 'refs/heads/<candidate>'` separately from upstream lookup: an existing branch with no upstream is a collision, not a missing branch. For an existing candidate, compare `branch.<candidate>.remote` and `branch.<candidate>.merge` to `REMOTE_NAME` and `refs/heads/<HEAD_BRANCH>`; this also works before the tracking ref has been fetched.
+A local candidate matches this PR when it exists (`git show-ref --verify --quiet 'refs/heads/<candidate>'`) and its `branch.<candidate>.remote` and `branch.<candidate>.merge` equal `REMOTE_NAME` and `refs/heads/<HEAD_BRANCH>`. An existing branch with no upstream is a collision, not a match, so a fork PR opened from the contributor's `trunk` never lands on your own `trunk`.
 
-- No local `HEAD_BRANCH`, or its configured upstream matches: `TARGET_BRANCH` = `HEAD_BRANCH`.
-- Anything else: consider `pr-<PR_NUMBER>` with the same check. Reuse it only if its configured upstream matches, or create it if absent. If it exists with another upstream or no upstream, STOP before stashing or checkout and name both collisions; never pull the PR into that branch. Say which alias was chosen. Do not use `<HEAD_OWNER>/<HEAD_BRANCH>`: it is also a remote-tracking ref name and would be ambiguous.
+- No local `HEAD_BRANCH`, or it matches: `TARGET_BRANCH` = `HEAD_BRANCH`.
+- Otherwise use `pr-<PR_NUMBER>` when it matches or is absent, and say which alias was chosen. If it exists without matching, STOP before stashing or checkout and name both collisions; never pull the PR into that branch.
 
 Proceed to **Step 3**.
 
@@ -139,19 +134,14 @@ Proceed to **Step 5**.
 
 **Case B — Branch does NOT exist locally:**
 
-Check if it exists on the remote:
-```bash
-git ls-remote --heads <REMOTE_NAME> '<REMOTE_BRANCH>'
-```
-
-If it exists on the remote — create a local tracking branch. Git sets up tracking only for a remote-tracking ref that the remote's fetch refspecs map, so in a single-branch clone (`git config --get-all remote.<REMOTE_NAME>.fetch` has no `+refs/heads/*:refs/remotes/<REMOTE_NAME>/*`) register the branch first with `git remote set-branches --add <REMOTE_NAME> '<REMOTE_BRANCH>'`. Otherwise `checkout --track` fails with "cannot set up tracking information".
+Fetch it, then create a local tracking branch. Git sets up tracking only for a remote-tracking ref that the remote's fetch refspecs map, so in a single-branch clone (`git config --get-all remote.<REMOTE_NAME>.fetch` has no `+refs/heads/*:refs/remotes/<REMOTE_NAME>/*`) register the branch between the two commands with `git remote set-branches --add <REMOTE_NAME> '<REMOTE_BRANCH>'`; otherwise `checkout --track` fails with "cannot set up tracking information". Register it only after the fetch succeeds: a registered branch that does not exist breaks every later `git fetch <REMOTE_NAME>`.
 ```bash
 git fetch <REMOTE_NAME> '+refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>'
 git checkout --track -b '<TARGET_BRANCH>' '<REMOTE_NAME>/<REMOTE_BRANCH>'
 ```
 Proceed to **Step 6** (skip Step 5 — the branch was just fetched, it's up to date).
 
-If it does NOT exist on the remote either:
+If the fetch fails with `couldn't find remote ref`, the branch is not on the remote either:
 
 **Safety: restore stashed changes before stopping.** If `STASHED` is true, run `git stash pop` to return the user's work to their working tree.
 
@@ -219,10 +209,9 @@ git rev-list --left-right --count '<REMOTE_NAME>/<REMOTE_BRANCH>...HEAD' 2>/dev/
 # Ahead/behind vs base branch
 # SAME column order: Column 1 = BEHIND, Column 2 = AHEAD
 git rev-list --left-right --count '<BASE_REMOTE>/<BASE_BRANCH>...HEAD'
-
-# PR metadata
-<GH_CMD> pr view <PR_NUMBER> --json title,state,author,labels,reviewDecision,statusCheckRollup
 ```
+
+The PR's title, state, author, review decision and checks come from the Step 2A metadata.
 
 **CRITICAL — interpreting `git rev-list --left-right --count A...B`:**
 The output is two tab-separated numbers. For `A...HEAD`:
