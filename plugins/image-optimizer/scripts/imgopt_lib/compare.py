@@ -6,9 +6,10 @@ commits). The reviewer one-liner uses ffmpeg alone; `compare` runs that
 exact graph itself and reports its number as `ssim_reviewer`, which is what
 the evidence quotes, because ffmpeg's JPEG decoder differs from Pillow's by
 up to about 1e-3 (9.8e-4 on real JPEGs, 2026-10-08; enough to flip a 0.98
-floor). Alpha images are composited onto white with `overlay=...:format=rgb`:
-the default YUV compositing drifted 5e-4 from Pillow's flatten (self-review,
-2026-10-08).
+floor; `candidates` therefore runs the same check, ``reviewer_check()``, on
+each lossy pick and holds it to the SSIM floor). Alpha images are composited
+onto white with `overlay=...:format=rgb`: the default YUV compositing drifted
+5e-4 from Pillow's flatten (self-review, 2026-10-08).
 The one-liner cannot reproduce numbers when dimensions differ or when either
 file carries a device colour profile or an EXIF orientation, because ffmpeg
 ignores both; then the evidence must say "verified locally".
@@ -33,7 +34,7 @@ from PIL import Image
 
 from . import metrics
 from .ladder import UsageError
-from .imaging import alpha_used, display_pixels, read_facts
+from .imaging import Facts, alpha_used, display_pixels, read_facts
 
 # Through rgb24 first, as the module docstring explains.
 PLAIN_GRAPH = "[0:v]format=rgb24,format=gray[a];[1:v]format=rgb24,format=gray[b];[a][b]ssim"
@@ -52,6 +53,28 @@ def reviewer_graph(size: tuple[int, int], alpha: bool) -> str:
 
 def reviewer_command(graph: str) -> str:
     return f'ffmpeg -hide_banner -i REF -i NEW -lavfi "{graph}" -f null - 2>&1 | grep -o \'All:[0-9.]*\''
+
+
+def reviewer_obstacles(rf: Facts, nf: Facts, ref_size: tuple[int, int], new_size: tuple[int, int]) -> list[str]:
+    """Why ffmpeg alone cannot reproduce the comparison of this pair (empty when it can).
+    Sizes are the displayed ones (display_pixels)."""
+    reasons = []
+    if rf.frames > 1 or nf.frames > 1:
+        reasons.append("an animation is involved (the scores cover the first frame)")
+    if ref_size != new_size:
+        reasons.append("dimensions differ")
+    if rf.device_profile or nf.device_profile:
+        reasons.append("a device colour profile is involved")
+    if rf.orientation != 1 or nf.orientation != 1:
+        reasons.append("an EXIF orientation is involved")
+    return reasons
+
+
+def reviewer_check(ffmpeg: str, ref: Path, new: Path, ri: Image.Image, ni: Image.Image) -> tuple[float, str]:
+    """(the SSIM the reviewer one-liner prints for these files, its graph); ``ri``/``ni`` are their display
+    pixels. Raises MetricError when ffmpeg cannot decode the pair."""
+    graph = reviewer_graph(ni.size, alpha_used(ri) or alpha_used(ni))
+    return run_reviewer_graph(ffmpeg, ref, new, graph), graph
 
 
 def run_reviewer_graph(ffmpeg: str, ref: Path, new: Path, graph: str) -> float:
@@ -103,16 +126,9 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
     identical = (metrics.frames_identical(ref, new) if animated
                  else ri.size == ni.size and ri.tobytes() == ni.tobytes())
     result = {"ref": ref_spec, "new": new_spec, "identical": identical}
-    reasons = []
-    if animated:
-        reasons.append("an animation is involved (the scores cover the first frame)")
+    reasons = reviewer_obstacles(rf, nf, ri.size, ni.size)
     if ri.size != ni.size:
-        reasons.append("dimensions differ")
         ri = ri.resize(ni.size, Image.LANCZOS)
-    if rf.device_profile or nf.device_profile:
-        reasons.append("a device colour profile is involved")
-    if rf.orientation != 1 or nf.orientation != 1:
-        reasons.append("an EXIF orientation is involved")
     if identical:
         result.update(ssim=1.0, ssim_white=1.0, ss2=100.0, band=0.0, butteraugli=0.0)
     else:
@@ -122,9 +138,8 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
     result["reason"] = "; ".join(reasons)
     result["command"] = result["ssim_reviewer"] = None
     if not reasons:
-        graph = reviewer_graph(ni.size, alpha_used(ri) or alpha_used(ni))
         try:
-            result["ssim_reviewer"] = run_reviewer_graph(tools["ffmpeg"].path, ref, new, graph)
+            result["ssim_reviewer"], graph = reviewer_check(tools["ffmpeg"].path, ref, new, ri, ni)
             result["command"] = reviewer_command(graph)
         except metrics.MetricError as error:  # ffmpeg cannot decode an input Pillow reads (AVIF, JXL)
             result["reproducible"] = False

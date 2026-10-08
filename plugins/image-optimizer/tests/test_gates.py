@@ -153,3 +153,10 @@ def test_a_job_that_rewrites_the_source_says_it_replaces_the_original():
     verdict, why = G.verdict(100_000, rec(size=60_000), in_place=False, replaces_source=True)
     assert verdict == "apply" and "replaces the original" in why and "new file" not in why
     assert "new file" in G.verdict(100_000, rec(size=60_000), in_place=False)[1]
+
+
+@pytest.mark.parametrize("reviewer, passes", [(0.979999, False), (0.98, True), (None, True)])
+def test_the_reviewer_ssim_is_held_to_the_ssim_floor_when_measured(reviewer, passes):
+    ok, why = G.evaluate(rec(ssim=0.9801, ssim_reviewer=reviewer), G.PROFILES["high"])
+    assert ok is passes
+    assert passes or why == "reviewer SSIM 0.979999 < 0.98"

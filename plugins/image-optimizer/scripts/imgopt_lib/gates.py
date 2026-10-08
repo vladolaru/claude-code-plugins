@@ -51,6 +51,9 @@ def evaluate(rec: dict, gates: Gates) -> tuple[bool, str]:
             fails.append("ssim not measured")
         elif rec["ssim"] < gates.ssim:
             fails.append(f"SSIM {rec['ssim']:.4f} < {gates.ssim:g}")
+        # The number a reviewer's ffmpeg check prints, when candidates measured it (picks only).
+        if rec.get("ssim_reviewer") is not None and rec["ssim_reviewer"] < gates.ssim:
+            fails.append(f"reviewer SSIM {rec['ssim_reviewer']:.6f} < {gates.ssim:g}")
     if gates.ss2 is not None:
         if rec.get("ss2") is None:
             fails.append("ss2 not measured")

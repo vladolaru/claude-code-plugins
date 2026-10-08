@@ -443,3 +443,45 @@ def test_cli_refuses_an_out_folder_inside_an_input_folder(factory, inside):
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "--out" in proc.stderr and str(factory.root.resolve()) in proc.stderr
     assert sorted(p.name for p in factory.root.iterdir()) == ["logo.png"]
+
+
+def test_the_pick_records_the_ssim_a_reviewer_will_see(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    [r] = C.run([factory.photo(quality=95).resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
+    chosen = C.pick_of(r)
+    assert chosen and chosen["kind"] == "lossy", r["verdict_reason"]
+    assert chosen["ssim_reviewer"] >= 0.98
+    assert abs(chosen["ssim_reviewer"] - chosen["ssim"]) < 2e-3  # the decoders differ by up to about 1e-3
+
+
+def test_a_pick_the_reviewer_check_fails_gives_way_to_the_next(factory, toolset, tmp_path, monkeypatch):
+    from imgopt_lib import compare as CP
+    tools = toolset("recompress", "high", {"jpeg"})
+    calls = []
+
+    def reviewer(ffmpeg, ref, new, ri, ni):
+        calls.append(new.name)
+        return (0.97 if len(calls) == 1 else 0.99), "graph"
+    monkeypatch.setattr(CP, "reviewer_check", reviewer)
+    src = factory.photo(quality=95).resolve()
+    [r] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
+    first = next(c for c in r["candidates"] if c.get("file") == calls[0])
+    assert not first["pass"] and first["reason"] == "reviewer SSIM 0.970000 < 0.98"
+    chosen = C.pick_of(r)
+    assert chosen["file"] != calls[0] and chosen["size"] >= first["size"]
+    assert chosen.get("identical") or chosen["ssim_reviewer"] == 0.99
+
+    def no_more(*a):
+        raise AssertionError("a cached pick is not re-checked")
+    monkeypatch.setattr(CP, "reviewer_check", no_more)
+    [again] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
+    assert again["pick"] == r["pick"]
+
+
+def test_a_pick_ffmpeg_cannot_reproduce_says_why(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    [r] = C.run([factory.photo(quality=95, orientation=6).resolve()], opts(tmp_path / "out", "high"), tools,
+                log=quiet)
+    chosen = C.pick_of(r)
+    assert chosen and chosen["kind"] == "lossy", r["verdict_reason"]
+    assert chosen["ssim_reviewer"] is None and "EXIF orientation" in chosen["reviewer_note"]
