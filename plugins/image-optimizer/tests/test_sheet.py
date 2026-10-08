@@ -237,3 +237,26 @@ def test_cli_with_only_lossless_picks_points_at_apply_without_approval(tmp_path,
     assert proc.returncode == 0
     assert "No lossy picks" in proc.stdout
     assert "apply" in proc.stdout.splitlines()[-1] and "--approved" not in proc.stdout.splitlines()[-1]
+
+
+def _edit_record(out, **changes):
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    record["source"]["format"] = changes.pop("source_format", record["source"]["format"])
+    record["candidates"][0].update(changes.pop("pick", {}))
+    record.update(changes)
+    path.write_text(json.dumps(record))
+
+
+def test_a_lossy_pick_in_a_new_format_requires_every_tile(tmp_path, factory):
+    out = fake_out(tmp_path, factory, band_gated=True, size=(900, 600))  # band-gated alone: nothing required
+    _edit_record(out, source_format="jpeg", format="png")
+    tiles, _ = S.build(out)
+    assert tiles and all(t.required for t in tiles)
+
+
+def test_a_pixel_identical_pick_in_a_new_format_gets_no_tiles(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    _edit_record(out, source_format="png", format="jpeg", pick={"kind": "lossless", "identical": True})
+    tiles, _ = S.build(out)
+    assert tiles == []

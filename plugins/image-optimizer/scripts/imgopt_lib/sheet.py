@@ -4,7 +4,9 @@ The session wrote "no banding" from contact sheets an image viewer had
 shrunk from 2400 to 1000 px. Tiles here are never wider than about 1000 px,
 are cut at 1:1 from windows the script chooses (most error on smooth areas,
 most error overall, and for alpha images an edge on dark grey), and show
-reference | pick | amplified difference. The page shows before, pick and an
+reference | pick | amplified difference. The smooth-area tile is required
+where banding is reported but not gated, and every tile when the format
+changed or is uncalibrated. The page shows before, pick and an
 optional alternative, with a 100% toggle that scrolls panes together.
 
 A file whose pixels cannot be read gets its card but no tiles; build()
@@ -75,6 +77,12 @@ def _compose(ref: Image.Image, new: Image.Image, box, scale: int) -> Image.Image
     return canvas
 
 
+def every_tile_required(record: dict) -> bool:
+    """Every tile of a lossy pick is required viewing when its metrics are uncalibrated for the output
+    format (WebP, AVIF) or the format changed: the spec makes the sheet review mandatory for a convert."""
+    return bool(record["uncalibrated"]) or record["format"] != record["source"]["format"]
+
+
 def needs_tiles(record: dict) -> bool:
     """A lossy pick that will be applied is the only thing a human must approve, so the only thing tiled."""
     chosen = pick_of(record)
@@ -104,7 +112,7 @@ def _tiles_for(folder: Path, record: dict, tiles_dir: Path) -> list[Tile]:
             box = _best_window(score, w, h)
             path = tiles_dir / f"{name}__{window}{suffix}.png"
             _compose(ref, new, box, scale).save(path)
-            required = record["uncalibrated"] or (window == "smooth" and not chosen.get("band_gated"))
+            required = every_tile_required(record) or (window == "smooth" and not chosen.get("band_gated"))
             out.append(Tile(path, record["source"]["path"], window + suffix, bool(required)))
     return out
 
