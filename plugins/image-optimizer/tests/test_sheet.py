@@ -8,6 +8,7 @@ from PIL import Image
 
 from imgopt_lib import sheet as S
 from imgopt_lib import tools as T
+from imgopt_lib.ladder import UsageError
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
 
@@ -143,3 +144,96 @@ def test_sheet_cli_browser_flag_takes_a_screenshot(tmp_path, factory):
     proc = run_sheet(fake_out(tmp_path, factory), "--browser")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Screenshot at 2x" in proc.stdout and "tools: " in proc.stdout and "chrome" in proc.stdout
+
+
+def window_flags(tiles):
+    return {(t.window, t.required) for t in tiles}
+
+
+@pytest.mark.parametrize("kwargs, expected", [
+    (dict(size=(900, 600)), {("smooth", True), ("overall", False)}),
+    (dict(size=(160, 120)), {("smooth", True), ("smooth@2x", True), ("overall", False), ("overall@2x", False)}),
+    (dict(size=(900, 600), band_gated=True), {("smooth", False), ("overall", False)}),
+    (dict(size=(500, 500), alpha=True), {("smooth", True), ("overall", False), ("edge", False)}),
+    (dict(size=(500, 500), alpha=True, uncalibrated=True), {("smooth", True), ("overall", True), ("edge", True)}),
+    (dict(size=(120, 120), alpha=True, uncalibrated=True),
+     {(w + s, True) for w in ("smooth", "overall", "edge") for s in ("", "@2x")}),
+], ids=["large", "small-2x", "gated", "alpha-edge-optional", "uncalibrated-large", "uncalibrated-small"])
+def test_which_tiles_are_required(tmp_path, factory, kwargs, expected):
+    tiles, _ = S.build(fake_out(tmp_path, factory, **kwargs))
+    assert window_flags(tiles) == expected
+
+
+def test_the_2x_rule_follows_the_displayed_width_not_the_source_width(tmp_path, factory):
+    out = fake_out(tmp_path, factory, size=(300, 200))
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    record["source"]["width"] = 2400  # a 2400 px source resized to 300
+    path.write_text(json.dumps(record))
+    tiles, _ = S.build(out)
+    assert {"smooth@2x", "overall@2x"} <= {t.window for t in tiles}
+    out = fake_out(tmp_path / "up", factory, size=(900, 600))
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    record["source"]["width"] = 300  # a small source scaled up to 900
+    path.write_text(json.dumps(record))
+    tiles, _ = S.build(out)
+    assert not any(t.window.endswith("@2x") for t in tiles)
+
+
+def test_a_mistyped_or_empty_out_is_refused_before_anything_is_written(tmp_path):
+    missing = tmp_path / "nope"
+    proc = run_sheet(missing)
+    assert proc.returncode == 2 and str(missing) in proc.stdout + proc.stderr
+    assert not missing.exists()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    proc = run_sheet(empty)
+    assert proc.returncode == 2 and str(empty) in proc.stdout + proc.stderr
+    assert not (empty / "_sheet").exists()
+    assert "Next:" not in proc.stdout
+    with pytest.raises(UsageError, match="nope"):
+        S.build(missing)
+
+
+def test_a_missing_source_copy_is_a_problem(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    (out / "photo--x" / "source.jpg").unlink()
+    problems: list[str] = []
+    S.build(out, problems=problems)
+    assert len(problems) == 1 and "photo--x" in problems[0] and "source" in problems[0]
+
+
+def test_an_alt_label_that_matches_nothing_is_a_problem(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    problems: list[str] = []
+    _, page = S.build(out, alt="pngquant-c8", problems=problems)
+    assert problems == [] and "Alternative: pngquant-c8" in page.read_text()
+    S.build(out, alt="jpegoptim-m70", problems=problems)
+    assert len(problems) == 1 and "jpegoptim-m70" in problems[0]
+    proc = run_sheet(out, "--alt", "jpegoptim-m70")
+    assert proc.returncode == 1 and "jpegoptim-m70" in proc.stderr
+    assert "Next:" not in proc.stdout
+
+
+def test_cli_counts_lossy_picks_it_could_not_tile_and_withholds_the_apply_line(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    (out / "photo--x" / "pick.png").write_bytes(b"not an image")
+    proc = run_sheet(out)
+    assert proc.returncode == 1
+    assert "No lossy picks" not in proc.stdout
+    assert "1 lossy pick(s) could not be tiled" in proc.stdout
+    assert "Next:" not in proc.stdout
+    assert "photo--x" in proc.stderr
+
+
+def test_cli_with_only_lossless_picks_points_at_apply_without_approval(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    record["candidates"][0]["kind"] = "lossless"
+    path.write_text(json.dumps(record))
+    proc = run_sheet(out)
+    assert proc.returncode == 0
+    assert "No lossy picks" in proc.stdout
+    assert "apply" in proc.stdout.splitlines()[-1] and "--approved" not in proc.stdout.splitlines()[-1]

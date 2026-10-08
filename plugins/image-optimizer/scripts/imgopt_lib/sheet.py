@@ -16,14 +16,15 @@ from __future__ import annotations
 import json
 import math
 import subprocess
-from urllib.parse import quote
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from .candidates import kb, load_records, pick_of
 from .imaging import READ_FAILURES, display_pixels, flatten
+from .ladder import UsageError
 from .metrics import diff_max, smooth_mask
 
 TILE = 320
@@ -74,6 +75,12 @@ def _compose(ref: Image.Image, new: Image.Image, box, scale: int) -> Image.Image
     return canvas
 
 
+def needs_tiles(record: dict) -> bool:
+    """A lossy pick that will be applied is the only thing a human must approve, so the only thing tiled."""
+    chosen = pick_of(record)
+    return bool(chosen) and chosen["kind"] == "lossy" and record["verdict"] == "apply"
+
+
 def _tiles_for(folder: Path, record: dict, tiles_dir: Path) -> list[Tile]:
     chosen = pick_of(record)
     ref_rgba = Image.open(folder / "reference.png").convert("RGBA")
@@ -89,7 +96,7 @@ def _tiles_for(folder: Path, record: dict, tiles_dir: Path) -> list[Tile]:
     name = folder.name
     out: list[Tile] = []
     sizes = [("", TILE, 1)]
-    if record["source"].get("width") and record["source"]["width"] <= SMALL_IMAGE:
+    if ref_rgba.width <= SMALL_IMAGE:  # the displayed width, after any --resize
         sizes.append(("@2x", SMALL_TILE, 2))
     for window, (score, ref, new) in windows.items():
         for suffix, side, scale in sizes:
@@ -180,8 +187,16 @@ def _meta(record: dict, chosen: dict | None) -> str:
 
 def build(out: Path, *, alt: str | None = None,
           problems: list[str] | None = None) -> tuple[list[Tile], Path]:
-    """Write the tiles and the page under out/_sheet. Per-file read failures are appended to ``problems``."""
+    """Write the tiles and the page under out/_sheet.
+
+    Refuses (UsageError) an ``out`` that is not a folder of `candidates` results, before writing anything.
+    Per-file failures, and an ``alt`` label no record has, are appended to ``problems``.
+    """
     out = Path(out)
+    records = load_records(out) if out.is_dir() else []
+    if not records:
+        raise UsageError(f"{out}: no candidates results here (expected <folder>/metrics.json from "
+                         "`imgopt candidates --out`); check the path")
     sheet_dir = out / "_sheet"
     tiles_dir = sheet_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
@@ -189,16 +204,21 @@ def build(out: Path, *, alt: str | None = None,
     files = []
     before = after = 0
     banners: list[str] = []
-    for folder, record in load_records(out):
+    alt_found = False
+    for folder, record in records:
         chosen = pick_of(record)
+
         def url(name: str) -> str:
             return quote(f"../{folder.name}/{name}")
 
         panes = [{"label": "Before", "src": url(p.name)} for p in sorted(folder.glob("source.*"))[:1]]
+        if not panes and problems is not None:
+            problems.append(f"{folder.name}: source copy is missing, so its card has no Before pane")
         if chosen:
             panes.append({"label": f"Pick: {chosen['label']}", "src": url(chosen["file"])})
         alt_rec = next((c for c in record["candidates"] if c["label"] == alt and c.get("file")), None) if alt else None
         if alt_rec:
+            alt_found = True
             panes.append({"label": f"Alternative: {alt}", "src": url(alt_rec["file"])})
         saved = record["source"]["size"] - chosen["size"] if chosen and record["verdict"] == "apply" else 0
         if record["verdict"] == "apply" and chosen:
@@ -212,12 +232,14 @@ def build(out: Path, *, alt: str | None = None,
                            "judge every file by eye.")
         if record.get("waived"):
             banners.append("Waived tools (fewer candidates were tried): " + ", ".join(record["waived"]))
-        if chosen and chosen["kind"] == "lossy" and record["verdict"] == "apply":
+        if needs_tiles(record):
             try:
                 tiles += _tiles_for(folder, record, tiles_dir)
             except READ_FAILURES as error:
                 if problems is not None:
                     problems.append(f"{folder.name}: no tiles: {error}")
+    if alt and not alt_found and problems is not None:
+        problems.append(f"--alt {alt!r} matches no candidate in any record")
     totals = (f"{len(files)} file(s); apply {kb(before)} -> {kb(after)}"
               + (f" (-{(before - after) / before:.0%})" if before else ""))
     data = {"files": files, "totals": totals, "banners": sorted(set(banners))}

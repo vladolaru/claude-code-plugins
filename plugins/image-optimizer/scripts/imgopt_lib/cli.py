@@ -76,16 +76,22 @@ def cmd_sheet(args) -> int:
     chk = T.check(T.Requirements(("pillow", "chrome") if args.browser else ("pillow",), (), ()))
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="sheet", profile="-"))
+    out = Path(args.out).resolve()
     problems: list[str] = []
-    tiles, page = S.build(Path(args.out).resolve(), alt=args.alt, problems=problems)
+    tiles, page = S.build(out, alt=args.alt, problems=problems)
+    records = [r for _, r in C.load_records(out)]
+    lossy = [r for r in records if S.needs_tiles(r)]
+    untiled = len(lossy) - len({t.source for t in tiles})
     if tiles:
         print("Tiles (open each at its natural size; view every REQUIRED one before calling a pick good):")
         for t in tiles:
             print(f"  {'REQUIRED' if t.required else 'optional':8} {t.path}   {Path(t.source).name} [{t.window}]")
-    else:
+    if untiled:
+        print(f"{untiled} lossy pick(s) could not be tiled (reasons on stderr); do not approve them unseen.")
+    elif not lossy:
         print("No lossy picks: no tiles to view.")
     for problem in problems:
-        print(f"  skipped: {problem}", file=sys.stderr)
+        print(f"  problem: {problem}", file=sys.stderr)
     print(f"Page for the human: {page}   (macOS: open '{page}'; Linux: xdg-open '{page}')")
     failed = bool(problems)
     if args.browser:
@@ -95,7 +101,10 @@ def cmd_sheet(args) -> int:
             print(f"error: {error}", file=sys.stderr)
             failed = True
     print(T.describe(chk.tools))
-    print(f"Next: after the human approves on the page, python3 {SCRIPT} apply {Path(args.out).resolve()} --approved")
+    if not failed and lossy:
+        print(f"Next: after the human approves on the page, python3 {SCRIPT} apply {out} --approved")
+    elif not failed and any(r["verdict"] == "apply" for r in records):
+        print(f"Next: python3 {SCRIPT} apply {out}   (all picks are lossless; no approval gate)")
     return 1 if failed else 0
 
 
