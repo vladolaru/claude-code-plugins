@@ -134,7 +134,7 @@ def test_screenshot_failure_does_not_leave_a_stale_png(tmp_path):
     page = tmp_path / "index.html"
     page.write_text("<html></html>")
     (tmp_path / "page@2x.png").write_bytes(b"stale")
-    with pytest.raises(RuntimeError, match="screenshot"):
+    with pytest.raises(RuntimeError, match="screenshot.*drop --browser"):
         S.screenshot(page, "/usr/bin/false")
 
 

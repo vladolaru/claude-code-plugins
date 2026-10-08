@@ -268,5 +268,8 @@ def screenshot(page: Path, chrome: str) -> Path:
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"Chrome screenshot failed ({error.__class__.__name__}: {error})") from error
     if not png.is_file():
-        raise RuntimeError(f"Chrome produced no screenshot (exit {proc.returncode}): {proc.stderr.strip()[-300:]}")
+        # Under the Codex sandbox (macOS seatbelt, 2026-10-08) Chrome aborts at start: exit -6, no stderr.
+        raise RuntimeError(f"Chrome produced no screenshot (exit {proc.returncode}): {proc.stderr.strip()[-300:]}"
+                           " (inside a sandbox such as Codex's Chrome cannot start; the page itself is fine, "
+                           "drop --browser and open it instead)")
     return png
