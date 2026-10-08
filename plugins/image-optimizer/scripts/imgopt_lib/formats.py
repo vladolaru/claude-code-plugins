@@ -36,9 +36,11 @@ def expand_inputs(paths) -> list[Path]:
         else:
             raise ValueError(f"{p}: does not exist")
     out: list[Path] = []
+    seen: set[Path] = set()
     for f in found:
         r = f.resolve()
-        if r not in out:
+        if r not in seen:
+            seen.add(r)
             out.append(r)
     return out
 

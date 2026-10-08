@@ -44,3 +44,10 @@ def test_subdir_name_is_one_relative_component_near_the_root(raw):
     assert not Path(name).is_absolute()
     assert "/" not in name
     assert name.startswith(("a__x.png--", "x.png--"))
+
+
+def test_expand_inputs_keeps_first_seen_order_without_duplicates(tmp_path):
+    for name in ("b.png", "a.png", "c.jpg"):
+        (tmp_path / name).write_bytes(b"x")
+    got = expand_inputs([tmp_path / "c.jpg", tmp_path, tmp_path / "b.png", tmp_path / "." / "c.jpg"])
+    assert [p.name for p in got] == ["c.jpg", "a.png", "b.png"]
