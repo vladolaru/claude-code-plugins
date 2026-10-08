@@ -1,4 +1,6 @@
 import json
+import math
+import re
 import shutil
 import subprocess
 import sys
@@ -25,7 +27,7 @@ def staged_files(directory):
     return sorted(p.name for p in Path(directory).glob(".imgopt-*"))
 
 
-def _lossy_record(out, factory, *, name="photo.jpg", folder_name="f--1", scores=None, quality=60):
+def _lossy_record(out, factory, *, name="photo.jpg", folder_name="f--1", scores=None, quality=60, kind="lossy"):
     """A record whose pick is a real, smaller JPEG. ``scores`` are the numbers it claims; the default
     claims nothing a re-measure could match."""
     folder = out / folder_name
@@ -39,7 +41,7 @@ def _lossy_record(out, factory, *, name="photo.jpg", folder_name="f--1", scores=
                                       "format": "jpeg"},
               "format": "jpeg", "target": str(src), "uncalibrated": False, "waived": [], "notes": [],
               "profile": "high", "resize": None,
-              "candidates": [{"label": "jpegoptim-m60", "file": "pick.jpg", "kind": "lossy",
+              "candidates": [{"label": "jpegoptim-m60", "file": "pick.jpg", "kind": kind,
                               "size": (folder / "pick.jpg").stat().st_size, **claimed, "pass": True}],
               "pick": "pick.jpg", "verdict": "apply", "verdict_reason": "x"}
     (folder / "metrics.json").write_text(json.dumps(record))
@@ -80,9 +82,11 @@ def test_refuses_when_the_source_changed_since_candidates(factory, tmp_path):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory)
     src.write_bytes(src.read_bytes() + b"\0")
+    changed = src.read_bytes()
     logs = []
     assert AP.apply(out, tools={}, approved=True, log=logs.append) == 1
     assert "changed since candidates ran" in "\n".join(logs)
+    assert src.read_bytes() == changed
 
 
 def test_untouched_files_are_skipped(factory, tmp_path):
@@ -153,7 +157,7 @@ def test_a_failed_verification_does_not_replace_the_target(factory, tmp_path, mo
 
 
 @pytest.mark.parametrize("failure", [metrics.MetricError("ffmpeg died"), imaging.ImagingError("unreadable"),
-                                     OSError("disk")])
+                                     OSError("disk"), ValueError("pillow"), UsageError("no such plan")])
 def test_a_verification_failure_is_that_files_mismatch_and_the_run_continues(factory, tmp_path, monkeypatch,
                                                                              failure):
     out = tmp_path / "out"
@@ -183,9 +187,9 @@ def test_a_bad_out_is_a_usage_error_naming_the_path(tmp_path, make):
     (tmp_path / "file").write_text("x")
     (tmp_path / "empty").mkdir()
     bad = make(tmp_path)
-    with pytest.raises(UsageError, match=str(bad)):
+    with pytest.raises(UsageError, match=re.escape(str(bad))):
         AP.apply(bad, tools={}, log=lambda _: None)
-    with pytest.raises(UsageError, match=str(bad)):
+    with pytest.raises(UsageError, match=re.escape(str(bad))):
         AP.needs_metrics(bad)
     assert not (tmp_path / "missing").exists()
 
@@ -238,6 +242,120 @@ def test_metadata_is_checked_only_for_picks_made_from_the_source(factory, device
     assert AP._took_source(record, chosen, facts)
     assert not AP._took_source({**record, "profile": "high"}, chosen, facts)  # baked to sRGB by design
     assert AP._took_source(record, {"label": "not-a-rung"}, facts)  # unknown: check it
+
+
+def _claim(folder, **scores):
+    record = json.loads((folder / "metrics.json").read_text())
+    record["candidates"][0].update(scores)
+    (folder / "metrics.json").write_text(json.dumps(record))
+
+
+def _drop_key(folder, key):
+    record = json.loads((folder / "metrics.json").read_text())
+    del record["candidates"][0][key]
+    (folder / "metrics.json").write_text(json.dumps(record))
+
+
+def _scores(monkeypatch, **delta):
+    base = {"ssim": 0.9, "ssim_white": 0.9, "ss2": 50.0, "band": 1.0, "butteraugli": None}
+    monkeypatch.setattr(AP.metrics, "measure", lambda *a, **k: metrics.Scores(**{**base, **delta}))
+
+
+@pytest.mark.parametrize("break_record", [
+    pytest.param(lambda f: _claim(f, band=None), id="recorded-none"),
+    pytest.param(lambda f: _drop_key(f, "band"), id="missing-key"),
+    pytest.param(lambda f: _claim(f, band=math.nan), id="recorded-nan"),
+])
+def test_unusable_recorded_scores_fail_closed_before_anything_is_replaced(factory, tmp_path, monkeypatch,
+                                                                         break_record):
+    out = tmp_path / "out"
+    src, folder = _lossy_record(out, factory, scores={"ssim": 0.9, "ss2": 50.0, "band": 1.0})
+    break_record(folder)
+    _scores(monkeypatch)
+    before, mtime = src.read_bytes(), src.stat().st_mtime_ns
+    logs = []
+    assert AP.apply(out, tools={}, approved=True, log=logs.append) == 1
+    assert "MISMATCH" in "\n".join(logs) and "band" in "\n".join(logs)
+    assert src.read_bytes() == before and src.stat().st_mtime_ns == mtime
+    assert staged_files(src.parent) == []
+
+
+@pytest.mark.parametrize("remeasured", [{"band": None}, {"band": math.nan}])
+def test_unusable_remeasured_scores_fail_closed(factory, tmp_path, monkeypatch, remeasured):
+    out = tmp_path / "out"
+    src, _ = _lossy_record(out, factory, scores={"ssim": 0.9, "ss2": 50.0, "band": 1.0})
+    _scores(monkeypatch, **remeasured)
+    before = src.read_bytes()
+    logs = []
+    assert AP.apply(out, tools={}, approved=True, log=logs.append) == 1
+    assert "MISMATCH" in "\n".join(logs)
+    assert src.read_bytes() == before
+
+
+@pytest.mark.parametrize("key,tol", [("ssim", 1e-6), ("ss2", 1e-3), ("band", 1e-6)])
+def test_the_tolerance_boundary(factory, tmp_path, monkeypatch, key, tol):
+    recorded = {"ssim": 0.9, "ss2": 50.0, "band": 1.0}
+    for shift, expected in ((0.9 * tol, 0), (1.1 * tol, 1)):
+        out = tmp_path / f"out-{expected}"
+        src, folder = _lossy_record(out, factory, scores=recorded)
+        _scores(monkeypatch, **{key: recorded[key] + shift})
+        assert AP.apply(out, tools={}, approved=True, log=lambda _: None) == expected
+        wrote = src.read_bytes() == (folder / "pick.jpg").read_bytes()
+        assert wrote == (expected == 0)
+
+
+def test_a_user_file_named_like_the_old_staging_name_survives(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    src, folder = _lossy_record(out, factory)
+    bystander = src.with_name(f".imgopt-{src.name}")
+    bystander.write_bytes(b"mine")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    assert AP.apply(out, tools={}, approved=True, log=lambda _: None) == 0
+    assert bystander.read_bytes() == b"mine"
+    assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
+    assert [p.name for p in src.parent.glob(".imgopt-*")] == [bystander.name]
+
+
+def test_a_staged_file_keeps_the_targets_permissions(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    src, _ = _lossy_record(out, factory)
+    src.chmod(0o640)
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    assert AP.apply(out, tools={}, approved=True, log=lambda _: None) == 0
+    assert src.stat().st_mode & 0o777 == 0o640
+
+
+def _subfactory(factory, name):
+    return type(factory)(factory.root / name)
+
+
+def test_dest_refuses_two_records_that_share_a_basename_before_writing(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    first, _ = _lossy_record(out, factory, name="photo.jpg", folder_name="a--1")
+    other = _subfactory(factory, "sub")
+    second, _ = _lossy_record(out, other, name="photo.jpg", folder_name="b--1")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    dest = tmp_path / "dest"
+    with pytest.raises(UsageError, match="photo.jpg"):
+        AP.apply(out, tools={}, approved=True, dest=dest, log=lambda _: None)
+    assert not dest.exists()
+
+
+def test_a_mixed_selection_without_approval_writes_nothing(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    plain, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1", kind="lossless")
+    lossy, _ = _lossy_record(out, factory, name="b.jpg", folder_name="b--1")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    before = plain.read_bytes(), lossy.read_bytes()
+    assert AP.apply(out, tools={}, log=lambda _: None) == 1
+    assert (plain.read_bytes(), lossy.read_bytes()) == before
+
+
+def test_metadata_is_not_checked_for_a_lossy_kind_rung_even_from_the_source(factory):
+    facts = imaging.read_facts(factory.photo())
+    record = {"format": "jpeg", "profile": "high", "resize": None}
+    assert AP._took_source(record, {"label": "lossless-jpegoptim"}, facts)
+    assert not AP._took_source(record, {"label": "jpegoptim-m60"}, facts)
 
 
 def run_cli(*args):

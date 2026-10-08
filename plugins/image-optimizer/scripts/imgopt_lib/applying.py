@@ -67,12 +67,13 @@ def _took_source(record: dict, chosen: dict, facts) -> bool:
     """Whether the pick was made from the source file itself, which is what the metadata check covers.
 
     Pixel-input rungs bake orientation and convert device profiles by design, so only the plan
-    (the one place that knows each rung's input) can say; a rung it cannot find is checked.
+    (the one place that knows each rung's input) can say; a rung it cannot find is checked. The test
+    is `candidates._judge`'s: a lossless-kind rung whose input is the source.
     """
     plan = ladder.plan(facts, profile=record.get("profile", "lossless"), out_format=record["format"],
                        resize=record.get("resize"))
     rung = next((r for r in plan.rungs if r.label == chosen["label"]), None)
-    return rung is None or rung.input == "source"
+    return rung is None or (rung.kind == "lossless" and rung.input == "source")
 
 
 def _verify(folder: Path, record: dict, chosen: dict, written: Path, tools: dict) -> str:
@@ -95,17 +96,27 @@ def _verify(folder: Path, record: dict, chosen: dict, written: Path, tools: dict
         return "" if same else "pixels differ from the reference"
     with tempfile.TemporaryDirectory(dir=folder) as tmp:
         s = metrics.measure(ref, display_pixels(written), tools, Path(tmp))
-    return "; ".join(f"{k} recorded {chosen[k]} now {getattr(s, k)}" for k, tol in TOLERANCE.items()
-                     if abs(getattr(s, k) - chosen[k]) > tol)
+    drifts = (_drift(k, tol, chosen.get(k), getattr(s, k)) for k, tol in TOLERANCE.items())
+    return "; ".join(d for d in drifts if d)
+
+
+def _drift(key: str, tol: float, recorded, now) -> str:
+    """Why ``now`` is not the recorded score, or empty. A score that is absent or not a number never passes."""
+    for label, value in (("recorded", recorded), ("re-measured", now)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{key} not {label}"
+    return "" if abs(now - recorded) <= tol else f"{key} recorded {recorded} now {now}"
 
 
 def _write(folder: Path, record: dict, chosen: dict, target: Path, tools: dict) -> str:
     """Stage the pick beside ``target``, verify it there, and move it over the target only if it passed."""
-    staged = target.with_name(f".imgopt-{target.name}")  # hidden, and keeps the extension for the decoders
+    # Hidden, unique (never a user's file, safe beside a concurrent run), and keeps the extension for the decoders.
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=".imgopt-", suffix=target.suffix)
+    os.close(fd)
+    staged = Path(name)
     try:
         shutil.copyfile(folder / chosen["file"], staged)
-        if target.exists():
-            shutil.copymode(target, staged)
+        shutil.copymode(target if target.exists() else folder / chosen["file"], staged)
         problem = _verify(folder, record, chosen, staged, tools)
         if not problem:
             os.replace(staged, target)
@@ -123,6 +134,12 @@ def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path
         if not unmatched:
             log("Nothing to apply.")
         return 1 if unmatched else 0
+    if dest:
+        clashes = sorted({n for n in (Path(r["target"]).name for _, r in rows)
+                          if sum(Path(r["target"]).name == n for _, r in rows) > 1})
+        if clashes:
+            raise UsageError(f"--dest {dest}: more than one result writes a file named {', '.join(clashes)}; "
+                             "apply them separately with --only")
     lossy = [r for _, r in rows if needs_tiles(r)]
     if lossy and not approved:
         log("REFUSED: these picks are lossy and need the human's approval on the comparison page first:")
@@ -147,7 +164,7 @@ def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             problem = _write(folder, record, chosen, target, tools)
-        except (metrics.MetricError, *READ_FAILURES) as error:
+        except (metrics.MetricError, ValueError, *READ_FAILURES) as error:  # ValueError: Pillow, ladder.plan
             problem = f"could not verify: {error}"
         if problem:
             failures += 1
