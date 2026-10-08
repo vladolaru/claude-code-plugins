@@ -1,7 +1,7 @@
 """`imgopt inspect`: facts and lossless headroom per file; changes nothing.
 
-A file whose colour profile cannot be converted does not stop the run: its
-row carries the facts already read plus an ``error`` reason and no lossless
+A file that cannot be read or whose colour profile cannot be converted does
+not stop the run: its row carries the facts already read plus an ``error`` reason and no lossless
 headroom, and the command exits 1 after printing every row.
 """
 
@@ -13,7 +13,7 @@ from pathlib import Path
 from . import ladder, metrics
 from .candidates import kb
 from .formats import format_of
-from .imaging import ImagingError, display_pixels, estimate_jpeg_quality, read_facts
+from .imaging import READ_FAILURES, display_pixels, estimate_jpeg_quality, read_facts
 
 
 def inspect_file(path: Path, tools: dict, workdir: Path) -> dict:
@@ -24,15 +24,16 @@ def inspect_file(path: Path, tools: dict, workdir: Path) -> dict:
            "error": None}
     if row["format"] == "svg":
         return row
-    f = read_facts(path)
-    row.update(width=f.width, height=f.height, mode=f.mode, colors=f.colors,
-               profile=f.icc_desc, orientation=f.orientation, progressive=f.progressive,
-               quality=estimate_jpeg_quality(path) if f.format == "jpeg" else None)
-    if f.format not in ("jpeg", "png"):
-        return row
     try:
+        f = read_facts(path)
+        row.update(width=f.width, height=f.height, mode=f.mode, colors=f.colors,
+                   profile=f.icc_desc, orientation=f.orientation, progressive=f.progressive)
+        if f.format == "jpeg":
+            row["quality"] = estimate_jpeg_quality(path)
+        if f.format not in ("jpeg", "png"):
+            return row
         reference = display_pixels(path)
-    except ImagingError as error:
+    except READ_FAILURES as error:
         row["error"] = str(error)
         return row
     best = None
@@ -47,7 +48,7 @@ def inspect_file(path: Path, tools: dict, workdir: Path) -> dict:
                 ok, _ = metrics.metadata_preserved(f, read_facts(out))
                 if not ok or display_pixels(out).tobytes() != reference.tobytes():
                     continue
-            except (ladder.EncodeError, ImagingError):
+            except (ladder.EncodeError, *READ_FAILURES):
                 continue
             size = out.stat().st_size
             best = size if best is None else min(best, size)

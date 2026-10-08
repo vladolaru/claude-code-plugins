@@ -64,6 +64,7 @@ def cmd_inspect(args) -> int:
         rows = [A.inspect_file(p, chk.tools, Path(tmp)) for p in files]
     if args.json:
         print(json.dumps(rows, indent=1))
+        print(T.describe(chk.tools), file=sys.stderr)  # stdout stays parseable
     else:
         A.print_table(rows)
         print(T.describe(chk.tools))
