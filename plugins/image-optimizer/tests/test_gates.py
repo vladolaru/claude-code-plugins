@@ -157,9 +157,9 @@ def test_a_job_that_rewrites_the_source_says_it_replaces_the_original():
 
 @pytest.mark.parametrize("reviewer, passes", [(0.979999, False), (0.98, True), (None, True)])
 def test_the_reviewer_ssim_is_held_to_the_ssim_floor_when_measured(reviewer, passes):
-    ok, why = G.evaluate(rec(ssim=0.9801, ssim_reviewer=reviewer), G.PROFILES["high"])
+    ok, why = G.evaluate(rec(ssim=0.9801, ssim_evidence=reviewer), G.PROFILES["high"])
     assert ok is passes
-    assert passes or why == "reviewer SSIM 0.979999 < 0.98"
+    assert passes or why == "Evidence SSIM 0.979999 < 0.98"
 
 
 def test_a_larger_pick_outside_an_in_place_job_says_so():

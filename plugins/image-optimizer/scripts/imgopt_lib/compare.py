@@ -3,7 +3,7 @@
 Inputs are local paths, `git:<rev>:<path>` (read with `git show` in the
 current repository), or http(s) URLs (for the files GitHub serves at pinned
 commits). The reviewer one-liner uses ffmpeg alone; `compare` runs that
-exact graph itself and reports its number as `ssim_reviewer`, which is what
+exact graph itself and reports its number as `ssim_evidence`, which is what
 the evidence quotes, because ffmpeg's JPEG decoder differs from Pillow's by
 up to about 1e-3 (9.8e-4 on real JPEGs, 2026-10-08; enough to flip a 0.98
 floor; `candidates` therefore runs the same check, ``reviewer_check()``, on
@@ -137,10 +137,10 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
         result.update(ssim=s.ssim, ssim_white=s.ssim_white, ss2=s.ss2, band=s.band, butteraugli=s.butteraugli)
     result["reproducible"] = not reasons
     result["reason"] = "; ".join(reasons)
-    result["command"] = result["ssim_reviewer"] = None
+    result["command"] = result["ssim_evidence"] = None
     if not reasons:
         try:
-            result["ssim_reviewer"], graph = reviewer_check(tools["ffmpeg"].path, ref, new, ri, ni)
+            result["ssim_evidence"], graph = reviewer_check(tools["ffmpeg"].path, ref, new, ri, ni)
             result["command"] = reviewer_command(graph)
         except metrics.MetricError as error:  # ffmpeg cannot decode an input Pillow reads (AVIF, JXL)
             result["reproducible"] = False
@@ -155,7 +155,7 @@ def print_result(r: dict, log=print) -> None:
     log(f"gate SSIM {r['ssim']:.4f} (white {r['ssim_white']:.4f})  ssimulacra2 {r['ss2']:.1f}  "
         f"banding {r['band']:.1f} (reported){ba}")
     if r["reproducible"]:
-        log(f"Evidence SSIM: {r['ssim_reviewer']:.6f}  (what the reviewer check prints; quote this one)")
+        log(f"Evidence SSIM: {r['ssim_evidence']:.6f}  (what the reviewer check prints; quote this one)")
         log("Reviewer check (replace REF and NEW with the two files, quoted if the paths contain spaces):")
         log(f"  {r['command']}")
     else:

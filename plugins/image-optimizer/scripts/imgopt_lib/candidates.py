@@ -190,40 +190,40 @@ def _svg_rung(rung, key, inputs, folder, src, tools) -> dict:
 
 def _reviewer_check(rec: dict, ref_path: Path, ref_facts, folder: Path, tools: dict) -> None:
     """Record the SSIM a reviewer's ffmpeg one-liner (`compare`) prints for this candidate as
-    ``ssim_reviewer``, or None with ``reviewer_note`` saying why ffmpeg alone cannot reproduce it.
-    A failed ffmpeg run is also marked ``reviewer_failed``, so the next run checks again (see _reuse)."""
+    ``ssim_evidence``, or None with ``evidence_note`` saying why ffmpeg alone cannot reproduce it.
+    A failed ffmpeg run is also marked ``evidence_failed``, so the next run checks again (see _reuse)."""
     new = folder / rec["file"]
     ri, ni = display_pixels(ref_path), display_pixels(new)
     obstacles = CP.reviewer_obstacles(ref_facts, read_facts(new), ri.size, ni.size)
-    rec["ssim_reviewer"] = None
+    rec["ssim_evidence"] = None
     if obstacles:
-        rec["reviewer_note"] = "; ".join(obstacles)
+        rec["evidence_note"] = "; ".join(obstacles)
         return
     try:
-        rec["ssim_reviewer"], _ = CP.reviewer_check(tools["ffmpeg"].path, ref_path, new, ri, ni)
+        rec["ssim_evidence"], _ = CP.reviewer_check(tools["ffmpeg"].path, ref_path, new, ri, ni)
     except metrics.MetricError as error:
-        rec["reviewer_note"] = f"ffmpeg could not read the pair ({error})"
-        rec["reviewer_failed"] = True
+        rec["evidence_note"] = f"ffmpeg could not read the pair ({error})"
+        rec["evidence_failed"] = True
 
 
 def _reuse(old: dict) -> dict:
     """A cached candidate as recorded, except a reviewer check whose ffmpeg run failed, which is redone."""
     rec = dict(old)
-    if rec.pop("reviewer_failed", False):
-        rec.pop("ssim_reviewer", None)
-        rec.pop("reviewer_note", None)
+    if rec.pop("evidence_failed", False):
+        rec.pop("ssim_evidence", None)
+        rec.pop("evidence_note", None)
     return rec
 
 
 def _pick(cands: list[dict], gates: G.Gates, check) -> dict | None:
-    """The smallest passing candidate whose reviewer SSIM also clears the SSIM floor.
+    """The smallest passing candidate whose Evidence SSIM also clears the SSIM floor.
 
     ffmpeg decodes JPEG differently from Pillow (up to about 1e-3), so a pick at a gate SSIM of 0.9801
     could show a reviewer 0.979. Only picks are checked, one ffmpeg run each: a pick that fails is marked
-    failed and the next one is tried. A cached candidate keeps its ``ssim_reviewer``, already gated.
+    failed and the next one is tried. A cached candidate keeps its ``ssim_evidence``, already gated.
     """
     while (chosen := G.pick(cands)) is not None:
-        if gates.ssim is None or chosen.get("identical") or "ssim_reviewer" in chosen:
+        if gates.ssim is None or chosen.get("identical") or "ssim_evidence" in chosen:
             return chosen
         check(chosen)
         chosen["pass"], chosen["reason"] = G.evaluate(chosen, gates)
@@ -373,10 +373,10 @@ def print_record(record: dict, log=print) -> None:
     chosen = pick_of(record)
     pick_text = f"{chosen['label']} ({kb(chosen['size'])})" if chosen else "none"
     log(f"   pick: {pick_text}   verdict: {record['verdict']} ({record['verdict_reason']})")
-    if chosen and "ssim_reviewer" in chosen:
-        reviewer = (f"{chosen['ssim_reviewer']:.6f}" if chosen["ssim_reviewer"] is not None
-                    else f"not reproducible with ffmpeg alone ({chosen['reviewer_note']})")
-        log(f"   reviewer SSIM: {reviewer}")
+    if chosen and "ssim_evidence" in chosen:
+        evidence = (f"{chosen['ssim_evidence']:.6f}" if chosen["ssim_evidence"] is not None
+                    else f"not reproducible with ffmpeg alone ({chosen['evidence_note']})")
+        log(f"   Evidence SSIM: {evidence}")
 
 
 def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=print) -> None:

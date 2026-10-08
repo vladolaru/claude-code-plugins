@@ -25,7 +25,7 @@ SSIM is ffmpeg's `ssim` on gray, computed on both images flattened onto white, a
 
 **Banding is gated only on palette PNG output.** That is the one case calibrated against a real failure: #69556, a 24-colour gradient cut to 16 colours, which passed both other metrics. Lossy photo encodes scored 4 to 14 without visible banding, and the WebP of the #69556 gradient header scored 6. A threshold for those formats needs its own calibration, so their score is reported, not gated, and the smooth-area crop is required viewing instead.
 
-**The SSIM a reviewer sees is held to the floor too.** The gate decodes with Pillow, while the reviewer one-liner `compare` prints runs ffmpeg, whose JPEG decoder differs by up to about 1e-3 (9.8e-4 on the #69539 photos). `candidates` therefore runs the reviewer check on each lossy pick. A pick that would show a reviewer a number below the floor gives way to the next passing candidate.
+**The Evidence SSIM is held to the floor too.** The Evidence SSIM is the number a PR reviewer gets from the ffmpeg one-liner `compare` prints. The gate decodes with Pillow, while that one-liner runs ffmpeg, whose JPEG decoder differs by up to about 1e-3 (9.8e-4 on the #69539 photos). `candidates` therefore runs the reviewer check on each lossy pick. A pick whose Evidence SSIM falls below the floor gives way to the next passing candidate.
 
 ## What counts as lossless
 

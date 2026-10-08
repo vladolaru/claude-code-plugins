@@ -450,8 +450,8 @@ def test_the_pick_records_the_ssim_a_reviewer_will_see(factory, toolset, tmp_pat
     [r] = C.run([factory.photo(quality=95).resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
     chosen = C.pick_of(r)
     assert chosen and chosen["kind"] == "lossy", r["verdict_reason"]
-    assert chosen["ssim_reviewer"] >= 0.98
-    assert abs(chosen["ssim_reviewer"] - chosen["ssim"]) < 2e-3  # the decoders differ by up to about 1e-3
+    assert chosen["ssim_evidence"] >= 0.98
+    assert abs(chosen["ssim_evidence"] - chosen["ssim"]) < 2e-3  # the decoders differ by up to about 1e-3
 
 
 def test_a_pick_the_reviewer_check_fails_gives_way_to_the_next(factory, toolset, tmp_path, monkeypatch):
@@ -466,10 +466,10 @@ def test_a_pick_the_reviewer_check_fails_gives_way_to_the_next(factory, toolset,
     src = factory.photo(quality=95).resolve()
     [r] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
     first = next(c for c in r["candidates"] if c.get("file") == calls[0])
-    assert not first["pass"] and first["reason"] == "reviewer SSIM 0.970000 < 0.98"
+    assert not first["pass"] and first["reason"] == "Evidence SSIM 0.970000 < 0.98"
     chosen = C.pick_of(r)
     assert chosen["file"] != calls[0] and chosen["size"] >= first["size"]
-    assert chosen.get("identical") or chosen["ssim_reviewer"] == 0.99
+    assert chosen.get("identical") or chosen["ssim_evidence"] == 0.99
 
     def no_more(*a):
         raise AssertionError("a cached pick is not re-checked")
@@ -484,7 +484,7 @@ def test_a_pick_ffmpeg_cannot_reproduce_says_why(factory, toolset, tmp_path):
                 log=quiet)
     chosen = C.pick_of(r)
     assert chosen and chosen["kind"] == "lossy", r["verdict_reason"]
-    assert chosen["ssim_reviewer"] is None and "EXIF orientation" in chosen["reviewer_note"]
+    assert chosen["ssim_evidence"] is None and "EXIF orientation" in chosen["evidence_note"]
 
 
 def test_the_summary_flags_picks_larger_than_their_original(tmp_path):
@@ -533,7 +533,7 @@ def test_an_mpo_phone_jpeg_gets_the_reviewer_check(factory, toolset, tmp_path):
     [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
     chosen = C.pick_of(r)
     assert chosen and chosen["kind"] == "lossy", r["verdict_reason"]
-    assert chosen["ssim_reviewer"] is not None, chosen.get("reviewer_note")
+    assert chosen["ssim_evidence"] is not None, chosen.get("evidence_note")
 
 
 def test_a_failed_ffmpeg_run_is_noted_and_checked_again_next_run(factory, toolset, tmp_path, monkeypatch):
@@ -547,12 +547,12 @@ def test_a_failed_ffmpeg_run_is_noted_and_checked_again_next_run(factory, toolse
     src = factory.photo(quality=95).resolve()
     [r] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
     chosen = C.pick_of(r)
-    assert chosen["ssim_reviewer"] is None and "ffmpeg timed out" in chosen["reviewer_note"]
+    assert chosen["ssim_evidence"] is None and "ffmpeg timed out" in chosen["evidence_note"]
     calls = []
     monkeypatch.setattr(CP, "reviewer_check", lambda *a: calls.append(1) or (0.99, "graph"))
     [again] = C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
-    assert calls and C.pick_of(again)["ssim_reviewer"] == 0.99
-    assert "reviewer_failed" not in C.pick_of(again)
+    assert calls and C.pick_of(again)["ssim_evidence"] == 0.99
+    assert "evidence_failed" not in C.pick_of(again)
 
 
 def test_no_pick_reason_names_why_the_closest_failed_and_skips_hints_for_tool_failures():

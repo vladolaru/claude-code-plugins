@@ -20,7 +20,7 @@ def test_identical_files(factory, toolset, tmp_path):
 
 @pytest.mark.parametrize("kind", ["alpha_png", "jpeg"])
 def test_reviewer_one_liner_prints_exactly_the_reported_number(factory, toolset, tmp_path, kind):
-    """The evidence quotes ssim_reviewer, so the shell one-liner must print it
+    """The evidence quotes ssim_evidence, so the shell one-liner must print it
     digit for digit. ffmpeg's default overlay composites in YUV and drifted
     5e-4 from Pillow; ffmpeg's JPEG decoder drifts up to ~1e-3 from Pillow's."""
     tools = toolset("compare")
@@ -36,8 +36,8 @@ def test_reviewer_one_liner_prints_exactly_the_reported_number(factory, toolset,
     assert r["reproducible"]
     cmd = r["command"].replace("REF", f"'{a}'").replace("NEW", f"'{b}'")
     out = subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
-    assert f"All:{r['ssim_reviewer']:.6f}" in out
-    assert abs(r["ssim_reviewer"] - r["ssim_white"]) <= 5e-4
+    assert f"All:{r['ssim_evidence']:.6f}" in out
+    assert abs(r["ssim_evidence"] - r["ssim_white"]) <= 5e-4
 
 
 def test_resized_or_profiled_pairs_are_marked_not_reproducible(factory, toolset, tmp_path):
@@ -46,7 +46,7 @@ def test_resized_or_profiled_pairs_are_marked_not_reproducible(factory, toolset,
     b = factory.photo(name="b.jpg", size=(80, 60))
     r = CP.compare(str(a), str(b), tools, tmp_path)
     assert not r["reproducible"] and "dimensions differ" in r["reason"]
-    assert r["command"] is None and r["ssim_reviewer"] is None
+    assert r["command"] is None and r["ssim_evidence"] is None
 
 
 def test_oriented_pair_is_marked_not_reproducible(factory, toolset, tmp_path):
@@ -168,7 +168,7 @@ def test_animations_are_compared_by_all_frames_and_not_reproducible(toolset, tmp
     other = _gif(tmp_path / "other.gif", (30, 30, 200))
     r = CP.compare(str(a), str(other), tools, tmp_path / "w")
     assert not r["identical"] and not r["reproducible"] and "animation" in r["reason"]
-    assert r["command"] is None and r["ssim_reviewer"] is None
+    assert r["command"] is None and r["ssim_evidence"] is None
     r = CP.compare(str(a), str(same), tools, tmp_path / "w")
     assert r["identical"] and not r["reproducible"] and "animation" in r["reason"]
 
@@ -183,7 +183,7 @@ def test_an_input_ffmpeg_cannot_decode_keeps_the_gate_numbers(factory, toolset, 
 
     monkeypatch.setattr(CP, "run_reviewer_graph", refuse)
     r = CP.compare(str(a), str(b), tools, tmp_path / "w")
-    assert not r["reproducible"] and r["ssim_reviewer"] is None and r["command"] is None
+    assert not r["reproducible"] and r["ssim_evidence"] is None and r["command"] is None
     assert "Invalid data" in r["reason"] and 0 < r["ssim"] < 1
 
 
@@ -198,7 +198,7 @@ def test_paths_with_spaces_reproduce_and_the_hint_says_to_quote(factory, toolset
     r = CP.compare(str(a), str(b), tools, tmp_path / "w")
     cmd = r["command"].replace("REF", f"'{a}'").replace("NEW", f"'{b}'")
     out = subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
-    assert f"All:{r['ssim_reviewer']:.6f}" in out
+    assert f"All:{r['ssim_evidence']:.6f}" in out
     lines = []
     CP.print_result(r, log=lines.append)
     assert any("quoted if the paths contain spaces" in line for line in lines)
@@ -227,4 +227,4 @@ def test_compare_measures_content_whatever_its_name(factory, toolset, tmp_path):
     a = factory.photo(name="a.jpg")
     misnamed = factory.photo(name="b.jpg", quality=60).rename(factory.root / "b.png")
     r = CP.compare(str(a), str(misnamed), tools, tmp_path)
-    assert not r["identical"] and r["reproducible"] and r["ssim_reviewer"] is not None
+    assert not r["identical"] and r["reproducible"] and r["ssim_evidence"] is not None
