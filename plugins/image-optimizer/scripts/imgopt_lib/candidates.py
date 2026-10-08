@@ -221,6 +221,20 @@ def _pick(cands: list[dict], gates: G.Gates, check) -> dict | None:
     return None
 
 
+def _no_pick_reason(cands: list[dict], opts: Options) -> str:
+    """Why nothing was picked, with the closest measured candidate so the human can judge the gap."""
+    why = "no candidate passed the gates"
+    measured = [c for c in cands if c.get("ssim") is not None and not c.get("error") and not c.get("discarded")]
+    if measured:
+        best = max(measured, key=lambda c: (c["ssim"], c["ss2"]))
+        why += f"; closest: {best['label']} at SSIM {best['ssim']:.4f}, ss2 {best['ss2']:.1f}"
+    if opts.resize and opts.profile == "high":
+        medium = G.PROFILES["medium"]
+        why += (f"; for a resize, --profile medium (SSIM {medium.ssim:g}, ss2 {medium.ss2:g}) is the usual "
+                "next step if the human accepts that floor")
+    return why
+
+
 def _process(src: Path, opts: Options, tools: dict) -> dict:
     folder = opts.out / subdir_name(src)
     ref_path = opts.ref or src
@@ -296,6 +310,8 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     size = src.stat().st_size
     verdict, why = G.verdict(size, chosen, in_place=target == src and not opts.resize,
                              replaces_source=target == src)
+    if chosen is None:
+        why = _no_pick_reason(cands, opts)
     record = {
         "schema": SCHEMA,
         "source": {"path": str(src), "sha256": src_hash, "size": size, **source_info},

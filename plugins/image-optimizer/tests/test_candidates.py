@@ -496,3 +496,12 @@ def test_the_summary_flags_picks_larger_than_their_original(tmp_path):
     C.summarize([record("a.png", 100, 120), record("b.png", 100, 80)], tmp_path, Path("imgopt.py"), {},
                 log=lines.append)
     assert any(line.startswith("LARGER: 1 pick(s)") and line.endswith("a.png") for line in lines), lines
+
+
+def test_a_resize_that_finds_no_pick_names_the_closest_and_suggests_medium(factory, toolset, tmp_path):
+    tools = toolset("prepare", "high", {"jpeg"})
+    src = factory.photo(size=(320, 240), quality=95).resolve()  # noisy: nothing passes once halved
+    [r] = C.run([src], opts(tmp_path / "out", "high", resize=160), tools, log=quiet)
+    assert r["pick"] is None
+    assert r["verdict_reason"].startswith("no candidate passed the gates; closest: ")
+    assert "SSIM 0." in r["verdict_reason"] and "--profile medium" in r["verdict_reason"]
