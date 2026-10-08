@@ -51,7 +51,7 @@ trust review before those hooks run.
 | [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools - domain reviewer agents, pipeline and cross-validation agents, shared skills, rich feedback loops |
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
-| [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
+| [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — measured per-file picks under quality profiles, banding checks and a 1:1 review, for PNG, JPEG, GIF, SVG, WebP, AVIF |
 | [**yoloing-safe**](plugins/yoloing-safe/README.md) | YOLO mode safety net - PreToolUse guardrails that block destructive commands and gate risky ones with host-aware behavior |
 | [**caffeinate-claude**](plugins/caffeinate-claude/README.md) | Mac sleep prevention - keeps your Mac awake during Claude Code and Codex sessions, multi-tab aware |
 
@@ -75,7 +75,7 @@ Systematic prompt optimization through a 5-phase workflow with human approval ga
 
 ### image-optimizer
 
-Lossless image compression using ImageOptim and svgo. Shows you the before/after size savings, asks for confirmation, then applies. One command: `/optimize-images path/to/images`.
+Measured image optimization: tries encoder settings per file, keeps the smallest that passes a quality profile (lossless by default), and shows a side-by-side review before anything changes. One command: `/optimize-images path/to/images`.
 
 **[Full documentation →](plugins/image-optimizer/README.md)** | [Changelog](plugins/image-optimizer/CHANGELOG.md)
 
@@ -107,7 +107,7 @@ vladolaru-claude-code-plugins/
 │   ├── pirategoat-tools/         # reviewer agents, shared skills, review commands
 │   ├── dex/                      # knowledge-capture commands, shared skill, tests
 │   ├── prompt-engineer/          # optimize-prompt command, shared skill, reference library
-│   ├── image-optimizer/          # optimize-images command and scripts
+│   ├── image-optimizer/          # optimize-images command, image-optimization skill, imgopt scripts, tests
 │   ├── yoloing-safe/            # PreToolUse safety hook, tests
 │   └── caffeinate-claude/       # macOS sleep prevention hooks
 ├── scripts/

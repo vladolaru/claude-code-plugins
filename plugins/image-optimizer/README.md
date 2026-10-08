@@ -1,42 +1,30 @@
 # image-optimizer
 
-Lossless image optimization for PNG, JPEG, GIF, and SVG files. Review the savings before applying — no surprises.
+Measured image optimization for PNG, JPEG, GIF and SVG, with WebP and AVIF output on request. Every candidate is measured against a quality profile, the smallest one that passes wins, and nothing that changes pixels is written before you approve it on a side-by-side page.
 
-## How It Works
+## How it works
 
 ```bash
-/optimize-images path/to/images
+/optimize-images path/to/images what they are used for
 ```
 
-1. Scans the directory for PNG, JPEG, GIF, SVG files
-2. Runs optimization (ImageOptim for raster, svgo for SVG)
-3. Shows before/after comparison per file
-4. Asks for confirmation before applying
-5. Applies changes only with your approval
+The command loads the `image-optimization` skill, which:
 
-```
-Found 15 images to optimize:
+1. checks the tools the job needs and asks you to install any that are missing;
+2. works out where each image is used and how large it is shown, and proposes a profile per group;
+3. runs `imgopt.py candidates`: a ladder of encoder settings per file, each measured with SSIM, ssimulacra2 and a banding score;
+4. builds 1:1 difference tiles and a comparison page with `imgopt.py sheet`;
+5. writes the picks with `imgopt.py apply` after your approval, and re-verifies every written file.
 
-Optimizing...
-  product-hero.png: 1.2 MB -> 856 KB (28% reduction)
-  logo.svg: 45 KB -> 12 KB (73% reduction)
-  screenshot-1.jpg: 890 KB -> 678 KB (24% reduction)
+## Profiles
 
-Total savings: 582 KB (31% reduction)
+| Profile | Gate | For |
+|---|---|---|
+| `lossless` (default) | identical pixels; colour profile and orientation kept | logos, icons, anything that must not change |
+| `high` | SSIM ≥ 0.98, ssimulacra2 ≥ 80, banding ≤ 3 | images a product or page shows |
+| `medium` | SSIM ≥ 0.96, ssimulacra2 ≥ 60, banding ≤ 3 | files kept only so old URLs keep working |
 
-Apply changes? [Y/n]
-```
-
-No quality loss. Just smaller files.
-
-## Typical Savings
-
-| Format | Tool | Reduction |
-|--------|------|-----------|
-| PNG | ImageOptim | 20-40% |
-| JPEG | ImageOptim | 5-15% |
-| GIF | ImageOptim | 10-30% |
-| SVG | svgo | 40-70% |
+The floors come from a WooCommerce asset session in October 2026 (SSIM floors set by a human reviewer, ssimulacra2 floors confirmed by eye). Banding is gated on palette PNG output; WebP and AVIF output is labelled uncalibrated.
 
 ## Installation
 
@@ -54,20 +42,19 @@ codex plugin marketplace add vladolaru/claude-code-plugins
 codex plugin add image-optimizer@vladolaru-claude-code-plugins
 ```
 
-Use `/optimize-images path/to/images` in Claude Code or
-`$image-optimizer:optimize-images path/to/images` in Codex.
+Use `/optimize-images ...` in Claude Code or `$image-optimizer:optimize-images ...` in Codex.
 
 ### Dependencies
 
-```bash
-# ImageOptim CLI (macOS)
-npm install -g imageoptim-cli
+`python3 plugins/image-optimizer/scripts/imgopt.py doctor --job recompress --profile high` lists what is missing and prints one install command. On macOS:
 
-# SVG optimization (all platforms)
+```bash
+python3 -m pip install --user pillow
+brew install mozjpeg jpegoptim oxipng pngquant guetzli gifsicle librsvg ffmpeg jpeg-xl webp libavif
 npm install -g svgo
 ```
 
-At least one tool is required. Both for complete format support.
+ImageOptim.app, if installed, supplies native builds of jpegoptim, the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle. A libjpeg-turbo `jpegtran` or `cjpeg` is never used. Linux package names are best effort and unverified.
 
 ## License
 

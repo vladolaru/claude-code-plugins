@@ -7,14 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] - Unreleased
 
+### Changed
+
+- `/optimize-images` now follows the new `image-optimization` skill: it measures every candidate against a quality profile (`lossless` by default, `high` or `medium` on request) and picks per file instead of running one lossless pass.
+- Encoders are called directly (mozjpeg, oxipng, pngquant, guetzli, gifsicle, svgo) instead of through the x86-only `imageoptim` CLI, and work stops until missing tools are installed or explicitly waived.
+
 ### Added
 
-- `imgopt.py doctor` checks every tool a job needs, names what each missing one adds, and prints one install command.
-- `imgopt.py candidates` tries a ladder of encoder settings per file, measures each against a quality profile (`lossless` by default, `high`, `medium`), and picks the smallest that passes.
-- `imgopt.py inspect` reports each file's format, dimensions, colours, profile, orientation, estimated JPEG quality and lossless headroom without changing anything.
-- `imgopt.py sheet` cuts 1:1 difference tiles for the agent to view (never wider than about 1000 px) and builds a local comparison page with before, pick and an optional alternative.
-- `imgopt.py apply` writes the picks, refuses lossy ones without `--approved`, refuses files that changed since `candidates`, and re-measures every pick before it replaces the original, which stays untouched on a mismatch.
-- `imgopt.py compare` measures any two images (paths, `git:<rev>:<path>`, or URLs) and prints an ffmpeg command a reviewer can run, or says when only a local check can reproduce the numbers.
+- Resizing to a target width, PNG-to-JPEG, and WebP or AVIF output (labelled uncalibrated) under the same quality gates.
+- `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles and a comparison page, verified writes, and a reviewer-runnable SSIM check.
+
+### Fixed
+
+- The bundled svgo config no longer warns under svgo 4.
+
+### Removed
+
+- `scripts/optimize-images.sh` and the `imageoptim-cli` dependency.
 
 ## [1.2.0] - 2026-07-23
 

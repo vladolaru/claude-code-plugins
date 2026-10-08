@@ -1,7 +1,7 @@
 {
   "name": "image-optimizer",
   "version": "2.0.0",
-  "description": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
+  "description": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF): per-file candidates under quality profiles, banding checks, a 1:1 visual review and reviewer evidence.",
   "author": {
     "name": "Vlad Olaru",
     "url": "https://github.com/vladolaru"
@@ -11,16 +11,19 @@
   "license": "MIT",
   "keywords": [
     "image-optimization",
-    "imageoptim",
+    "mozjpeg",
+    "oxipng",
+    "pngquant",
+    "guetzli",
     "svgo",
-    "compression",
-    "lossless"
+    "ssim",
+    "compression"
   ],
   "skills": "./codex-skills/",
   "interface": {
     "displayName": "Image Optimizer",
-    "shortDescription": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
-    "longDescription": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
+    "shortDescription": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF): per-file candidates under quality profiles, banding.",
+    "longDescription": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF): per-file candidates under quality profiles, banding checks, a 1:1 visual review and reviewer evidence.",
     "developerName": "Vlad Olaru",
     "category": "Productivity",
     "capabilities": [
