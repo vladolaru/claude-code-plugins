@@ -24,7 +24,7 @@ The command loads the `image-optimization` skill, which:
 | `high` | SSIM ≥ 0.98, ssimulacra2 ≥ 80, banding ≤ 3 | images a product or page shows |
 | `medium` | SSIM ≥ 0.96, ssimulacra2 ≥ 60, banding ≤ 3 | files kept only so old URLs keep working |
 
-The floors come from a WooCommerce asset session in October 2026 (SSIM floors set by a human reviewer, ssimulacra2 floors confirmed by eye). Banding is gated on palette PNG output; WebP and AVIF output is labelled uncalibrated.
+The floors come from a WooCommerce asset session in October 2026 (SSIM floors set by a human reviewer, ssimulacra2 floors confirmed by eye). Banding is gated on palette PNG output; WebP and AVIF output is labelled uncalibrated. [`docs/design.md`](docs/design.md) records where each floor and rule came from, the acceptance evidence and the known gaps; read it before changing a floor, the pick rules or the tooling policy.
 
 ## Installation
 
@@ -54,7 +54,9 @@ brew install mozjpeg jpegoptim oxipng pngquant guetzli gifsicle librsvg ffmpeg j
 npm install -g svgo   # svgo 4 or newer
 ```
 
-ImageOptim.app, if installed, supplies native builds of jpegoptim, the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`). Linux package names are best effort and unverified.
+ImageOptim.app, if installed, supplies native builds of jpegoptim, the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`).
+
+Tested on macOS only. On Linux the install lines `doctor` prints are best effort, and no run has been verified. Inside the Codex sandbox every command works except `sheet --browser`, because headless Chrome cannot start there; open the comparison page instead.
 
 ## License
 
