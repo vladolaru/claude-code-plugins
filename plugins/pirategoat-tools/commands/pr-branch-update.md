@@ -27,7 +27,7 @@ Record where the user is before anything moves: `START_BRANCH=$(git branch --sho
 **Parse arguments:** `$ARGUMENTS`
 
 - A PR number (`3817`, `#3817`) or PR URL: use it as `<PR>` for the metadata read below. Do not run `/switch-to` yet.
-- Empty: resolve the current branch's PR with `$GH_CMD pr view --json number,url,state`. When `state` is `OPEN`, use it and say so in one line ("No PR given; updating #3817 for the current branch"). For a closed or merged PR, no PR, or a failed command, offer to merge the repository's default branch (`$GH_CMD repo view --json defaultBranchRef`) instead (STOP if detached). First find the branch's own remote branch: its configured upstream (`branch.<name>.remote` and `branch.<name>.merge`) only when that branch has the same name as the local one. An upstream with another name, such as the `origin/trunk` or `origin/release/X` the branch was created from, is not its own: syncing with it would look like divergence, and pushing to it would update a shared branch. Then ask: "No open PR for `<branch>`. Merge `<default branch>` into it anyway, running this repository's hooks and checks, and <push to `<remote>/<branch>` | keep the result local>?" If yes, use the default branch as `baseRefName` and the current branch as `headRefName`, skip the PR metadata and PR-specific consent/remote setup below, and treat that approval as consent for hooks and checks on the user's current branch.
+- Empty: resolve the current branch's PR with `$GH_CMD pr view --json number,url,state`. When `state` is `OPEN`, use it and say so in one line ("No PR given; updating #3817 for the current branch"). When `gh` reports no pull request for the branch (`no pull requests found`), or the PR is closed or merged, offer to merge the repository's default branch (`$GH_CMD repo view --json defaultBranchRef`) instead (STOP if detached). First find the branch's own remote branch: its configured upstream (`branch.<name>.remote` and `branch.<name>.merge`) only when that branch has the same name as the local one. An upstream with another name, such as the `origin/trunk` or `origin/release/X` the branch was created from, is not its own: syncing with it would look like divergence, and pushing to it would update a shared branch. Then ask: "No open PR for `<branch>`. Merge `<default branch>` into it anyway, running this repository's hooks and checks, and <push to `<remote>/<branch>` | keep the result local>?" The command fills in that last part from what it found: "push" only when the branch has its own remote branch. Step 6 does exactly what the question said. If yes, use the default branch as `baseRefName` and the current branch as `headRefName`, skip the PR metadata and PR-specific consent/remote setup below, and treat that approval as consent for hooks and checks on the user's current branch. Any other `gh pr view` failure (network, authentication) is an error, not a missing PR: report it with the command and STOP, since an open PR may target a different base.
 
 Then read the PR's metadata:
 
@@ -132,14 +132,14 @@ Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails
 Push to the branch the PR is built from, without force (the rebase in RULE 0 is the one exception):
 
 - Every PR, same-repository or fork: `git push <HEAD_REMOTE> 'HEAD:refs/heads/<headRefName>'`. Recheck that all push URLs still identify the PR head repository using the Step 1 remote rules. The destination is the metadata head branch even when the local branch is `pr-<number>`.
-- No-PR fallback: push to the branch's own remote branch from Step 1 (`git push <remote> 'HEAD:refs/heads/<branch>'`), or report local-only when it has none.
+- No-PR fallback: push to the branch's own remote branch from Step 1 (`git push <remote> 'HEAD:refs/heads/<branch>'`) when the question said so; otherwise report the result as local-only.
 - Push rejected because someone pushed to the PR branch in the meantime: STOP and report both heads. Do not force.
 
 ## Step 7: Report
 
 ```
 <"No PR given; updating #<number> for the current branch", when Step 1 resolved the PR itself>
-Updated #<number> with <baseRefName>: <merged <N> commits | pushed a local merge of <N> commits not yet on GitHub>; <pushed <short sha> | not pushed: <why>>.
+Updated <#<number> | `<branch>`, which has no PR,> with <baseRefName>: <merged <N> commits | pushed a local merge of <N> commits not yet on GitHub>; <pushed <short sha> | not pushed: <why>>.
 
 Synced: <fast-forwarded <n> commits from GitHub before merging; only when Step 2 did>
 Conflicts:
@@ -152,7 +152,7 @@ PR text: <still accurate | stale: <title or body lines the merge made wrong, and
 Git range for the changes: <PRE_MERGE>...<HEAD>
 ```
 
-`<N>` is the number of base commits the update brings to the PR: `git rev-list --count $PRE_MERGE..$BASE_TIP`. Write "Conflicts: none" for a clean merge, and list any fix Step 5 needed under its own `Post-merge fixes:` line. For `PR text:`, read the PR's title and body (`$GH_CMD pr view <number> --json title,body`) against what the merge changed; when they are stale, suggest `/pr-update` and do not edit them. When the command stopped partway, open with `Stopped updating #<number>: <why>` and keep only the lines that apply.
+`<N>` is the number of base commits the update brings to the PR: `git rev-list --count $PRE_MERGE..$BASE_TIP`. Write "Conflicts: none" for a clean merge, and list any fix Step 5 needed under its own `Post-merge fixes:` line. For `PR text:`, read the PR's title and body (`$GH_CMD pr view <number> --json title,body`) against what the merge changed; when they are stale, suggest `/pr-update` and do not edit them. When the command stopped partway, open with `Stopped updating <#<number> | `<branch>`>: <why>` and keep only the lines that apply.
 
 ## Step 8: Return to where the user was
 
