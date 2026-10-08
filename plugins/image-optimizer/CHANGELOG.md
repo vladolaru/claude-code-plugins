@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The bundled svgo config no longer warns under svgo 4.
+- SVG optimization uses svgo 4 or newer with an updated bundled config; an older svgo is refused, because its defaults drop `viewBox` and `<title>`.
 
 ### Removed
 

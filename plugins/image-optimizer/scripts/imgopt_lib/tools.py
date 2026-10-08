@@ -4,7 +4,8 @@ strict missing-tool policy.
 Each tool resolves through ``resolve()`` in a fixed order (``ORDER``, else
 ``DEFAULT_ORDER``). ``jpegtran`` and ``cjpeg`` must be mozjpeg builds: a
 libjpeg-turbo copy on PATH is rejected because its output was 1.5-4% larger
-in the 2026-10-07 WooCommerce session. ``requirements()`` maps a job, a
+in the 2026-10-07 WooCommerce session; svgo older than 4 is rejected
+(``MIN_MAJOR``), because the bundled config relies on svgo 4's preset-default. ``requirements()`` maps a job, a
 profile and the formats present to required, quality-affecting and optional
 tools; the encoders come from ``ladder.tools_for``, so a job asks for exactly
 what its ladder runs (a convert job for the target format's encoders). ``check()`` applies the policy: required tools always block,
@@ -15,6 +16,7 @@ Linux package names in ``APT`` are best effort and unverified.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -74,6 +76,8 @@ ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("bundle", "keg", "path"),
          "cjpeg": ("keg", "path"), "chrome": ("app", "path")}
 DEFAULT_ORDER = ("path", "bundle")
 MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
+# svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
+MIN_MAJOR = {"svgo": 4}
 
 TARGET_ENCODER = {"jpeg": "cjpeg", "webp": "cwebp", "avif": "avifenc", "png": "oxipng"}
 ALL_FORMATS = ("jpeg", "png", "gif", "svg")
@@ -176,11 +180,23 @@ def resolve(name: str, env: Env | None = None) -> Tool:
             if not (loc.is_file() and os.access(loc, os.X_OK)):
                 continue
             version = probe_version(loc, name)
-            if name in MOZJPEG_ONLY and "mozjpeg" not in version.lower():
-                rejected = f"{loc} is not mozjpeg ({version})"
+            why = _unusable(name, version)
+            if why:
+                rejected = f"{loc}: {why}"
                 continue
             return Tool(name, str(loc), version, source)
     return Tool(name, None, note=rejected)
+
+
+def _unusable(name: str, version: str) -> str:
+    """Why a found binary of ``name`` reporting ``version`` must not be used, or empty."""
+    if name in MOZJPEG_ONLY and "mozjpeg" not in version.lower():
+        return f"not mozjpeg ({version})"
+    if name in MIN_MAJOR:
+        major = re.match(r"\D*(\d+)\.", version)
+        if not major or int(major.group(1)) < MIN_MAJOR[name]:
+            return f"{name} {MIN_MAJOR[name]} or newer required ({version})"
+    return ""
 
 
 def _dedupe(seq) -> tuple[str, ...]:

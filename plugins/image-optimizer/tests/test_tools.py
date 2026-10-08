@@ -150,3 +150,16 @@ def test_prepare_requires_the_pixel_encoders_not_the_lossless_ones():
     req = T.requirements("prepare", "high", {"jpeg"})
     assert "cjpeg" in req.required and "guetzli" in req.quality
     assert "jpegoptim" not in req.all
+
+
+@pytest.mark.parametrize("version_line", ["3.2.0", "unknown output"])
+def test_svgo_older_than_4_is_rejected(tmp_path, version_line):
+    fake(tmp_path / "bin", "svgo", version_line)
+    tool = T.resolve("svgo", env([tmp_path / "bin"]))
+    assert not tool.ok
+    assert "svgo 4 or newer required" in tool.note
+
+
+def test_svgo_4_is_accepted(tmp_path):
+    fake(tmp_path / "bin", "svgo", "4.0.0")
+    assert T.resolve("svgo", env([tmp_path / "bin"])).version == "4.0.0"

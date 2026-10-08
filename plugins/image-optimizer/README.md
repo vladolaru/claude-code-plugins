@@ -51,10 +51,10 @@ Use `/optimize-images ...` in Claude Code or `$image-optimizer:optimize-images .
 ```bash
 python3 -m pip install --user pillow
 brew install mozjpeg jpegoptim oxipng pngquant guetzli gifsicle librsvg ffmpeg jpeg-xl webp libavif
-npm install -g svgo
+npm install -g svgo   # svgo 4 or newer
 ```
 
-ImageOptim.app, if installed, supplies native builds of jpegoptim, the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle. A libjpeg-turbo `jpegtran` or `cjpeg` is never used. Linux package names are best effort and unverified.
+ImageOptim.app, if installed, supplies native builds of jpegoptim, the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`). Linux package names are best effort and unverified.
 
 ## License
 
