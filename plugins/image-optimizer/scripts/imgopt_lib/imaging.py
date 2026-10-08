@@ -15,6 +15,8 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageCms, ImageOps, ImageStat
 
+from .formats import format_of
+
 BACKGROUNDS = {"white": (255, 255, 255), "dark": (40, 40, 40)}
 ORIENTATION_TAG = 0x0112
 IJG_LUMA = (16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55,
@@ -66,10 +68,27 @@ def profile_description(icc: bytes | None) -> str | None:
 
 def _refuse_16_bit(im: Image.Image, path: Path) -> None:
     """16-bit samples are read wrong two ways: gray as I;16 (clipped at 255 when converted) and colour as
-    8-bit RGB/RGBA (raw mode "...;16B"), so counts and comparisons would mislead. Checked before load()."""
-    deep = im.mode in ("I", "F") or im.mode.startswith("I;16") or any(";16B" in str(t.args) for t in im.tile)
+    8-bit RGB/RGBA (raw mode "...;16B"), so counts and comparisons would mislead. Checked before load().
+    A tile's raw mode is read by position: Pillow before 11 has plain tuples, without the ``args`` name."""
+    deep = im.mode in ("I", "F") or im.mode.startswith("I;16") or any(";16B" in str(t[3]) for t in im.tile)
     if deep:
         raise ImagingError(f"{Path(path).name}: 16-bit images are not supported yet")
+
+
+# Pillow names a JPEG that carries a multi-picture (MPF) segment "MPO", as many phone cameras write them.
+_DECODED_AS = {"mpo": "jpeg"}
+
+
+def decoded_format(im: Image.Image, path: Path) -> str:
+    """The format Pillow decoded, which must agree with the name: every command picks its tools and its
+    output name from the extension (formats.format_of), the ladder from the decoded format."""
+    decoded = (im.format or "").lower()
+    decoded = _DECODED_AS.get(decoded, decoded)
+    named = format_of(path)
+    if named and decoded != named:
+        raise ImagingError(f"{Path(path).name}: its content is {decoded.upper() or 'unknown'} but its name says "
+                           f"{named.upper()}; rename it to match its content first")
+    return decoded
 
 
 def read_facts(path: Path) -> Facts:
@@ -80,7 +99,7 @@ def read_facts(path: Path) -> Facts:
         colors = im.convert("RGBA").getcolors(maxcolors=4096)
         return Facts(
             path=Path(path),
-            format=(im.format or "").lower(),
+            format=decoded_format(im, path),
             width=im.width,
             height=im.height,
             mode=im.mode,
@@ -154,10 +173,14 @@ def resize_width(img: Image.Image, width: int) -> Image.Image:
 
 
 def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
-    """What the viewer sees, scaled down to ``width`` when given; a width above the displayed one is refused."""
+    """What the viewer sees, scaled down to ``width`` when given; a width at or above the displayed one is
+    refused (an upscale, or a resize that changes nothing but would still re-encode the pixels)."""
     im, icc = _oriented(path)
     if width and width > im.width:
         raise ImagingError(f"{Path(path).name}: --resize {width} would upscale it (it displays {im.width} px wide)")
+    if width and width == im.width:
+        raise ImagingError(f"{Path(path).name}: already displays {width} px wide, so there is nothing to resize "
+                           "(optimize it without --resize)")
     if icc and not is_srgb(profile_description(icc)):
         rgba = _convert(im, icc, Path(path).name)
     else:

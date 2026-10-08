@@ -8,7 +8,8 @@ versions, so a re-run only redoes what changed) and the record that `sheet`
 and `apply` read. Schema: see SCHEMA and the plan's Task 7 interface block.
 
 A source that cannot be read or whose colour profile cannot be converted
-(imaging.READ_FAILURES: also 16-bit files and a --resize that would upscale)
+(imaging.READ_FAILURES: also 16-bit files, content that does not match its
+extension, and a --resize that would upscale or keep the width)
 is skipped by run(): it logs the reason, writes nothing for that file and
 carries on, so callers compare len(records) with len(inputs) to learn that
 files were skipped. A record whose every candidate errored (all_errored) is a

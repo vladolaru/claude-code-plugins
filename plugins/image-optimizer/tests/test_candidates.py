@@ -359,11 +359,23 @@ def test_cli_lossless_resize_of_a_png_is_a_usage_error_and_writes_nothing(factor
 @pytest.mark.parametrize("name", ["photo.jpeg", "photo.JPG"])
 def test_a_same_format_resize_targets_the_source_itself(factory, toolset, tmp_path, name):
     tools = toolset("prepare", "high", {"jpeg"})
-    src = factory.photo(name=name, size=(320, 240), quality=95).resolve()
-    [r] = C.run([src], opts(tmp_path / "out", "high", resize=160), tools, log=quiet)
-    assert r["target"] == str(src)
-    if r["verdict"] == "apply":
-        assert "replaces the original" in r["verdict_reason"], r["verdict_reason"]
+    src = factory.root / name  # a smooth JPEG: the noisy test photo finds no pick once halved
+    Image.open(factory.gradient(size=(320, 240))).save(src, "JPEG", quality=95)
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", "high", resize=160), tools, log=quiet)
+    assert r["target"] == str(src.resolve())
+    assert r["verdict"] == "apply" and "replaces the original" in r["verdict_reason"], r["verdict_reason"]
+
+
+def test_a_file_whose_content_does_not_match_its_name_is_skipped_and_the_run_goes_on(factory, toolset, tmp_path):
+    """The tool check reads extensions and the ladder the decoded format, so a JPEG named .png must not
+    reach the ladder: it would ask for JPEG encoders nobody checked for and abort the whole batch."""
+    tools = toolset("recompress", "high", {"png"})
+    bad = factory.photo(name="b.jpg").rename(factory.root / "b.png").resolve()
+    good = factory.logo(size=(200, 200)).resolve()
+    lines = []
+    records = C.run([bad, good], opts(tmp_path / "out", "high"), tools, log=lines.append)
+    assert [r["source"]["path"] for r in records] == [str(good)]
+    assert any(f"== {bad}: skipped:" in line and "its content is JPEG" in line for line in lines), lines
 
 
 def _without(tools, name):
