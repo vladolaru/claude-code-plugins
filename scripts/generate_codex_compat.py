@@ -544,6 +544,17 @@ def expected_files(canonical: dict) -> list[ExpectedFile]:
                         )
                     )
 
+    seen: set[Path] = set()
+    duplicates: list[str] = []
+    for item in files:
+        if item.path in seen and str(item.path) not in duplicates:
+            duplicates.append(str(item.path))
+        seen.add(item.path)
+    if duplicates:
+        raise ValueError(
+            "two sources generate the same file (a skill and a command "
+            "sharing a name?): " + ", ".join(duplicates)
+        )
     return files
 
 
