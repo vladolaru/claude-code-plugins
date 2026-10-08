@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `imgopt.py doctor` checks every tool a job needs, names what each missing one adds, and prints one install command.
 - `imgopt.py candidates` tries a ladder of encoder settings per file, measures each against a quality profile (`lossless` by default, `high`, `medium`), and picks the smallest that passes.
 - `imgopt.py inspect` reports each file's format, dimensions, colours, profile, orientation, estimated JPEG quality and lossless headroom without changing anything.
+- `imgopt.py sheet` cuts 1:1 difference tiles for the agent to view (never wider than about 1000 px) and builds a local comparison page with before, pick and an optional alternative.
 
 ## [1.2.0] - 2026-07-23
 

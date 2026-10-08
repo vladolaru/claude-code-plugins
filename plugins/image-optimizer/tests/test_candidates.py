@@ -280,3 +280,8 @@ def test_unreadable_candidate_output_becomes_that_candidates_error(factory, tool
     [cand] = r["candidates"]
     assert "truncated" in cand["error"] and not cand["pass"]
     assert r["pick"] is None
+
+
+def test_pick_of_is_none_without_a_pick_even_when_a_candidate_has_no_file():
+    record = {"pick": None, "candidates": [{"label": "pngquant-c8", "error": "encoder failed"}]}
+    assert C.pick_of(record) is None

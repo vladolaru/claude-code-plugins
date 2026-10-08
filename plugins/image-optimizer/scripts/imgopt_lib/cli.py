@@ -12,6 +12,7 @@ from pathlib import Path
 from . import audit as A
 from . import candidates as C
 from . import gates as G
+from . import sheet as S
 from . import tools as T
 from .formats import OUTPUT_FORMATS, expand_inputs, format_of
 from .ladder import UsageError
@@ -71,6 +72,33 @@ def cmd_inspect(args) -> int:
     return 1 if any(r["error"] for r in rows) else 0
 
 
+def cmd_sheet(args) -> int:
+    chk = T.check(T.Requirements(("pillow", "chrome") if args.browser else ("pillow",), (), ()))
+    if chk.blocked:
+        raise T.ToolingError(T.report(chk, job="sheet", profile="-"))
+    problems: list[str] = []
+    tiles, page = S.build(Path(args.out).resolve(), alt=args.alt, problems=problems)
+    if tiles:
+        print("Tiles (open each at its natural size; view every REQUIRED one before calling a pick good):")
+        for t in tiles:
+            print(f"  {'REQUIRED' if t.required else 'optional':8} {t.path}   {Path(t.source).name} [{t.window}]")
+    else:
+        print("No lossy picks: no tiles to view.")
+    for problem in problems:
+        print(f"  skipped: {problem}", file=sys.stderr)
+    print(f"Page for the human: {page}   (macOS: open '{page}'; Linux: xdg-open '{page}')")
+    failed = bool(problems)
+    if args.browser:
+        try:
+            print(f"Screenshot at 2x: {S.screenshot(page, chk.tools['chrome'].path)}")
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            failed = True
+    print(T.describe(chk.tools))
+    print(f"Next: after the human approves on the page, python3 {SCRIPT} apply {Path(args.out).resolve()} --approved")
+    return 1 if failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
@@ -99,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--json", action="store_true")
     i.add_argument("--allow-missing")
     i.set_defaults(func=cmd_inspect)
+    s = sub.add_parser("sheet", help="1:1 tiles for the agent and a comparison page for the human")
+    s.add_argument("out")
+    s.add_argument("--alt", help="candidate label to show as a third pane, for example jpegoptim-m70")
+    s.add_argument("--browser", action="store_true", help="also screenshot the page at 2x with headless Chrome")
+    s.set_defaults(func=cmd_sheet)
     return parser
 
 

@@ -60,6 +60,9 @@ def sha256(path: Path) -> str:
 
 
 def pick_of(record: dict) -> dict | None:
+    """The picked candidate, or None. Without a pick, a candidate that has no file (it errored) is not it."""
+    if not record.get("pick"):
+        return None
     return next((c for c in record["candidates"] if c.get("file") == record.get("pick")), None)
 
 
