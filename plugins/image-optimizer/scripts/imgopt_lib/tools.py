@@ -72,10 +72,18 @@ OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install 
          "cjpeg": "build mozjpeg: https://github.com/mozilla/mozjpeg",
          "oxipng": "cargo install oxipng", "chrome": "install Google Chrome or Chromium"}
 
-ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("bundle", "keg", "path"),
+# The ImageOptim bundle comes first only for jpegoptim: it is the one build linked against mozjpeg (Homebrew's
+# links libjpeg-turbo). Everything else prefers what the package manager keeps current; the bundle is a
+# fallback that updates only with ImageOptim releases.
+ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("keg", "bundle", "path"),
          "cjpeg": ("keg", "path"), "chrome": ("app", "path")}
 DEFAULT_ORDER = ("path", "bundle")
 MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
+# Tools ImageOptim 1.9.3 bundles older than Homebrew ships them (oxipng 9.0.0 against 10.x, whose zopfli mode
+# ran 5x faster and saved more on the WooCommerce PNGs; pngquant 3.0.2; gifsicle). doctor suggests the
+# Homebrew install when one of these resolves to the bundle; it never blocks. guetzli is not listed: its
+# upstream is archived, so no newer build exists.
+FRESHER_ON_BREW = frozenset({"oxipng", "pngquant", "gifsicle"})
 # svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
 MIN_MAJOR = {"svgo": 4}
 
@@ -302,6 +310,11 @@ def report(chk: Check, *, job: str, profile: str, platform: str | None = None) -
                 status = "MISSING"
             lines.append(f"  {status:8} {group:9} {name:17} {(tool.version or '-')[:40]:40} "
                          f"{tool.source:7} {tool.path or tool.note}")
+    stale = [n for n in req.all if chk.tools[n].ok and chk.tools[n].source == "bundle" and n in FRESHER_ON_BREW]
+    if stale:
+        lines.append("Older copies from the ImageOptim bundle (it updates only with ImageOptim): "
+                     + ", ".join(stale) + ". Suggest to the human; this does not block:")
+        lines += ["  " + line for line in install_lines(stale, platform)]
     blockers = chk.missing_required + chk.missing_quality
     for name in blockers:
         lines.append(f"  - {name}: {ADDS[name]}")

@@ -29,12 +29,20 @@ def test_libjpeg_turbo_jpegtran_on_path_is_rejected(tmp_path):
     assert "not mozjpeg" in tool.note
 
 
-def test_bundle_mozjpeg_jpegtran_wins_over_path(tmp_path):
+def test_mozjpeg_jpegtran_comes_from_the_keg_then_the_bundle_then_path(tmp_path):
     fake(tmp_path / "bin", "jpegtran", "mozjpeg version 4.1.5")
     fake(tmp_path / "bundle", "jpegtran", "mozjpeg version 4.1.5 bundle")
     tool = T.resolve("jpegtran", env([tmp_path / "bin"], bundle=tmp_path / "bundle"))
-    assert tool.source == "bundle"
-    assert "bundle" in tool.version
+    assert tool.source == "bundle" and "bundle" in tool.version
+    fake(tmp_path / "keg", "jpegtran", "mozjpeg version 4.1.6 keg")
+    tool = T.resolve("jpegtran", env([tmp_path / "bin"], bundle=tmp_path / "bundle", kegs=[tmp_path / "keg"]))
+    assert tool.source == "keg"
+
+
+def test_jpegoptim_prefers_the_bundle_build_linked_to_mozjpeg(tmp_path):
+    fake(tmp_path / "bin", "jpegoptim", "jpegoptim v1.5.6 (libjpeg-turbo)")
+    fake(tmp_path / "bundle", "jpegoptim", "jpegoptim v1.4.4")
+    assert T.resolve("jpegoptim", env([tmp_path / "bin"], bundle=tmp_path / "bundle")).source == "bundle"
 
 
 def test_cjpeg_comes_from_the_mozjpeg_keg_not_libjpeg_turbo(tmp_path):
@@ -179,3 +187,17 @@ def test_cache_id_follows_the_binary_when_it_prints_no_version(tmp_path, version
     before = T.Tool("guetzli", str(exe), version, "path").cache_id
     exe.write_bytes(b"a newer build")
     assert T.Tool("guetzli", str(exe), version, "path").cache_id != before
+
+
+def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):
+    fake(tmp_path / "bundle", "oxipng", "oxipng 9.0.0")
+    fake(tmp_path / "bundle", "jpegoptim", "jpegoptim v1.4.4")
+    req = T.Requirements(("pillow",), ("oxipng", "jpegoptim"), ())
+    text = T.report(T.check(req, env(bundle=tmp_path / "bundle")), job="recompress", profile="lossless",
+                    platform="darwin")
+    assert "Older copies from the ImageOptim bundle" in text and "brew install oxipng" in text
+    assert "jpegoptim" not in text.split("Older copies")[1].splitlines()[0]  # bundle-first by design
+    fake(tmp_path / "bin", "oxipng", "oxipng 10.2.1")
+    text = T.report(T.check(req, env([tmp_path / "bin"], bundle=tmp_path / "bundle")), job="recompress",
+                    profile="lossless", platform="darwin")
+    assert "Older copies" not in text and "Ready." in text
