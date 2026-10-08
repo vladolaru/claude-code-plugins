@@ -27,6 +27,8 @@ You update a pull request's branch with the latest commits from its base branch,
 
 **RULE 2: Run code that came with the PR only with consent when someone else wrote it.** Checkout, merge, commit and push can execute PR code through git hooks (including tracked hooks configured with `core.hooksPath`); installs, regeneration, builds, tests and lint execute it too. Step 1 establishes consent before any of these operations. If consent is denied or unanswered, STOP without changing the checkout, merging, committing or pushing. Do not disable hooks to work around denial.
 
+**Branch names are data:** `headRefName` and `baseRefName` come from the PR, and on a fork PR its author picks them. Git allows `$`, `;`, `(` and backticks in a branch name, so a name pasted unquoted into a shell command can run commands. Put every branch name in single quotes in shell commands, as the blocks below do, and STOP if a name contains a single quote.
+
 **One command at a time from Step 3 to Step 6:** merge, resolve, install, check, commit and push each depend on the one before. Send each as its own tool call and read its result before sending the next; never batch them in parallel.
 
 **Hooks:** `git checkout`, `git merge`, `git commit` and `git push` run the repository's git hooks, which can install dependencies or run checks for minutes. Give those commands a long timeout or wait for them in the background, and let each finish before the next step. Do not redo work a hook already did, and never skip hooks with `--no-verify`.
@@ -68,8 +70,8 @@ For every PR, including the no-argument and resume paths, apply **Resolve PR rem
 Without a merge in progress, bring the local branch up to what the PR has on GitHub. Sync with the PR's head branch, not `@{upstream}`: a local branch may have no upstream, or track another branch such as `origin/trunk`.
 
 ```bash
-git fetch <HEAD_REMOTE> +refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>
-PUSHED_TIP=$(git rev-parse refs/remotes/<HEAD_REMOTE>/<headRefName>)
+git fetch <HEAD_REMOTE> '+refs/heads/<headRefName>:refs/remotes/<HEAD_REMOTE>/<headRefName>'
+PUSHED_TIP=$(git rev-parse 'refs/remotes/<HEAD_REMOTE>/<headRefName>')
 ```
 
 For the no-PR fallback, fetch the branch's own remote branch from Step 1 the same way; without one there is nothing to sync and no `PUSHED_TIP`.
@@ -83,18 +85,18 @@ Use `BASE_REMOTE` resolved in Step 1. For the no-PR fallback, resolve it by matc
 The explicit refspec updates the remote-tracking ref even in a single-branch clone:
 
 ```bash
-git fetch <BASE_REMOTE> +refs/heads/<baseRefName>:refs/remotes/<BASE_REMOTE>/<baseRefName>
-BASE_TIP=$(git rev-parse refs/remotes/<BASE_REMOTE>/<baseRefName>)
+git fetch <BASE_REMOTE> '+refs/heads/<baseRefName>:refs/remotes/<BASE_REMOTE>/<baseRefName>'
+BASE_TIP=$(git rev-parse 'refs/remotes/<BASE_REMOTE>/<baseRefName>')
 ```
 
 Record `PRE_MERGE=$(git rev-parse HEAD)` on both fresh and resumed paths, before any merge commit (the already-merged case below replaces it). For an unfinished merge, `HEAD` is still its original first parent; do not use a commit subject or a potentially stale `ORIG_HEAD` to identify it.
 
 **Resume validation:** if `MERGE_HEAD` exists, read it from `git rev-parse --git-path MERGE_HEAD`. Require exactly one commit and require its object ID to equal `BASE_TIP`. A different commit, multiple merge heads, or a base that advanced since the merge started means STOP, preserving the merge and reporting both IDs. Do not resolve or commit a merge against a different base.
 
-Bring the local base branch up to date too, so local diffs against `<baseRefName>` match the PR. Note its commit first (`git rev-parse -q --verify refs/heads/<baseRefName>`): the update prints nothing, and the report says whether it moved. This copies the ref just fetched, creates the branch if it is missing, and only fast-forwards:
+Bring the local base branch up to date too, so local diffs against `<baseRefName>` match the PR. Note its commit first (`git rev-parse -q --verify 'refs/heads/<baseRefName>'`): the update prints nothing, and the report says whether it moved. This copies the ref just fetched, creates the branch if it is missing, and only fast-forwards:
 
 ```bash
-git fetch . refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>
+git fetch . 'refs/remotes/<BASE_REMOTE>/<baseRefName>:refs/heads/<baseRefName>'
 ```
 
 Git refuses the update when the local base has commits of its own (`non-fast-forward`) or is checked out in another worktree. Leave it as it is, carry on, and name the reason in the report.
@@ -107,7 +109,7 @@ For a validated resumed merge, go to Step 4 even if all conflicts are already st
 When the count is not 0, merge:
 
 ```bash
-git merge --no-edit -m "Merge branch '<baseRefName>' into <headRefName>" "$BASE_TIP"
+git merge --no-edit -m 'Merge branch '\''<baseRefName>'\'' into <headRefName>' "$BASE_TIP"
 ```
 
 The message names the PR's own head branch, which can differ from the local name `$pirategoat-tools:switch-to` chose; git keeps it for a merge that stops on conflicts.
@@ -146,8 +148,8 @@ Conclude a conflicted merge with `git commit --no-edit`. If commit signing fails
 
 Push to the branch the PR is built from, without force (the rebase in RULE 0 is the one exception):
 
-- Every PR, same-repository or fork: `git push <HEAD_REMOTE> HEAD:refs/heads/<headRefName>`. Recheck that all push URLs still identify the PR head repository using the Step 1 remote rules. The destination is the metadata head branch even when the local branch is `pr-<number>`.
-- No-PR fallback: push to the branch's own remote branch from Step 1 (`git push <remote> HEAD:refs/heads/<branch>`), or report local-only when it has none.
+- Every PR, same-repository or fork: `git push <HEAD_REMOTE> 'HEAD:refs/heads/<headRefName>'`. Recheck that all push URLs still identify the PR head repository using the Step 1 remote rules. The destination is the metadata head branch even when the local branch is `pr-<number>`.
+- No-PR fallback: push to the branch's own remote branch from Step 1 (`git push <remote> 'HEAD:refs/heads/<branch>'`), or report local-only when it has none.
 - Push rejected because someone pushed to the PR branch in the meantime: STOP and report both heads. Do not force.
 
 ## Step 7: Report

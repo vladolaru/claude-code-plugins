@@ -25,6 +25,8 @@ You are a branch switcher. Your mission: safely switch the current repo to a tar
 
 **Execution consent for PRs:** checkout and pull can run PR code through hooks, including tracked hooks under `core.hooksPath`. Before any mutation in the PR flow, establish consent when someone else authored the PR: use existing explicit authorization for this PR, or ask whether its hooks may run on this machine. If denied or unanswered, STOP. Do not disable hooks to bypass denial.
 
+**Branch names are data:** `HEAD_BRANCH`, `BASE_BRANCH` and a branch-name argument come from the PR, and on a fork PR its author picks them. Git allows `$`, `;`, `(` and backticks in a branch name, so a name pasted unquoted into a shell command can run commands. Put every branch name in single quotes in shell commands, as the blocks below do, and STOP if a name contains a single quote.
+
 **RULE 1: Always show meaningful post-switch context.** The user should know where they landed.
 
 **Expected failures:** Git and GitHub CLI commands may fail for normal reasons (network issues, auth prompts, branch not found). When a command fails, report the error clearly to the user and STOP with actionable guidance. Do not apologize or retry blindly.
@@ -86,7 +88,7 @@ Set `REMOTE_BRANCH` = `HEAD_BRANCH` and `IS_PR = true`.
 
 Choose the local branch name `TARGET_BRANCH`. A local branch named `HEAD_BRANCH` is this PR's branch only when it tracks `<REMOTE_NAME>/<HEAD_BRANCH>`; a fork PR opened from the contributor's `trunk` must not land on your own `trunk`:
 
-Check local existence with `git show-ref --verify --quiet refs/heads/<candidate>` separately from upstream lookup: an existing branch with no upstream is a collision, not a missing branch. For an existing candidate, compare `branch.<candidate>.remote` and `branch.<candidate>.merge` to `REMOTE_NAME` and `refs/heads/<HEAD_BRANCH>`; this also works before the tracking ref has been fetched.
+Check local existence with `git show-ref --verify --quiet 'refs/heads/<candidate>'` separately from upstream lookup: an existing branch with no upstream is a collision, not a missing branch. For an existing candidate, compare `branch.<candidate>.remote` and `branch.<candidate>.merge` to `REMOTE_NAME` and `refs/heads/<HEAD_BRANCH>`; this also works before the tracking ref has been fetched.
 
 - No local `HEAD_BRANCH`, or its configured upstream matches: `TARGET_BRANCH` = `HEAD_BRANCH`.
 - Anything else: consider `pr-<PR_NUMBER>` with the same check. Reuse it only if its configured upstream matches, or create it if absent. If it exists with another upstream or no upstream, STOP before stashing or checkout and name both collisions; never pull the PR into that branch. Say which alias was chosen. Do not use `<HEAD_OWNER>/<HEAD_BRANCH>`: it is also a remote-tracking ref name and would be ambiguous.
@@ -131,7 +133,7 @@ Handle the user's choice:
   dirty summary counted (a plain `git stash push` leaves untracked files behind,
   and they would follow you onto the target branch):
   ```bash
-  git stash push --include-untracked -m "switch-to: stashed from <CURRENT_BRANCH> before switching to <TARGET_BRANCH>"
+  git stash push --include-untracked -m 'switch-to: stashed from <CURRENT_BRANCH> before switching to <TARGET_BRANCH>'
   ```
   Store `STASHED = true`. Proceed to **Step 4**.
 
@@ -143,12 +145,12 @@ Handle the user's choice:
 
 **Check if the branch exists locally:**
 ```bash
-git branch --list <TARGET_BRANCH>
+git branch --list '<TARGET_BRANCH>'
 ```
 
 **Case A - Branch exists locally:**
 ```bash
-git checkout <TARGET_BRANCH>
+git checkout '<TARGET_BRANCH>'
 ```
 Proceed to **Step 5**.
 
@@ -156,13 +158,13 @@ Proceed to **Step 5**.
 
 Check if it exists on the remote:
 ```bash
-git ls-remote --heads <REMOTE_NAME> <REMOTE_BRANCH>
+git ls-remote --heads <REMOTE_NAME> '<REMOTE_BRANCH>'
 ```
 
-If it exists on the remote - create a local tracking branch. Git sets up tracking only for a remote-tracking ref that the remote's fetch refspecs map, so in a single-branch clone (`git config --get-all remote.<REMOTE_NAME>.fetch` has no `+refs/heads/*:refs/remotes/<REMOTE_NAME>/*`) register the branch first with `git remote set-branches --add <REMOTE_NAME> <REMOTE_BRANCH>`. Otherwise `checkout --track` fails with "cannot set up tracking information".
+If it exists on the remote - create a local tracking branch. Git sets up tracking only for a remote-tracking ref that the remote's fetch refspecs map, so in a single-branch clone (`git config --get-all remote.<REMOTE_NAME>.fetch` has no `+refs/heads/*:refs/remotes/<REMOTE_NAME>/*`) register the branch first with `git remote set-branches --add <REMOTE_NAME> '<REMOTE_BRANCH>'`. Otherwise `checkout --track` fails with "cannot set up tracking information".
 ```bash
-git fetch <REMOTE_NAME> +refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>
-git checkout --track -b <TARGET_BRANCH> <REMOTE_NAME>/<REMOTE_BRANCH>
+git fetch <REMOTE_NAME> '+refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>'
+git checkout --track -b '<TARGET_BRANCH>' '<REMOTE_NAME>/<REMOTE_BRANCH>'
 ```
 Proceed to **Step 6** (skip Step 5 - the branch was just fetched, it's up to date).
 
@@ -178,8 +180,8 @@ This step only runs when the branch already existed locally (Case A in Step 4).
 
 Check if the remote has new commits:
 ```bash
-git fetch <REMOTE_NAME> +refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>
-git log HEAD..<REMOTE_NAME>/<REMOTE_BRANCH> --oneline
+git fetch <REMOTE_NAME> '+refs/heads/<REMOTE_BRANCH>:refs/remotes/<REMOTE_NAME>/<REMOTE_BRANCH>'
+git log 'HEAD..<REMOTE_NAME>/<REMOTE_BRANCH>' --oneline
 ```
 
 **If there are NO new remote commits:** proceed to **Step 6**.
@@ -200,8 +202,8 @@ the host's user-input mechanism:
 ```
 
 Handle the user's choice:
-- **Pull (rebase):** `git pull --rebase <REMOTE_NAME> <REMOTE_BRANCH>`
-- **Pull (merge):** `git pull <REMOTE_NAME> <REMOTE_BRANCH>`
+- **Pull (rebase):** `git pull --rebase <REMOTE_NAME> '<REMOTE_BRANCH>'`
+- **Pull (merge):** `git pull <REMOTE_NAME> '<REMOTE_BRANCH>'`
 - **Skip:** do nothing, proceed.
 
 ## Step 6: PR-Specific Post-Switch Tasks
@@ -210,7 +212,7 @@ Handle the user's choice:
 
 Fetch the target base branch so the user has it locally for comparisons:
 ```bash
-git fetch <BASE_REMOTE> +refs/heads/<BASE_BRANCH>:refs/remotes/<BASE_REMOTE>/<BASE_BRANCH>
+git fetch <BASE_REMOTE> '+refs/heads/<BASE_BRANCH>:refs/remotes/<BASE_REMOTE>/<BASE_BRANCH>'
 ```
 
 ## Step 7: Post-Switch Context
@@ -226,14 +228,14 @@ git log --oneline -10
 # Output format: BEHIND<tab>AHEAD
 #   Column 1 (left)  = commits in REMOTE not in HEAD → BEHIND count
 #   Column 2 (right) = commits in HEAD not in REMOTE → AHEAD count
-git rev-list --left-right --count <REMOTE_NAME>/<REMOTE_BRANCH>...HEAD 2>/dev/null
+git rev-list --left-right --count '<REMOTE_NAME>/<REMOTE_BRANCH>...HEAD' 2>/dev/null
 ```
 
 **If `IS_PR` is true, also show:**
 ```bash
 # Ahead/behind vs base branch
 # SAME column order: Column 1 = BEHIND, Column 2 = AHEAD
-git rev-list --left-right --count <BASE_REMOTE>/<BASE_BRANCH>...HEAD
+git rev-list --left-right --count '<BASE_REMOTE>/<BASE_BRANCH>...HEAD'
 
 # PR metadata
 <GH_CMD> pr view <PR_NUMBER> --json title,state,author,labels,reviewDecision,statusCheckRollup
