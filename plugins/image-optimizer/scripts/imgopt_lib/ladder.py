@@ -3,7 +3,8 @@
 ``plan()`` is pure (facts, profile, output format in; rungs out) so the
 ladder is testable without encoders. ``generate()`` runs one rung. Inputs
 are named: "source" (the file itself), "pixels" (RGBA PNG of what the viewer
-sees, resized when asked), "pixels_flat" (that, flattened onto white),
+sees, resized when asked), "pixels_flat" (that, flattened onto white), "pixels_gray" (that as one
+gray channel, written for gray sources only),
 "pixels_ppm" (the same as PPM for cjpeg). A rung's kind follows its input
 (``Rung.kind``): only a lossless encoder reading "source" is lossless, so its
 pick keeps the ICC profile and orientation and needs no approval. Anything
@@ -33,7 +34,8 @@ WEB_LEVELS = tuple(range(95, 45, -5))           # 95 .. 50
 GUETZLI_PROGRESSIVE = True                      # jpegtran -progressive shrank guetzli output 4-6% on all three samples
 # jpegli beside guetzli: on 31 WooCommerce photos under `high` it was the smallest passing encoder on 13,
 # and the ladder with both was 1.7 points smaller than with guetzli alone (docs/design.md). Its best
-# settings reached q40 under `high` and below q35 under `medium`, hence the range.
+# settings reached q40 under `high`; under `medium` they went lower, to q20 or below on 9 photos, but
+# jpegoptim won every one of those, so stopping at q25 cost nothing there.
 JPEGLI_LEVELS = tuple(range(90, 20, -5))        # 90 .. 25
 # oxipng's zopfli mode saved 1.8% more on 13 small PNGs (oxipng 10) but took 25-45x longer on 5-7
 # megapixel screenshots for 0.4% or less, so it runs only up to this size.
@@ -137,7 +139,8 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             rungs += [Rung(f"cjpeg-q{q}", "cjpeg", "lossy", "pixels_ppm", ".jpg",
                            ("-quality", str(q), "-optimize", "-progressive")) for q in JPEG_LEVELS]
         if lossy:
-            rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", "pixels_flat", ".jpg", ("-q", str(q)))
+            jl_in = "pixels_gray" if gray else "pixels_flat"  # cjpegli writes as many channels as it reads
+            rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", jl_in, ".jpg", ("-q", str(q)))
                       for q in JPEGLI_LEVELS]
             g_in = "source" if (not pixel and f.orientation == 1 and not gray) else "pixels_flat"
             rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),

@@ -38,7 +38,8 @@ def inspect_file(path: Path, tools: dict, workdir: Path) -> dict:
         return row
     best = None
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
-        for rung in ladder.plan(f, profile="lossless").rungs:
+        # Without the zopfli rung: inspect has no cache, and zopfli costs seconds to minutes per PNG.
+        for rung in (r for r in ladder.plan(f, profile="lossless").rungs if r.label != "oxipng-zopfli"):
             if not all(n in tools and tools[n].ok for n in rung.tools):
                 continue
             try:

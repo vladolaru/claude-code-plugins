@@ -209,3 +209,19 @@ def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):
     text = T.report(T.check(req, env([tmp_path / "bin"], bundle=tmp_path / "bundle")), job="recompress",
                     profile="lossless", platform="darwin")
     assert "Older copies" not in text and "Ready." in text
+
+
+def test_a_cjpegli_that_cannot_start_is_reported_missing(tmp_path):
+    """A shared-library build aborts once its build folder is gone; doctor must not call it ok."""
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "cjpegli").write_text("#!/bin/sh\necho 'dyld: Library not loaded: libjpegli.dylib' >&2\nexit 134\n")
+    (broken / "cjpegli").chmod(0o755)
+    tool = T.resolve("cjpegli", env([broken]))
+    assert not tool.ok and "does not run (exit 134: dyld: Library not loaded" in tool.note
+    fake(tmp_path / "good", "cjpegli", "Usage: cjpegli INPUT OUTPUT [OPTIONS...]")
+    assert T.resolve("cjpegli", env([tmp_path / "good"])).ok
+
+
+def test_cache_id_of_a_binary_gone_since_resolve_does_not_raise(tmp_path):
+    assert T.Tool("guetzli", str(tmp_path / "gone"), "unknown", "path").cache_id == "unknown:missing"

@@ -58,11 +58,11 @@ The lossy JPEG ladder also uses jpegli's `cjpegli`, which no package manager shi
 
 ```bash
 git clone --recursive https://github.com/google/jpegli && cd jpegli
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF
 cmake --build build --target cjpegli    # then copy build/tools/cjpegli somewhere on PATH
 ```
 
-ImageOptim.app, if installed, is used as a fallback for the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle (its copies date from 2023, so `doctor` suggests the Homebrew ones), and first for jpegoptim, because its jpegoptim is linked to mozjpeg and Homebrew's is not. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`).
+ImageOptim.app, if installed, is the first choice for jpegoptim, because its build is linked to mozjpeg and Homebrew's is not. For the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle it is only a fallback when they are not on `PATH`; its copies date from 2023, and `doctor` suggests Homebrew's oxipng, pngquant and gifsicle when it finds only the bundled ones. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`).
 
 Tested on macOS only. On Linux the install lines `doctor` prints are best effort, and no run has been verified. Inside the Codex sandbox every command works except `sheet --browser`, because headless Chrome cannot start there; open the comparison page instead.
 

@@ -105,3 +105,15 @@ def test_headroom_ignores_candidates_that_change_what_the_viewer_sees(
     monkeypatch.setattr(ladder, "generate", fake_generate)
     row = A.inspect_file(src, tools, tmp_path)
     assert row["lossless_size"] is None and row["headroom"] is None
+
+
+def test_inspect_skips_the_slow_zopfli_rung(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("audit", "lossless", {"png"})
+    real, labels = ladder.generate, []
+
+    def spy(rung, **kw):
+        labels.append(rung.label)
+        return real(rung, **kw)
+    monkeypatch.setattr(ladder, "generate", spy)
+    A.inspect_file(factory.logo(), tools, tmp_path)
+    assert labels == ["oxipng"]

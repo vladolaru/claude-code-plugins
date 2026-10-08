@@ -282,6 +282,8 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         ref_img.save(folder / "reference.png")
         pix.save(folder / "pixels.png")
         flatten(pix, "white").save(folder / "pixels_flat.png")
+        if facts.mode in ("L", "LA"):
+            flatten(pix, "white").convert("L").save(folder / "pixels_gray.png")
         flatten(pix, "white").save(folder / "pixels.ppm")
         if facts.device_profile:
             mean, peak = srgb_shift(src)
@@ -306,6 +308,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     if skipped:
         notes.append(f"skipped {len(skipped)} rung(s), tools waived: {', '.join(missing)}")
     inputs = {"source": src, "pixels": folder / "pixels.png", "pixels_flat": folder / "pixels_flat.png",
+              "pixels_gray": folder / "pixels_gray.png",
               "pixels_ppm": folder / "pixels.ppm", "ref_is_source": ref_hash == src_hash}
     cands = []
     for rung in (r for r in rungs if _available(r, tools)):

@@ -250,7 +250,7 @@ def test_lossy_jpeg_adds_jpegli_from_the_flattened_pixels():
 
 
 def test_cjpegli_encodes_a_progressive_jpeg(factory, toolset, tmp_path):
-    tools = toolset("recompress", "high", {"jpeg"})
+    tools = toolset("recompress", "high", {"jpeg"}, waive=())
     src = factory.photo()
     flat = tmp_path / "pixels_flat.png"
     I.flatten(I.display_pixels(src), "white").save(flat)
@@ -258,3 +258,9 @@ def test_cjpegli_encodes_a_progressive_jpeg(factory, toolset, tmp_path):
     out = L.generate(rung, inputs={"pixels_flat": flat}, out_dir=tmp_path, tools=tools)
     got = I.read_facts(out)
     assert got.format == "jpeg" and got.progressive and (got.width, got.height) == (160, 120)
+
+
+def test_gray_sources_reach_jpegli_as_one_channel():
+    for mode, expected in (("L", "pixels_gray"), ("LA", "pixels_gray"), ("RGB", "pixels_flat")):
+        jpegli = [r for r in L.plan(facts(mode=mode), profile="high").rungs if r.tool == "cjpegli"]
+        assert jpegli and all(r.input == expected for r in jpegli), mode

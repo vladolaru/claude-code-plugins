@@ -73,7 +73,7 @@ OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install 
          "cjpeg": "build mozjpeg: https://github.com/mozilla/mozjpeg",
          "cjpegli": "build jpegli (not packaged by Homebrew or apt; needs git, cmake and a C++ compiler): "
                     "git clone --recursive https://github.com/google/jpegli && cd jpegli && "
-                    "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && "
+                    "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF && "
                     "cmake --build build --target cjpegli, then put build/tools/cjpegli on PATH",
          "oxipng": "cargo install oxipng", "chrome": "install Google Chrome or Chromium"}
 
@@ -91,6 +91,10 @@ MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
 FRESHER_ON_BREW = frozenset({"oxipng", "pngquant", "gifsicle"})
 # svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
 MIN_MAJOR = {"svgo": 4}
+# Tools that print no version are run with these arguments at resolve time, so a binary that cannot start
+# is reported missing instead of failing every rung later. A cjpegli built with shared libraries aborts
+# (exit -6, "Library not loaded") once its build folder is gone.
+RUN_CHECK = {"cjpegli": ["-h"]}
 
 TARGET_ENCODER = {"jpeg": "cjpeg", "webp": "cwebp", "avif": "avifenc", "png": "oxipng"}
 ALL_FORMATS = ("jpeg", "png", "gif", "svg")
@@ -129,7 +133,10 @@ class Tool:
         invalidates cached results."""
         if self.version and self.version != "unknown" and not self.version.startswith("unreadable"):
             return self.version
-        st = os.stat(self.path)
+        try:
+            st = os.stat(self.path)
+        except OSError:  # gone since it was resolved: its own run fails and says so, not the input file
+            return f"{self.version or 'unknown'}:missing"
         return f"{self.version or 'unknown'}:{st.st_size}:{st.st_mtime_ns}"
 
 
@@ -203,7 +210,7 @@ def resolve(name: str, env: Env | None = None) -> Tool:
             if not (loc.is_file() and os.access(loc, os.X_OK)):
                 continue
             version = probe_version(loc, name)
-            why = _unusable(name, version)
+            why = _unusable(name, version) or _does_not_run(loc, name)
             if why:
                 rejected = f"{loc}: {why}"
                 continue
@@ -219,6 +226,22 @@ def _unusable(name: str, version: str) -> str:
         major = re.match(r"\D*(\d+)\.", version)
         if not major or int(major.group(1)) < MIN_MAJOR[name]:
             return f"{name} {MIN_MAJOR[name]} or newer required ({version})"
+    return ""
+
+
+def _does_not_run(path: Path, name: str) -> str:
+    """Why a RUN_CHECK tool cannot be used, or empty when it starts and exits 0."""
+    args = RUN_CHECK.get(name)
+    if args is None:
+        return ""
+    try:
+        proc = subprocess.run([str(path), *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"does not run ({error.__class__.__name__})"
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()
+        return f"does not run (exit {proc.returncode}{': ' + tail[0][:120] if tail else ''})"
     return ""
 
 

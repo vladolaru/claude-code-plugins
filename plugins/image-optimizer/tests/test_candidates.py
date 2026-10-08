@@ -17,6 +17,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
 
 
 def opts(out, profile="lossless", **kw):
+    kw.setdefault("waived", ("cjpegli",))  # the toolset fixture waives jpegli too (conftest.JPEGLI_WAIVER)
     return C.Options(profile=profile, out=out, gates=G.gates_for(profile), **kw)
 
 
@@ -386,8 +387,8 @@ def _without(tools, name):
 def test_the_waived_note_names_only_tools_the_human_waived(factory, toolset, tmp_path):
     tools = _without(toolset("recompress", "high", {"jpeg"}), "guetzli")
     src = factory.photo().resolve()
-    [r] = C.run([src], opts(tmp_path / "out", "high", waived=("guetzli",)), tools, log=quiet)
-    assert any("tools waived: guetzli" in n for n in r["notes"])
+    [r] = C.run([src], opts(tmp_path / "out", "high", waived=("guetzli", "cjpegli")), tools, log=quiet)
+    assert any("tools waived:" in n and "guetzli" in n for n in r["notes"])
     assert not any(c["label"].startswith("guetzli") for c in r["candidates"])
 
 
@@ -572,3 +573,11 @@ def test_the_cache_key_changes_when_a_versionless_tool_is_replaced(tmp_path):
     before = C._key("src", "ref", opts(tmp_path / "o"), rung, tools)
     exe.write_bytes(b"a newer build")
     assert C._key("src", "ref", opts(tmp_path / "o"), rung, tools) != before
+
+
+def test_a_gray_source_gets_a_one_channel_pixels_file(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src = factory.photo(gray=True).resolve()
+    C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
+    folder = C.load_records(tmp_path / "out")[0][0]
+    assert Image.open(folder / "pixels_gray.png").mode == "L"
