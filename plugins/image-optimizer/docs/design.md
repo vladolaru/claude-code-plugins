@@ -44,7 +44,23 @@ Missing tools stop the work instead of degrading it silently. Only a tool the hu
 
 - Only mozjpeg `jpegtran` and `cjpeg` are used. A libjpeg-turbo build made files 1.5% to 4% larger.
 - svgo 4 or newer is required. svgo 3's defaults drop `viewBox` and `<title>`, which the rendering check cannot see.
+- Homebrew's tools come before the copies bundled with ImageOptim.app, which date from 2023 and update only with ImageOptim; `doctor` suggests the Homebrew install when only a bundled copy is found. jpegoptim is the exception: the bundled build is linked to mozjpeg, Homebrew's to libjpeg-turbo.
 - The scripts run under plain `python3`, not `python3 -I`, because Pillow may live in user site-packages.
+
+## Encoder choice (benchmark, 2026-10-08)
+
+Measured with imgopt's own metrics and floors on WooCommerce files at `689f232d2`: the 31 photos in `pattern-placeholders/` (1.66 MB, the #69539 set and its siblings) and the 13 PNGs of #69553 and #69556. For each file the smallest passing candidate per encoder family counts.
+
+| JPEG ladder | `high` | `medium` |
+|---|---|---|
+| jpegoptim + guetzli (before) | -34.6% | -61.2% |
+| jpegoptim + jpegli | -34.1% | -61.8% |
+| jpegoptim + jpegli + guetzli (now) | -36.3% | -61.9% |
+| mozjpeg `cjpeg` + jpegli + guetzli (no jpegoptim) | -36.0% | -61.7% |
+
+- **jpegli joins guetzli rather than replacing it.** Under `high` it was the smallest passing encoder on 13 of 31 photos, in about 30 ms per encode against guetzli's 19 s, but each wins photos the other loses. guetzli also refused 4 photos outright (non-YUV input), and its upstream is archived.
+- **jpegoptim stays.** Without it the full ladder is 0.2 to 0.3 points larger (0.8 points without jpegli), and under `medium` it is the smallest encoder on 25 of 31 photos. That keeps the one reason to look in the ImageOptim bundle first.
+- **PNG:** oxipng 10.2.1 and 9.0.0 give the same sizes (131,285 against 131,306 B). Zopfli mode saves 1.8% more on these small PNGs, but on 5 to 7 megapixel screenshots it took 110 to 196 s for 0.4% or less, so it runs only up to 2 megapixels. As a post-pass on palette candidates it saved 0.7% at 15× the time, so the post-pass stays plain.
 
 ## Acceptance evidence (2026-10-08)
 
@@ -58,3 +74,6 @@ Missing tools stop the work instead of degrading it silently. Only a tool the hu
 - **Linux** is untested. The apt package names in `doctor` are best effort, and the scripts have only run on macOS.
 - **16-bit images** are refused per file: Pillow clips 16-bit gray at 255 and reads 16-bit colour as 8-bit, so counts and comparisons would mislead.
 - **Banding thresholds** for JPEG, WebP and AVIF output are not calibrated (see above).
+- **jpegli has no package.** Lossy JPEG jobs stop until `cjpegli` is built from source or waived; `doctor` prints the steps.
+- **Homebrew's jpegoptim** (linked to libjpeg-turbo) was not measured against the bundled one; without ImageOptim it is what runs.
+- **The `medium` JPEG ladder stops at jpegoptim `-m40`.** Under `medium`, 15 of 31 photos landed on that last setting; going down to `-m20` would save about 0.8 points more.

@@ -62,7 +62,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build build --target cjpegli    # then copy build/tools/cjpegli somewhere on PATH
 ```
 
-ImageOptim.app, if installed, supplies native builds of jpegoptim, the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`).
+ImageOptim.app, if installed, is used as a fallback for the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle (its copies date from 2023, so `doctor` suggests the Homebrew ones), and first for jpegoptim, because its jpegoptim is linked to mozjpeg and Homebrew's is not. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`).
 
 Tested on macOS only. On Linux the install lines `doctor` prints are best effort, and no run has been verified. Inside the Codex sandbox every command works except `sheet --browser`, because headless Chrome cannot start there; open the comparison page instead.
 
