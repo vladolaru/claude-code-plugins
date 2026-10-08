@@ -11,6 +11,7 @@ from . import candidates as C
 from . import gates as G
 from . import tools as T
 from .formats import OUTPUT_FORMATS, expand_inputs, format_of
+from .ladder import UsageError
 
 SCRIPT = Path(__file__).resolve().parents[1] / "imgopt.py"
 PROFILE_NAMES = ("lossless", "high", "medium")
@@ -40,6 +41,9 @@ def cmd_candidates(args) -> int:
     inputs = expand_inputs(args.paths)
     if args.ref and len(inputs) != 1:
         raise ValueError("--ref works with exactly one input file")
+    if args.ref and any(format_of(p) == "svg" for p in inputs):
+        raise UsageError("--ref does not apply to SVG: the rendering check compares svgo's output "
+                         "with the source itself")
     waive = split_csv(args.allow_missing)
     chk = T.ensure(_job_for(args), args.profile, {format_of(p) for p in inputs}, args.format, waive)
     gates = G.gates_for(args.profile, ssim=args.ssim, ss2=args.ss2, band=args.band)

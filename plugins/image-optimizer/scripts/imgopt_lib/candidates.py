@@ -25,11 +25,15 @@ from . import gates as G
 from . import ladder, metrics
 from .formats import EXT_BY_FORMAT, format_of, subdir_name
 from .imaging import ImagingError, display_pixels, flatten, read_facts, srgb_shift
+from .tools import describe
 
 SCHEMA = 1
 CACHE_VERSION = 1
 UNCALIBRATED = ("webp", "avif")
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
+# Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
+RASTER_VERDICT_TOOLS = frozenset({"pillow", *METRIC_TOOLS})
+SVG_VERDICT_TOOLS = frozenset({"pillow", "rsvg-convert"})
 
 
 @dataclass(frozen=True)
@@ -75,8 +79,13 @@ def _previous(path: Path) -> dict:
         return {}
 
 
+def keyed_tools(rung: ladder.Rung) -> list[str]:
+    """Every tool whose version can change this rung's cached result: the encoder and the verdict tools."""
+    return sorted(rung.tools | (SVG_VERDICT_TOOLS if rung == ladder.SVG_RUNG else RASTER_VERDICT_TOOLS))
+
+
 def _key(src_hash: str, ref_hash: str, opts: Options, rung: ladder.Rung, tools: dict) -> str:
-    names = sorted(rung.tools | set(METRIC_TOOLS))
+    names = keyed_tools(rung)
     payload = {"v": CACHE_VERSION, "src": src_hash, "ref": ref_hash, "resize": opts.resize,
                "format": opts.out_format, "rung": [rung.label, rung.tool, list(rung.args), rung.input,
                                                    rung.post_oxipng, rung.post_jpegtran],
@@ -90,7 +99,7 @@ def _available(rung: ladder.Rung, tools: dict) -> bool:
 
 def _reusable(old: dict | None, folder: Path) -> bool:
     """A cached candidate is reused when its file is still there; a recorded error is retried."""
-    return bool(old) and "error" not in old and (not old.get("file") or (folder / old["file"]).is_file())
+    return bool(old) and "error" not in old and (folder / old["file"]).is_file()
 
 
 def _perfect(rec: dict) -> dict:
@@ -117,9 +126,12 @@ def _run_rung(rung, key, inputs, folder, facts, ref_img, tools, can_measure) -> 
             rec["discarded"] = why
             return rec
     if facts.format == "gif":
-        if metrics.frames_identical(inputs["source"], out) and inputs["ref_is_source"]:
-            return _perfect(rec)
-        rec["discarded"] = "gifsicle changed the frames"
+        if not metrics.frames_identical(inputs["source"], out):
+            rec["discarded"] = "gifsicle changed the frames"
+        elif not inputs["ref_is_source"]:
+            rec["discarded"] = "the reference is not the source; GIF supports only lossless identity"
+        else:
+            _perfect(rec)
         return rec
     try:
         cand = display_pixels(out)
@@ -222,7 +234,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
         cands.append(rec)
     chosen = G.pick(cands)
-    in_place = opts.out_format == "keep" and not opts.resize
+    in_place = target_fmt == fmt and not opts.resize
     size = src.stat().st_size
     verdict, why = G.verdict(size, chosen, in_place=in_place)
     target = src if in_place else src.with_suffix(EXT_BY_FORMAT[target_fmt])
@@ -271,17 +283,14 @@ def print_record(record: dict, log=print) -> None:
     log(f"   pick: {pick_text}   verdict: {record['verdict']} ({record['verdict_reason']})")
 
 
-def summarize(records: list[dict], out: Path, script: Path, log=print) -> None:
+def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=print) -> None:
     applied = [r for r in records if r["verdict"] == "apply"]
     before = sum(r["source"]["size"] for r in applied)
     after = sum(pick_of(r)["size"] for r in applied)
     saved = f" (-{(before - after) / before:.0%})" if before else ""
     log(f"\n{len(records)} file(s): {len(applied)} to apply, {len(records) - len(applied)} untouched. "
         f"Apply total {kb(before)} -> {kb(after)}{saved}.")
-    tools = {}
-    for r in records:
-        tools.update(r["tools"])
-    log("tools: " + "; ".join(f"{n} {v['version']} ({v['path']})" for n, v in sorted(tools.items())))
+    log(describe(tools))
     if any(r["uncalibrated"] for r in records):
         log("UNCALIBRATED FORMAT: WebP/AVIF output was never calibrated against these gates; "
             "every sheet tile is required viewing.")
@@ -310,5 +319,5 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
             continue
         print_record(record, log)
         records.append(record)
-    summarize(records, opts.out, script or Path("imgopt.py"), log)
+    summarize(records, opts.out, script or Path("imgopt.py"), tools, log)
     return records

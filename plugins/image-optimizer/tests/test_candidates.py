@@ -8,6 +8,7 @@ from PIL import Image
 from imgopt_lib import candidates as C
 from imgopt_lib import gates as G
 from imgopt_lib import ladder
+from imgopt_lib.tools import Tool
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
 
@@ -81,6 +82,100 @@ def test_cache_reuses_unchanged_candidates_and_invalidates_on_tool_version(facto
         C.run([src], opts(tmp_path / "out"), bumped, log=quiet)
 
 
+def counting_generate(monkeypatch):
+    """Wrap ladder.generate; the returned list records the label of every rung actually encoded."""
+    real, calls = ladder.generate, []
+
+    def spy(rung, **kw):
+        calls.append(rung.label)
+        return real(rung, **kw)
+
+    monkeypatch.setattr(ladder, "generate", spy)
+    return calls
+
+
+def with_version(tools, name, version):
+    bumped = dict(tools)
+    bumped[name] = Tool(name, tools[name].path, version, tools[name].source)
+    return bumped
+
+
+def test_cache_invalidates_when_pillow_changes(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo().resolve()
+    C.run([src], opts(tmp_path / "out"), tools, log=quiet)
+    calls = counting_generate(monkeypatch)
+    C.run([src], opts(tmp_path / "out"), tools, log=quiet)
+    assert calls == []
+    C.run([src], opts(tmp_path / "out"), with_version(tools, "pillow", "99.0"), log=quiet)
+    assert calls == ["oxipng"]
+
+
+def test_cache_invalidates_when_rsvg_convert_changes(tmp_path, toolset, monkeypatch):
+    tools = toolset("recompress", "lossless", {"svg"})
+    src = tmp_path / "images" / "dot.svg"
+    src.parent.mkdir()
+    src.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">'
+                   '<!-- a comment --><circle cx="10" cy="10" r="8" fill="#c8285a"/></svg>')
+    C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    calls = counting_generate(monkeypatch)
+    C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    assert calls == []
+    C.run([src.resolve()], opts(tmp_path / "out"), with_version(tools, "rsvg-convert", "99.0"), log=quiet)
+    assert calls == ["svgo"]
+
+
+def test_cache_regenerates_a_candidate_whose_file_was_deleted(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo().resolve()
+    C.run([src], opts(tmp_path / "out"), tools, log=quiet)
+    folder = C.load_records(tmp_path / "out")[0][0]
+    (folder / "oxipng.png").unlink()
+    calls = counting_generate(monkeypatch)
+    [r] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
+    assert calls == ["oxipng"]
+    assert (folder / "oxipng.png").is_file() and C.pick_of(r)["file"] == "oxipng.png"
+
+
+def test_same_format_conversion_of_an_optimized_png_is_left_untouched(factory, toolset, tmp_path):
+    tools = toolset("convert", "lossless", {"png"}, "png")
+    src = factory.logo().resolve()
+    subprocess.run([tools["oxipng"].path, "-o", "max", "--strip", "safe", "-q", str(src)], check=True)
+    [r] = C.run([src], opts(tmp_path / "out", out_format="png"), tools, log=quiet)
+    assert r["verdict"] == "untouched", r["verdict_reason"]
+    assert r["target"] == str(src)
+
+
+def test_gif_under_ref_names_the_real_reason(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"gif"})
+    frames = [Image.new("RGB", (40, 40), c) for c in ((250, 0, 0), (0, 250, 0), (0, 0, 250))]
+    src, ref = factory.root / "a.gif", factory.root / "b.gif"
+    for path, ordered in ((src, frames), (ref, frames[::-1])):
+        ordered[0].save(path, save_all=True, append_images=ordered[1:], duration=100, loop=0)
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", ref=ref.resolve()), tools, log=quiet)
+    [gif] = r["candidates"]
+    assert "reference is not the source" in gif["reason"]
+
+
+def test_ref_with_an_svg_input_is_a_usage_error(factory, tmp_path):
+    svg = factory.root / "dot.svg"
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>')
+    ref = factory.logo()
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(svg), "--ref", str(ref),
+                           "--out", str(tmp_path / "o")], capture_output=True, text=True)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "--ref" in proc.stderr and "SVG" in proc.stderr
+    assert not (tmp_path / "o").exists()
+
+
+def test_summary_names_the_tools_even_when_every_input_was_skipped(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    bad = factory.photo(name="bad.png", icc=b"not an ICC profile")
+    lines = []
+    assert C.run([bad.resolve()], opts(tmp_path / "out"), tools, log=lines.append) == []
+    assert any(line.startswith("tools: ") and "oxipng" in line for line in lines)
+
+
 def test_ref_measures_lossless_candidates_against_the_baseline(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"jpeg"})
     original = factory.photo(name="orig.jpg", quality=95)
@@ -126,6 +221,7 @@ def test_unconvertible_colour_profile_skips_that_file_and_continues(factory, too
     assert any(f"== {bad.resolve()}: skipped:" in line for line in lines)
     assert [r["source"]["path"] for _, r in C.load_records(tmp_path / "out")] == [str(good.resolve())]
     assert not list((tmp_path / "out").glob("*/metrics.json.tmp"))
+    assert len(list((tmp_path / "out").iterdir())) == 1, "the skipped source left a folder behind"
 
 
 def test_cli_exits_1_when_a_file_was_skipped(factory, tmp_path):
