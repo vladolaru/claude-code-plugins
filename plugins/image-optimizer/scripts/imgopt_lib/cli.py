@@ -9,6 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from . import applying as AP
 from . import audit as A
 from . import candidates as C
 from . import gates as G
@@ -108,6 +109,22 @@ def cmd_sheet(args) -> int:
     return 1 if failed else 0
 
 
+def cmd_apply(args) -> int:
+    out = Path(args.out).resolve()
+    only = split_csv(args.only)
+    needed = ["pillow"]
+    if AP.needs_metrics(out, only):  # also refuses an `out` that is not a folder of candidates results
+        needed += ["ffmpeg", "ssimulacra2"]
+    if AP.needs_rsvg(out, only):
+        needed.append("rsvg-convert")
+    chk = T.check(T.Requirements(tuple(needed), (), ()))
+    if chk.blocked:
+        raise T.ToolingError(T.report(chk, job="apply", profile="-"))
+    print(T.describe(chk.tools))
+    return AP.apply(out, tools=chk.tools, only=only, approved=args.approved,
+                    dest=Path(args.dest).resolve() if args.dest else None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
@@ -141,6 +158,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--alt", help="candidate label to show as a third pane, for example jpegoptim-m70")
     s.add_argument("--browser", action="store_true", help="also screenshot the page at 2x with headless Chrome")
     s.set_defaults(func=cmd_sheet)
+    a = sub.add_parser("apply", help="write approved picks and re-verify them")
+    a.add_argument("out")
+    a.add_argument("--only", help="comma list of file names or paths")
+    a.add_argument("--approved", action="store_true", help="the human approved the lossy picks on the page")
+    a.add_argument("--dest", help="folder for prepare/convert outputs instead of next to the source")
+    a.set_defaults(func=cmd_apply)
     return parser
 
 
