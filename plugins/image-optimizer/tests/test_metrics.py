@@ -1,8 +1,11 @@
+import stat
+
 import pytest
 from PIL import Image
 
 from imgopt_lib import imaging as I
 from imgopt_lib import metrics as M
+from imgopt_lib.tools import Tool
 
 
 def numpy_band_score(ref, new):
@@ -108,3 +111,46 @@ def test_frames_identical_compares_every_frame(tmp_path):
     red.save(other, save_all=True, append_images=[red], duration=50)
     assert M.frames_identical(one, same)
     assert not M.frames_identical(one, other)
+
+
+def test_worst_background_decides_ssim(toolset, tmp_path):
+    """White pixels at changing alpha are invisible on white but not on dark."""
+    tools = toolset("compare")
+    size = (64, 64)
+    ref = Image.new("RGBA", size, (255, 255, 255, 255))
+    new = Image.new("RGBA", size, (255, 255, 255, 255))
+    for x in range(0, 64, 8):
+        for img, alpha in ((ref, 0), (new, 100)):
+            img.paste((255, 255, 255, alpha), (x, 0, x + 4, 64))
+    s = M.measure(ref, new, tools, tmp_path / "w")
+    work = tmp_path / "check"
+    work.mkdir()
+    dark = [work / "ref.png", work / "new.png"]
+    I.flatten(ref, "dark").save(dark[0])
+    I.flatten(new, "dark").save(dark[1])
+    assert s.ssim_white == pytest.approx(1.0)
+    assert s.ssim < s.ssim_white
+    assert s.ssim == pytest.approx(M.ssim_gray(tools["ffmpeg"].path, *dark))
+
+
+def _fake_butteraugli(tmp_path, body):
+    exe = tmp_path / "fake-butteraugli"
+    exe.write_text("#!/bin/sh\n" + body)
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    return Tool("butteraugli_main", str(exe), "fake", "test")
+
+
+def test_butteraugli_is_none_unless_every_background_has_a_value(factory, toolset, tmp_path):
+    tools = dict(toolset("compare"))
+    logo = I.display_pixels(factory.logo())
+    other = I.display_pixels(factory.logo(name="l2.png"))
+    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, 'case "$2" in *dark*) exit 1;; esac\necho 1.5\n')
+    assert M.measure(logo, other, tools, tmp_path / "w1").butteraugli is None
+    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, "echo 1.5\n")
+    assert M.measure(logo, other, tools, tmp_path / "w2").butteraugli == 1.5
+
+
+def test_a_tool_that_cannot_run_raises_metric_error(tmp_path):
+    missing = str(tmp_path / "no-such-ffmpeg")
+    with pytest.raises(M.MetricError, match="no-such-ffmpeg"):
+        M.ssim_gray(missing, tmp_path / "a.png", tmp_path / "b.png")

@@ -42,7 +42,10 @@ class Scores:
 
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=1800)
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MetricError(f"{Path(argv[0]).name} could not run ({exc.__class__.__name__}: {exc})") from exc
 
 
 def ssim_gray(ffmpeg: str, a: Path, b: Path) -> float:
@@ -63,7 +66,11 @@ def ssimulacra2(exe: str, ref: Path, new: Path) -> float:
 
 
 def butteraugli(exe: str, ref: Path, new: Path) -> float | None:
-    proc = _run([exe, str(ref), str(new)])
+    """The score, or None when butteraugli cannot run or prints no number (it is optional)."""
+    try:
+        proc = _run([exe, str(ref), str(new)])
+    except MetricError:
+        return None
     match = FLOAT_RE.search(proc.stdout)
     return float(match.group(0)) if proc.returncode == 0 and match else None
 
@@ -123,6 +130,7 @@ def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path) -> S
     ss2_exe = tools["ssimulacra2"].path
     ba = tools.get("butteraugli_main")
     ssims, ss2s, bands, bas = {}, [], [], []
+    ba_failed = False
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
         for bg in backgrounds(alpha_used(ref) or alpha_used(new)):
             r, n = flatten(ref, bg), flatten(new, bg)
@@ -134,9 +142,11 @@ def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path) -> S
             bands.append(band_score(r, n))
             if ba is not None and ba.ok:
                 value = butteraugli(ba.path, rp, np_)
-                if value is not None:
+                if value is None:
+                    ba_failed = True
+                else:
                     bas.append(value)
-    return Scores(min(ssims.values()), ssims["white"], min(ss2s), max(bands), max(bas) if bas else None)
+    return Scores(min(ssims.values()), ssims["white"], min(ss2s), max(bands), max(bas) if bas and not ba_failed else None)
 
 
 def metadata_preserved(src: Facts, out: Facts) -> tuple[bool, str]:
