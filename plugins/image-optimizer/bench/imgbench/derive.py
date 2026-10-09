@@ -7,8 +7,8 @@ deterministic, so building twice gives identical bytes."""
 from __future__ import annotations
 
 import io
-import subprocess
 import re
+import subprocess
 import unicodedata
 from pathlib import Path
 from typing import Callable

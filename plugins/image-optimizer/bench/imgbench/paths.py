@@ -1,3 +1,6 @@
+"""Where imgbench keeps its files: everything it makes lives under the imgopt cache root's `bench/` folder, never
+in the repository; only the source pins (`sources.json`) are committed, next to this package."""
+
 from __future__ import annotations
 
 from pathlib import Path
