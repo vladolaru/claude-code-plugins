@@ -1,7 +1,8 @@
 """`imgopt apply`: write approved picks, then re-measure what was written.
 
-Lossy picks are refused unless --approved is passed, which the skill allows
-only after the human approved on the comparison page. A source that changed
+Lossy picks are written only when named in --approve, which the page builds
+from the human's ticks; with none named they are refused, and any left
+unnamed are left as they were. A source that changed
 since `candidates` ran is refused, and so is a selection where two picks
 would land on one path or a pick would replace an existing file other than
 its own source (both before anything is written). Each pick is staged beside
@@ -149,7 +150,7 @@ def _refuse_clashes(rows: list[tuple[Path, dict]], dest: Path | None) -> None:
                          "pass --dest <folder> or remove it first")
 
 
-def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path | None = None, log=print) -> int:
+def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = None, log=print) -> int:
     selected, unmatched = _selected(Path(out), only)
     for name in unmatched:
         log(f"No result in {out} for --only {name!r}; use a file name or path as `candidates` recorded it.")
@@ -160,12 +161,19 @@ def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path
         return 1 if unmatched else 0
     _refuse_clashes(rows, dest)
     lossy = [r for _, r in rows if needs_tiles(r)]
-    if lossy and not approved:
+    unknown = [n for n in approve if not any(_matches(r, n) for r in lossy)]
+    for name in unknown:
+        log(f"--approve {name!r} matches no lossy pick of the last run; use a file name or path from the page.")
+    if lossy and not approve:
         log("REFUSED: these picks are lossy and need the human's approval on the comparison page first:")
         for r in lossy:
             log(f"  {r['source']['path']}  ({pick_of(r)['label']})")
-        log("Show the page (imgopt sheet), get an explicit yes, then re-run with --approved.")
+        log("Show the page (imgopt sheet); it gives the apply command with --approve for the files the human ticks.")
         return 1
+    held = [r for r in lossy if not any(_matches(r, n) for n in approve)]
+    for r in held:
+        log(f"  not approved, left as it was: {r['source']['path']}")
+    rows = [(f, r) for f, r in rows if not any(r is h for h in held)]
     stale = [r for _, r in rows if not Path(r["source"]["path"]).is_file()
              or sha256(Path(r["source"]["path"])) != r["source"]["sha256"]]
     if stale:
@@ -173,7 +181,7 @@ def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path
         for r in stale:
             log(f"  {r['source']['path']}")
         return 1
-    failures = len(unmatched)
+    failures = len(unmatched) + len(unknown)
     written = before = after = 0
     for folder, record in rows:
         chosen = pick_of(record)

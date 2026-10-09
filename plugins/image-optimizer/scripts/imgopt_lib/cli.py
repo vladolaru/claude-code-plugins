@@ -109,11 +109,18 @@ def cmd_inspect(args) -> int:
     return 1 if any(r["error"] for r in rows) else 0
 
 
+def _print_ignored(out: Path) -> None:
+    """Name the record folders in ``out`` that are not part of the last run, so nobody wonders where they went."""
+    for entry in C.stale_records(out):
+        print(f"  ignored: {entry}")
+
+
 def cmd_sheet(args) -> int:
     chk = T.check(T.Requirements(("pillow", "chrome") if args.browser else ("pillow",), (), ()))
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="sheet", profile="-"))
     out = Path(args.out).resolve()
+    _print_ignored(out)
     problems: list[str] = []
     tiles, page = S.build(out, alt=args.alt, problems=problems)
     records = [r for _, r in C.load_records(out)]
@@ -139,7 +146,8 @@ def cmd_sheet(args) -> int:
             failed = True
     print(T.describe(chk.tools))
     if not failed and lossy:
-        print(f"Next: after the human approves on the page, python3 {SCRIPT} apply {out} --approved")
+        print(f"Next: after the human approves on the page, python3 {SCRIPT} apply {out} "
+              "--approve <comma list of the files the human approved>")
     elif not failed and any(r["verdict"] == "apply" for r in records):
         print(f"Next: python3 {SCRIPT} apply {out}   (all picks are lossless; no approval gate)")
     return 1 if failed else 0
@@ -147,6 +155,7 @@ def cmd_sheet(args) -> int:
 
 def cmd_apply(args) -> int:
     out = Path(args.out).resolve()
+    _print_ignored(out)
     only = split_csv(args.only)
     needed = ["pillow"]
     if AP.needs_metrics(out, only):  # also refuses an `out` that is not a folder of candidates results
@@ -157,7 +166,7 @@ def cmd_apply(args) -> int:
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="apply", profile="-"))
     print(T.describe(chk.tools))
-    return AP.apply(out, tools=chk.tools, only=only, approved=args.approved,
+    return AP.apply(out, tools=chk.tools, only=only, approve=split_csv(args.approve),
                     dest=Path(args.dest).resolve() if args.dest else None)
 
 
@@ -213,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("apply", help="write approved picks and re-verify them")
     a.add_argument("out")
     a.add_argument("--only", help="comma list of file names or paths")
-    a.add_argument("--approved", action="store_true", help="the human approved the lossy picks on the page")
+    a.add_argument("--approve", help="comma list of lossy picks the human approved on the page (file names or paths)")
     a.add_argument("--dest", help="folder for prepare/convert outputs instead of next to the source")
     a.set_defaults(func=cmd_apply)
     m = sub.add_parser("compare", help="measure a pair and print a reviewer-runnable check")

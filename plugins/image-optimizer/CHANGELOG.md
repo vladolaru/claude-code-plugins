@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Under `high` and `medium`, a lossy pick's Evidence SSIM (what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
 - Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.
 - Folder inputs skip git-ignored files, vendored folders and imgopt working folders, and say what they skipped; a file the job cannot serve (a GIF in a resize) is skipped with its own line instead of stopping the batch.
+- `sheet` and `apply` act only on the last `candidates` run in a working folder and name the records they ignore, an interrupted run resumes from the last finished candidate, and `apply --approve a.jpg,b.png` writes only the lossy picks named.
 
 ### Fixed
 

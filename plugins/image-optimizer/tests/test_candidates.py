@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -320,7 +321,7 @@ def _refused_without_approval(out, src):
     before = src.read_bytes()
     logs = []
     assert AP.apply(out, tools={}, log=logs.append) == 1
-    assert "--approved" in "\n".join(logs)
+    assert "--approve" in "\n".join(logs)
     assert src.read_bytes() == before
 
 
@@ -705,3 +706,64 @@ def test_print_record_names_the_metadata_the_pick_removes():
     lines = []
     C.print_record(record, log=lines.append)
     assert any("pick removes metadata: exif" in line for line in lines)
+
+
+def test_records_from_an_earlier_run_are_ignored(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png", "jpeg"})
+    a, b = factory.logo(), factory.photo()
+    out = tmp_path / "out"
+    C.run([a.resolve(), b.resolve()], opts(out), tools, log=quiet)
+    C.run([a.resolve()], opts(out), tools, log=quiet)
+    assert [Path(r["source"]["path"]).name for _, r in C.load_records(out)] == ["logo.png"]
+    assert any("photo.jpg" in s and "not in the last run" in s for s in C.stale_records(out))
+
+
+def test_records_made_with_other_settings_are_ignored(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.logo().resolve()
+    out = tmp_path / "out"
+    C.run([src], opts(out, "high"), tools, log=quiet)
+    (folder, record), = C.load_records(out)
+    record["profile"] = "medium"
+    (folder / "metrics.json").write_text(json.dumps(record))
+    assert C.load_records(out) == []
+    assert any("other settings" in s for s in C.stale_records(out))
+
+
+def test_an_interrupted_record_is_reused_and_not_applied(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo()
+    out = tmp_path / "out"
+    calls = {"n": 0}
+    real = ladder.generate
+
+    def die_on_second(rung, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt
+        return real(rung, **kw)
+
+    monkeypatch.setattr(ladder, "generate", die_on_second)
+    with pytest.raises(KeyboardInterrupt):
+        C.run([src.resolve()], opts(out), tools, log=quiet)
+    [meta] = list(out.glob("*/metrics.json"))
+    partial = json.loads(meta.read_text())
+    assert partial["complete"] is False and len(partial["candidates"]) == 1
+    assert C.load_records(out) == []
+    assert any("interrupted" in s for s in C.stale_records(out))
+    monkeypatch.setattr(ladder, "generate", real)
+    first_key = partial["candidates"][0]["key"]
+    [r] = C.run([src.resolve()], opts(out), tools, log=quiet)
+    assert r["complete"] and r["candidates"][0]["key"] == first_key
+    assert len(C.load_records(out)) == 1 and C.stale_records(out) == []
+
+
+@pytest.mark.parametrize("command", ["sheet", "apply"])
+def test_the_cli_names_the_folders_it_ignores(factory, toolset, tmp_path, command):
+    tools = toolset("recompress", "lossless", {"png", "jpeg"})
+    a, b = factory.logo(), factory.photo()
+    out = tmp_path / "out"
+    C.run([a.resolve(), b.resolve()], opts(out), tools, log=quiet)
+    C.run([a.resolve()], opts(out), tools, log=quiet)
+    proc = subprocess.run([sys.executable, str(SCRIPT), command, str(out)], capture_output=True, text=True)
+    assert any(l.startswith("  ignored:") and "photo.jpg" in l for l in proc.stdout.splitlines()), proc.stdout

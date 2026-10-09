@@ -5,7 +5,12 @@ reference (reference.png, what the pick is measured against), the pixel
 inputs, the candidates and metrics.json. metrics.json is both the cache
 (each candidate keyed by input and reference hashes, settings and tool
 versions, so a re-run only redoes what changed) and the record that `sheet`
-and `apply` read. Schema: see SCHEMA and the plan's Task 7 interface block.
+and `apply` read. It is rewritten after every candidate with ``complete``
+false, so an interrupted run resumes from its last finished candidate and
+is not applied; the finished record says ``complete`` true. run.json names
+the inputs and settings of the last run: `load_records` keeps only the
+complete records that match it, and `stale_records` says why it left each
+other folder out. Schema: see SCHEMA.
 
 A source that cannot be read or whose colour profile cannot be converted
 (imaging.READ_FAILURES: also 16-bit files, content that does not match its
@@ -37,6 +42,7 @@ SCHEMA = 1
 # Bump when a cached record would be wrong or lack a key. 5: every raster rung records metadata_removed;
 # 3: svgo keeps ids, roles and classes; 2: a rung's kind follows its input.
 CACHE_VERSION = 5
+RUN_FILE = "run.json"  # the last `candidates` run in this --out: which inputs, which settings
 UNCALIBRATED = ("webp", "avif")
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
@@ -79,11 +85,50 @@ def pick_of(record: dict) -> dict | None:
     return next((c for c in record["candidates"] if c.get("file") == record.get("pick")), None)
 
 
-def load_records(out: Path) -> list[tuple[Path, dict]]:
-    found = []
+def write_run(out: Path, inputs: list[Path], opts: Options) -> None:
+    """Record which inputs and settings this run has; `load_records` keeps only what matches it."""
+    run = {"schema": SCHEMA, "inputs": sorted(str(Path(p).resolve()) for p in inputs), "profile": opts.profile,
+           "resize": opts.resize, "format": opts.out_format}
+    tmp = out / (RUN_FILE + ".tmp")
+    tmp.write_text(json.dumps(run, indent=1))
+    tmp.replace(out / RUN_FILE)
+
+
+def _scan(out: Path) -> tuple[list[tuple[Path, dict]], list[str]]:
+    run_path = Path(out) / RUN_FILE
+    run = json.loads(run_path.read_text()) if run_path.is_file() else None
+    current, stale = [], []
     for path in sorted(Path(out).glob("*/metrics.json")):
-        found.append((path.parent, json.loads(path.read_text())))
-    return found
+        record = json.loads(path.read_text())
+        name = path.parent.name
+        if not record.get("complete", True):
+            stale.append(f"{name}: interrupted before its last candidate")
+        elif run is None:  # a folder written by hand (tests) has no manifest: every complete record counts
+            current.append((path.parent, record))
+        elif record["source"]["path"] not in run["inputs"]:
+            stale.append(f"{name}: {Path(record['source']['path']).name} is not in the last run")
+        elif (record.get("profile"), record.get("resize"), record.get("format_requested", run["format"])) != (
+                run["profile"], run["resize"], run["format"]):
+            stale.append(f"{name}: made with other settings than the last run")
+        else:
+            current.append((path.parent, record))
+    return current, stale
+
+
+def load_records(out: Path) -> list[tuple[Path, dict]]:
+    """The complete records of the last run (``RUN_FILE``); what `sheet` and `apply` act on."""
+    return _scan(out)[0]
+
+
+def stale_records(out: Path) -> list[str]:
+    """Record folders ``load_records`` leaves out, with why: other inputs, other settings, or interrupted."""
+    return _scan(out)[1]
+
+
+def _write_record(folder: Path, record: dict) -> None:
+    tmp = folder / "metrics.json.tmp"
+    tmp.write_text(json.dumps(record, indent=1))
+    tmp.replace(folder / "metrics.json")
 
 
 def _previous(path: Path) -> dict:
@@ -332,6 +377,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
             rec = _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure)
         rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
         cands.append(rec)
+        _write_record(folder, {"schema": SCHEMA, "complete": False, "candidates": cands})
     if fmt == "svg":
         chosen = G.pick(cands)
     else:
@@ -348,15 +394,14 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "source": {"path": str(src), "sha256": src_hash, "size": size, **source_info},
         "ref": {"path": str(ref_path), "sha256": ref_hash},
         "profile": opts.profile, "gates": asdict(opts.gates), "resize": opts.resize,
-        "format": target_fmt, "target": str(target), "uncalibrated": target_fmt in UNCALIBRATED,
+        "format_requested": opts.out_format, "format": target_fmt, "target": str(target),
+        "uncalibrated": target_fmt in UNCALIBRATED,
         "waived": list(opts.waived), "notes": notes,
         "tools": {n: {"path": t.path, "version": t.version} for n, t in sorted(tools.items()) if t.ok},
         "candidates": cands, "pick": chosen["file"] if chosen else None,
-        "verdict": verdict, "verdict_reason": why,
+        "verdict": verdict, "verdict_reason": why, "complete": True,
     }
-    tmp = folder / "metrics.json.tmp"
-    tmp.write_text(json.dumps(record, indent=1))
-    tmp.replace(folder / "metrics.json")
+    _write_record(folder, record)
     return record
 
 
@@ -418,7 +463,7 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     lossy = [r for r in applied if pick_of(r)["kind"] == "lossy"]
     if lossy:
         log(f"Next: python3 {script} sheet {out}   (view the required tiles, show the page; "
-            f"{len(lossy)} lossy pick(s) need the human's approval before apply --approved)")
+            f"{len(lossy)} lossy pick(s) need the human's approval before apply --approve)")
     elif applied:
         log(f"Next: python3 {script} apply {out}   (all picks are lossless; no approval gate)")
     else:
@@ -446,6 +491,7 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     An input the ladder cannot serve is logged and left out; a request it cannot serve for any input is a
     UsageError before anything is written.
     """
+    inputs = [Path(p).resolve() for p in inputs]  # records and RUN_FILE name inputs by the same string
     refused = check_inputs(inputs, opts)
     for src, why in refused:
         log(f"\n== {src}: skipped: {why}")
@@ -455,6 +501,7 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     ignore = opts.out / ".gitignore"
     if not ignore.exists():
         ignore.write_text("*\n")  # a working folder never belongs in a commit
+    write_run(opts.out, inputs, opts)
     records = []
     for src in inputs:
         try:

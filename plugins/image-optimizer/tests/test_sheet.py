@@ -236,7 +236,7 @@ def test_cli_with_only_lossless_picks_points_at_apply_without_approval(tmp_path,
     proc = run_sheet(out)
     assert proc.returncode == 0
     assert "No lossy picks" in proc.stdout
-    assert "apply" in proc.stdout.splitlines()[-1] and "--approved" not in proc.stdout.splitlines()[-1]
+    assert "apply" in proc.stdout.splitlines()[-1] and "--approve" not in proc.stdout.splitlines()[-1]
 
 
 def _edit_record(out, **changes):
