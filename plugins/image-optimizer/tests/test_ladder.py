@@ -292,3 +292,9 @@ def test_animated_or_gamma_png_cannot_be_resized_or_converted(factory, make):
         L.plan(f, profile="high", resize=32)
     with pytest.raises(I.ImagingError, match="only in-place lossless"):
         L.plan(f, profile="high", out_format="webp")
+
+
+def test_an_encoders_multi_line_complaint_stays_on_one_line():
+    """guetzli prints three lines on refusing an input; they must not break the candidates table."""
+    proc = subprocess.CompletedProcess([], 1, "", "Unsupported input JPEG file.\nPlease provide a PNG.\nGuetzli processing failed\n")
+    assert L._tail(proc) == "Unsupported input JPEG file. Please provide a PNG. Guetzli processing failed"

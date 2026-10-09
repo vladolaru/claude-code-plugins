@@ -796,3 +796,21 @@ def test_the_cli_names_the_folders_it_ignores(factory, toolset, tmp_path, comman
     C.run([a.resolve()], opts(out), tools, log=quiet)
     proc = subprocess.run([sys.executable, str(SCRIPT), command, str(out)], capture_output=True, text=True)
     assert any(l.startswith("  ignored:") and "photo.jpg" in l for l in proc.stdout.splitlines()), proc.stdout
+
+
+def test_an_encoder_refusal_is_cached(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo()
+    real = ladder.generate
+    calls = []
+
+    def refuse_oxipng(rung, **kw):
+        calls.append(rung.label)
+        if rung.label == "oxipng":
+            raise ladder.EncoderRefused("oxipng: oxipng exited 1: unsupported")
+        return real(rung, **kw)
+
+    monkeypatch.setattr(ladder, "generate", refuse_oxipng)
+    C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    assert calls.count("oxipng") == 1

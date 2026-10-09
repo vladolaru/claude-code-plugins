@@ -16,6 +16,8 @@ Linux package names in ``APT`` are best effort and unverified.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import os
 import re
 import shutil
@@ -109,6 +111,16 @@ TARGET_ENCODER = {"jpeg": "cjpeg", "webp": "cwebp", "avif": "avifenc", "png": "o
 ALL_FORMATS = ("jpeg", "png", "gif", "svg")
 
 
+@functools.lru_cache(maxsize=64)
+def _binary_hash(path: str, size: int, mtime_ns: int) -> str:
+    """Short sha256 of a binary; size and mtime only key the memo, so a run hashes each tool once."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:12]
+
+
 @dataclass(frozen=True)
 class Env:
     path: str
@@ -134,16 +146,21 @@ class Tool:
 
     @property
     def cache_id(self) -> str:
-        """What the candidates cache keys on: the version line, or, for a binary that prints none
-        (guetzli, ssimulacra2, butteraugli_main), its size and modification time, so an upgrade still
-        invalidates cached results."""
+        """What the candidates cache keys on: the version line, or a short sha256 of the binary for tools
+        that print none (guetzli, cjpegli, ssimulacra2, butteraugli_main): an upgrade changes it, a copy or
+        touch does not."""
         if self.version and self.version != "unknown" and not self.version.startswith("unreadable"):
             return self.version
         try:
             st = os.stat(self.path)
+            return f"sha256:{_binary_hash(self.path, st.st_size, st.st_mtime_ns)}"
         except OSError:  # gone since it was resolved: its own run fails and says so, not the input file
             return f"{self.version or 'unknown'}:missing"
-        return f"{self.version or 'unknown'}:{st.st_size}:{st.st_mtime_ns}"
+
+    @property
+    def label(self) -> str:
+        """How output names this tool's build: its version, or, for a binary that prints none, its hash."""
+        return self.version if self.cache_id == self.version else f"{self.version or 'unknown'} build {self.cache_id}"
 
 
 @dataclass(frozen=True)
@@ -376,5 +393,5 @@ def ensure(job: str, profile: str, formats, target: str = "keep", allow_missing=
 
 def describe(tools: dict) -> str:
     """One line naming each available tool's version and path, for every command's output."""
-    return "tools: " + "; ".join(f"{t.name} {t.version} ({t.path})"
+    return "tools: " + "; ".join(f"{t.name} {t.label} ({t.path})"
                                  for _, t in sorted(tools.items()) if t.ok)

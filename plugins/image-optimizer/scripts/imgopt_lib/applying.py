@@ -150,6 +150,17 @@ def _refuse_clashes(rows: list[tuple[Path, dict]], dest: Path | None) -> None:
                          "pass --dest <folder> or remove it first")
 
 
+def _tools_changed(record: dict, tools: dict) -> str:
+    """Why the metric tools differ from the ones that measured ``record``, or empty."""
+    for name in ("ffmpeg", "ssimulacra2"):
+        then = record.get("tools", {}).get(name)
+        now = tools.get(name)
+        if then and now and now.ok and then.get("id", then.get("version")) != now.cache_id:
+            return (f"{name} changed since candidates ran ({then.get('id', then.get('version'))} -> "
+                    f"{now.cache_id}); re-run candidates, then apply")
+    return ""
+
+
 def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = None, log=print) -> int:
     selected, unmatched = _selected(Path(out), only)
     for name in unmatched:
@@ -187,8 +198,10 @@ def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = No
         chosen = pick_of(record)
         target = target_of(record, dest)
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            problem = _write(folder, record, chosen, target, tools)
+            problem = (needs_tiles(record) and _tools_changed(record, tools)) or ""
+            if not problem:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                problem = _write(folder, record, chosen, target, tools)
         except (metrics.MetricError, ValueError, *READ_FAILURES) as error:  # ValueError: Pillow, ladder.plan
             problem = f"could not verify: {error}"
         if problem:

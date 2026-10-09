@@ -437,3 +437,18 @@ def test_an_approval_naming_no_lossy_pick_fails(factory, tmp_path):
     lines = []
     assert AP.apply(out, tools={}, approve=("zzz.jpg",), log=lines.append) == 1
     assert any("--approve 'zzz.jpg' matches no lossy pick" in l for l in lines)
+
+
+def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    out = tmp_path / "out"
+    _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
+    meta = out / "a--1" / "metrics.json"
+    rec = json.loads(meta.read_text())
+    rec["tools"] = {"ffmpeg": {"path": "/old/ffmpeg", "version": "ffmpeg version 7.0", "id": "ffmpeg version 7.0"},
+                    "ssimulacra2": {"path": tools["ssimulacra2"].path, "version": "unknown",
+                                    "id": tools["ssimulacra2"].cache_id}}
+    meta.write_text(json.dumps(rec))
+    lines = []
+    assert AP.apply(out, tools=tools, approve=("a.jpg",), log=lines.append) == 1
+    assert any("ffmpeg changed since candidates ran" in l for l in lines)

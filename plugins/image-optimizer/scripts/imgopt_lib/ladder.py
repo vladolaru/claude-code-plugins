@@ -54,6 +54,10 @@ class EncodeError(RuntimeError):
     pass
 
 
+class EncoderRefused(EncodeError):
+    """The encoder ran and exited non-zero on this input: deterministic for the same input and build."""
+
+
 @dataclass(frozen=True)
 class Rung:
     label: str
@@ -226,7 +230,8 @@ def _run(argv: list[str], label: str, tool: str) -> subprocess.CompletedProcess:
 
 
 def _tail(proc: subprocess.CompletedProcess) -> str:
-    return (proc.stderr or proc.stdout).strip()[-300:]
+    """The end of an encoder's output on one line: guetzli prints three, which the tables would split."""
+    return " ".join((proc.stderr or proc.stdout).split())[-300:]
 
 
 def generate(rung: Rung, *, inputs: dict, out_dir: Path, tools: dict) -> Path | None:
@@ -277,7 +282,7 @@ def _encode(rung: Rung, exe: str, src: Path, out: Path, scratch: Path, tools: di
     if rung.tool == "pngquant" and proc.returncode == 99:
         return None
     if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
-        raise EncodeError(f"{rung.label}: {Path(exe).name} exited {proc.returncode}: {_tail(proc)}")
+        raise EncoderRefused(f"{rung.label}: {Path(exe).name} exited {proc.returncode}: {_tail(proc)}")
     if rung.post_oxipng:
         post = _exe(tools, "oxipng")
         proc = _run([post, "-o", "max", "--strip", "safe", "-q", str(out)], rung.label, "oxipng")

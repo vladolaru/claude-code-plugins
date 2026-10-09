@@ -180,13 +180,25 @@ def test_cache_id_is_the_version_when_the_binary_prints_one(tmp_path):
 
 
 @pytest.mark.parametrize("version", ["unknown", "unreadable (TimeoutExpired)", ""])
-def test_cache_id_follows_the_binary_when_it_prints_no_version(tmp_path, version):
+def test_cache_id_is_the_binary_hash_when_it_prints_no_version(tmp_path, version):
     """guetzli, ssimulacra2 and butteraugli_main print no version, so an upgrade must still change the key."""
     exe = tmp_path / "guetzli"
     exe.write_bytes(b"old build")
     before = T.Tool("guetzli", str(exe), version, "path").cache_id
+    assert before.startswith("sha256:") and len(before) == len("sha256:") + 12
+    os.utime(exe, (1, 1))
+    assert T.Tool("guetzli", str(exe), version, "path").cache_id == before  # mtime alone changes nothing
     exe.write_bytes(b"a newer build")
     assert T.Tool("guetzli", str(exe), version, "path").cache_id != before
+
+
+def test_label_names_the_version_or_the_build(tmp_path):
+    exe = tmp_path / "ssimulacra2"
+    exe.write_bytes(b"build")
+    assert T.Tool("oxipng", str(exe), "oxipng 10.2.1", "path").label == "oxipng 10.2.1"
+    unversioned = T.Tool("ssimulacra2", str(exe), "unknown", "path")
+    assert unversioned.label == f"unknown build {unversioned.cache_id}"
+    assert unversioned.cache_id in T.describe({"ssimulacra2": unversioned})
 
 
 def test_jpegli_is_optional_and_doctor_says_what_it_adds():

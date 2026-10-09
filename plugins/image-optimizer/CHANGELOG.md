@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tools that print no version are identified by a hash of their binary, encoder refusals are not retried on every run, and `apply` stops with a clear reason when ffmpeg or ssimulacra2 changed since the picks were measured.
+- An encoder's multi-line complaint (guetzli's on a CMYK JPEG) is shown on one line in the candidates table instead of breaking it.
 - Totals lead with the whole batch rather than only the files that change, and printed commands quote paths.
 - Animated PNGs keep every frame (they get lossless candidates only), and lossless PNG picks keep the gAMA, cHRM and sBIT chunks browsers use to render them.
 - SVG optimization uses svgo 4 or newer with a bundled config that keeps ids, `role` and `aria-*` attributes; a pick that loses one, or changes the rendering, is discarded, and an older svgo is refused.

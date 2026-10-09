@@ -160,8 +160,13 @@ def _available(rung: ladder.Rung, tools: dict) -> bool:
 
 
 def _reusable(old: dict | None, folder: Path) -> bool:
-    """A cached candidate is reused when its file is still there; a recorded error is retried."""
-    return bool(old) and "error" not in old and (folder / old["file"]).is_file()
+    """A cached candidate is reused when its file is still there, and so is an encoder's own refusal of this
+    input (same key = same input and build). Other errors (timeouts, a tool that could not start) are retried."""
+    if not old:
+        return False
+    if "error" in old:
+        return old.get("error_kind") == "refused"
+    return (folder / old["file"]).is_file()
 
 
 def _perfect(rec: dict) -> dict:
@@ -175,6 +180,8 @@ def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, ca
         out = ladder.generate(rung, inputs=inputs, out_dir=folder, tools=tools)
     except ladder.EncodeError as error:
         rec["error"] = str(error)
+        if isinstance(error, ladder.EncoderRefused):
+            rec["error_kind"] = "refused"
         return rec
     if out is None:
         rec["error"] = "pngquant could not reach this quality range"
@@ -239,6 +246,8 @@ def _svg_rung(rung, key, inputs, folder, src, tools) -> dict:
             _perfect(rec)
     except (ladder.EncodeError, metrics.MetricError) as error:
         rec["error"] = str(error)
+        if isinstance(error, ladder.EncoderRefused):
+            rec["error_kind"] = "refused"
     return rec
 
 
@@ -405,7 +414,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "format_requested": opts.out_format, "format": target_fmt, "target": str(target),
         "uncalibrated": target_fmt in UNCALIBRATED,
         "waived": list(opts.waived), "optional_missing": optional_missing, "notes": notes,
-        "tools": {n: {"path": t.path, "version": t.version} for n, t in sorted(tools.items()) if t.ok},
+        "tools": {n: {"path": t.path, "version": t.version, "id": t.cache_id} for n, t in sorted(tools.items()) if t.ok},
         "candidates": cands, "pick": chosen["file"] if chosen else None,
         "verdict": verdict, "verdict_reason": why, "complete": True,
     }
