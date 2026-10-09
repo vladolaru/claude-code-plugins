@@ -63,6 +63,7 @@ class Options:
     out: Path
     gates: G.Gates
     refs: dict = field(default_factory=dict)  # input path -> the file its pick is measured against
+    ref_rev: str | None = None  # the revision --ref-rev extracted ``refs`` from, for messages
     resize: int | None = None
     out_format: str = "keep"
     waived: tuple[str, ...] = ()
@@ -342,10 +343,16 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     folder = opts.out / subdir_name(src)
     ref_path = opts.refs.get(src, src)
     src_hash, ref_hash = sha256(src), sha256(ref_path)
-    if opts.profile != "lossless" and src not in opts.refs and src_hash in written_hashes():
+    written = written_hashes() if opts.profile != "lossless" else set()
+    if src not in opts.refs and src_hash in written:
         raise ImagingError(f"{src.name}: an earlier imgopt lossy pick wrote this file, so measuring it again "
                            "would stack a second lossy pass; measure against the original with --ref-rev <commit "
                            "before that change> or --ref <original>")
+    if src in opts.refs and ref_hash in written:  # a revision after the pick was committed, or the pick itself
+        baseline = f"its content at {opts.ref_rev}" if opts.ref_rev else str(ref_path)
+        raise ImagingError(f"{src.name}: the baseline ({baseline}) is itself an earlier imgopt lossy pick, so "
+                           "measuring against it would stack a second lossy pass; use a baseline from before "
+                           "that change")
     fmt = format_of(src)
     notes: list[str] = []
     can_measure = all(n in tools and tools[n].ok for n in ("ffmpeg", "ssimulacra2"))

@@ -127,8 +127,8 @@ def cmd_candidates(args) -> int:
         refs = {inputs[0]: Path(args.ref).resolve()}
     elif args.ref_rev:
         refs = _baselines(inputs, args.ref_rev, out)
-    opts = C.Options(profile=args.profile, out=out, gates=gates, refs=refs, resize=args.resize,
-                     out_format=args.format, waived=chk.waived)
+    opts = C.Options(profile=args.profile, out=out, gates=gates, refs=refs, ref_rev=args.ref_rev,
+                     resize=args.resize, out_format=args.format, waived=chk.waived)
     records = C.run(inputs, opts, chk.tools, script=SCRIPT, jobs=max(1, args.jobs))
     return 0 if len(records) == len(inputs) and not any(C.all_errored(r) for r in records) else 1
 

@@ -925,6 +925,20 @@ def test_a_file_skipped_in_a_rerun_leaves_the_last_run(factory, toolset, tmp_pat
     assert not any("a.jpg" in line for line in lines), lines
 
 
+@pytest.mark.parametrize("ref_rev, named", [(None, "orig.jpg"), ("HEAD", "its content at HEAD")])
+def test_a_baseline_an_earlier_lossy_pick_wrote_is_refused(factory, toolset, tmp_path, ref_rev, named):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src = factory.photo(size=(200, 150)).resolve()
+    original = factory.photo(name="orig.jpg", size=(200, 150), quality=60).resolve()
+    W.record_written(original, C.sha256(original), "jpegoptim-m60")
+    lines = []
+    records = C.run([src], opts(tmp_path / "out", "high", refs={src: original}, ref_rev=ref_rev), tools,
+                    log=lines.append)
+    assert records == []
+    [skip] = [l for l in lines if "is itself an earlier imgopt lossy pick" in l]
+    assert named in skip
+
+
 def test_a_lossless_job_may_run_on_a_file_a_lossy_pick_wrote(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo()
