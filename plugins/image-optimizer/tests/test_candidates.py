@@ -329,6 +329,12 @@ def test_unconvertible_colour_profile_skips_that_file_and_continues(factory, too
     assert len([d for d in (tmp_path / "out").iterdir() if d.is_dir()]) == 1, "the skipped source left a folder behind"
 
 
+def test_allow_missing_an_optional_encoder_says_nothing_is_waived(factory, tmp_path):
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(factory.logo()), "--out", str(tmp_path / "o"),
+                           "--allow-missing", "cjpegli"], capture_output=True, text=True)
+    assert "note: cjpegli is optional and never blocks, so --allow-missing cjpegli waives nothing" in proc.stderr
+
+
 def test_cli_exits_1_when_a_file_was_skipped(factory, tmp_path):
     factory.photo(name="bad.png", icc=b"not an ICC profile")
     factory.logo()
