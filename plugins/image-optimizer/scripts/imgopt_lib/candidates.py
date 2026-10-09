@@ -2,10 +2,11 @@
 
 Per input, a folder under --out holds the source copy, the prepared
 reference (reference.png, what the pick is measured against), the pixel
-inputs, the candidates and metrics.json. metrics.json is both the cache
-(each candidate keyed by input and reference hashes, settings and tool
-versions, so a re-run only redoes what changed) and the record that `sheet`
-and `apply` read. It is rewritten after every candidate with ``complete``
+inputs the ladder reads (written only when a rung needs them), the
+candidates and metrics.json. metrics.json is both the cache (each
+candidate keyed by input and reference hashes, settings and tool versions,
+so a re-run only redoes what changed) and the record that `sheet` and
+`apply` read. It is rewritten after every candidate with ``complete``
 false, so an interrupted run resumes from its last finished candidate and
 is not applied; the finished record says ``complete`` true. run.json names
 the inputs and settings of the last run: `load_records` keeps only the
@@ -38,6 +39,7 @@ from .formats import EXT_BY_FORMAT, format_of, subdir_name
 from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
                       srgb_shift)
 from .tools import OPTIONAL_ENCODERS, describe
+from .workdirs import folder_size
 
 SCHEMA = 1
 # Bump when a cached record would be wrong or lack a key. 5: every raster rung records metadata_removed;
@@ -345,11 +347,17 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         if target_fmt == "jpeg" and facts.has_alpha:
             ref_img = flatten(ref_img, "white").convert("RGBA")
         ref_img.save(folder / "reference.png")
-        pix.save(folder / "pixels.png")
-        flatten(pix, "white").save(folder / "pixels_flat.png")
-        if facts.mode in ("L", "LA"):
-            flatten(pix, "white").convert("L").save(folder / "pixels_gray.png")
-        flatten(pix, "white").save(folder / "pixels.ppm")
+        # Pixel files are written only when a rung reads them: a lossless job needs none.
+        needed = {r.input for r in rungs}
+        flat = flatten(pix, "white") if needed & {"pixels_flat", "pixels_gray", "pixels_ppm"} else None
+        if "pixels" in needed:
+            pix.save(folder / "pixels.png")
+        if "pixels_flat" in needed:
+            flat.save(folder / "pixels_flat.png")
+        if "pixels_gray" in needed:
+            flat.convert("L").save(folder / "pixels_gray.png")
+        if "pixels_ppm" in needed:
+            flat.save(folder / "pixels.ppm")
         if facts.device_profile:
             mean, peak = srgb_shift(src)
             notes.append(f"device colour profile '{facts.icc_desc}': pixel candidates are converted to sRGB "
@@ -485,12 +493,15 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     if absent:
         log("OPTIONAL TOOLS MISSING (picks may be larger; mention it in any report): " + ", ".join(absent))
     lossy = [r for r in applied if pick_of(r)["kind"] == "lossy"]
-    command = f"python3 {shlex.quote(str(script))}"
+    q = shlex.quote
+    command = f"python3 {q(str(script))}"
+    log(f"Working folder: {q(str(out))} ({folder_size(out) / 1e6:.1f} MB); remove it with: "
+        f"{command} clean {q(str(out))}")
     if lossy:
-        log(f"Next: {command} sheet {shlex.quote(str(out))}   (view the required tiles, show the page; "
+        log(f"Next: {command} sheet {q(str(out))}   (view the required tiles, show the page; "
             f"{len(lossy)} lossy pick(s) need the human's approval before apply --approve)")
     elif applied:
-        log(f"Next: {command} apply {shlex.quote(str(out))}   (all picks are lossless; no approval gate)")
+        log(f"Next: {command} apply {q(str(out))}   (all picks are lossless; no approval gate)")
     else:
         log("Next: nothing to apply.")
 

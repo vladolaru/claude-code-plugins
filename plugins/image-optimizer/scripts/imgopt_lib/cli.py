@@ -19,6 +19,7 @@ from . import gates as G
 from . import metrics as M
 from . import sheet as S
 from . import tools as T
+from . import workdirs as W
 from .formats import OUTPUT_FORMATS, expand_inputs, format_of
 from .ladder import UsageError
 
@@ -183,10 +184,21 @@ def cmd_compare(args) -> int:
     return 0
 
 
+def cmd_workdir(args) -> int:
+    print(W.workdir(args.task))
+    return 0
+
+
+def cmd_clean(args) -> int:
+    freed = W.clean(Path(args.out).resolve(), keep_picks=args.keep_picks)
+    print(f"Freed {freed / 1e6:.1f} MB.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
-        description="Measured image optimization: doctor, inspect, candidates, sheet, apply, compare.")
+        description="Measured image optimization: doctor, inspect, workdir, candidates, sheet, apply, compare, clean.")
     sub = parser.add_subparsers(dest="command", required=True)
     d = sub.add_parser("doctor", help="check the tools a job needs and print install lines")
     d.add_argument("--job", choices=T.JOBS, required=True)
@@ -196,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(func=cmd_doctor)
     c = sub.add_parser("candidates", help="try encoder settings per file, measure, gate and pick")
     c.add_argument("paths", nargs="+", help="files or folders")
-    c.add_argument("--out", required=True, help="working folder (scratchpad, never the repo)")
+    c.add_argument("--out", required=True, help="working folder (from `imgopt workdir <task>`; never the repo)")
     c.add_argument("--profile", choices=PROFILE_NAMES, default="lossless")
     c.add_argument("--ref", help="baseline to measure against (single input only)")
     c.add_argument("--resize", type=int, metavar="WIDTH", help="Lanczos resize to this width first")
@@ -225,6 +237,13 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("ref", help="path, git:<rev>:<path>, or URL")
     m.add_argument("new", help="path, git:<rev>:<path>, or URL")
     m.set_defaults(func=cmd_compare)
+    w = sub.add_parser("workdir", help="print (and create) a stable working folder for a task")
+    w.add_argument("task")
+    w.set_defaults(func=cmd_workdir)
+    k = sub.add_parser("clean", help="delete a working folder, or with --keep-picks only its losing candidates")
+    k.add_argument("out")
+    k.add_argument("--keep-picks", action="store_true")
+    k.set_defaults(func=cmd_clean)
     return parser
 
 

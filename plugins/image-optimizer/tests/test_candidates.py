@@ -33,6 +33,34 @@ def test_the_summary_leads_with_the_whole_batch(factory, toolset, tmp_path):
     assert "overall;" in summary and "to apply" in summary
 
 
+def test_a_lossless_job_writes_no_pixel_dumps(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"jpeg"})
+    C.run([factory.photo(size=(400, 300)).resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    folder = C.load_records(tmp_path / "out")[0][0]
+    assert not any((folder / n).exists() for n in ("pixels.png", "pixels_flat.png", "pixels.ppm", "pixels_gray.png"))
+    assert (folder / "reference.png").exists()
+
+
+def test_a_resize_writes_the_pixel_files_its_rungs_read(factory, toolset, tmp_path):
+    tools = toolset("prepare", "high", {"jpeg"})
+    C.run([factory.photo(size=(800, 600)).resolve()], opts(tmp_path / "out", "high", resize=400), tools, log=quiet)
+    folder, record = C.load_records(tmp_path / "out")[0]
+    assert any(c["kind"] == "lossy" and "file" in c for c in record["candidates"])
+    assert (folder / "pixels.ppm").exists() and (folder / "pixels_flat.png").exists()
+    assert not (folder / "pixels.png").exists()
+
+
+def test_the_summary_names_the_working_folder_and_how_to_remove_it(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"jpeg"})
+    lines = []
+    out = tmp_path / "out dir"
+    C.run([factory.photo().resolve()], opts(out), tools, log=lines.append, script=Path("/x y/imgopt.py"))
+    line = next(l for l in lines if l.startswith("Working folder:"))
+    assert line.startswith(f"Working folder: '{out}' (") and " MB); remove it with: " in line
+    assert line.endswith(f"python3 '/x y/imgopt.py' clean '{out}'")
+    assert lines.index(line) < next(i for i, l in enumerate(lines) if l.startswith("Next:"))
+
+
 def test_next_commands_quote_paths_with_spaces(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     lines = []
