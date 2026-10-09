@@ -67,7 +67,7 @@ Measured with imgopt's own metrics and floors on WooCommerce files at `689f232d2
 - **#69556 header:** `lossless` picked oxipng at 41,068 B, the same size ImageOptim produced.
 - **#69539 JPEGs under `high`:** three of the four picks matched the session's. `gallery-5` landed one setting milder, because guetzli q90 measured just under SSIM 0.98.
 - **Reviewer one-liner:** run on the copy GitHub serves, it printed `All:0.990246`, equal to `compare`'s Evidence SSIM to six decimals.
-- **Codex sandbox (macOS, `codex sandbox` with `workspace-write`):** `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare` all ran, with `--out` under `$TMPDIR`. Headless Chrome cannot start there, so `sheet --browser` fails inside Codex. The comparison page itself is unaffected.
+- **Codex sandbox (macOS, `codex sandbox` with `workspace-write`):** `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare` all ran, with `--out` under `$TMPDIR`. Headless Chrome could not start there, which is why `sheet --browser` was removed: the page carries the 1:1 crops itself.
 
 ## Known gaps
 

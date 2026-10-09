@@ -19,7 +19,7 @@ def fake(directory: Path, name: str, version_line: str) -> Path:
 
 
 def env(path_dirs=(), bundle=None, kegs=()):
-    return T.Env(os.pathsep.join(str(d) for d in path_dirs), bundle, tuple(kegs), None)
+    return T.Env(os.pathsep.join(str(d) for d in path_dirs), bundle, tuple(kegs))
 
 
 def test_libjpeg_turbo_jpegtran_on_path_is_rejected(tmp_path):
@@ -70,7 +70,7 @@ def test_lossy_recompress_requires_metrics_and_blocks_on_encoders():
     req = T.requirements("recompress", "high", {"jpeg"})
     assert {"ffmpeg", "ssimulacra2"} <= set(req.required)
     assert {"guetzli", "cjpeg"} <= set(req.quality)
-    assert set(req.optional) == {"butteraugli_main", "chrome"}
+    assert set(req.optional) == {"butteraugli_main"}
 
 
 def test_formats_narrow_the_check():

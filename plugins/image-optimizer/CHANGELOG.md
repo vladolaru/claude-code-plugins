@@ -17,13 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Resizing to a target width, PNG-to-JPEG, and WebP or AVIF output (labelled uncalibrated) under the `high` or `medium` gates; like any pick made from re-encoded pixels, these wait for approval on the comparison page, and a resized or converted file that comes out larger than its original is flagged LARGER.
-- `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles and a comparison page, re-measured writes, and a reviewer-runnable SSIM check.
+- `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles for the agent and a comparison page where the human approves each lossy pick from its own 1:1 crops, re-measured writes, and a reviewer-runnable SSIM check.
 - Lossy JPEG jobs also try jpegli, which is needed for the best JPEG results but which neither Homebrew nor apt packages: `imgopt.py doctor` prints a one-time build that keeps working after Homebrew upgrades, and the job waits until it is built or explicitly waived.
 - PNGs up to 2 megapixels also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because it took minutes on screenshots for 0.4% or less.
 - Under `high` and `medium`, a lossy pick's Evidence SSIM (what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
 - Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.
 - Folder inputs skip git-ignored files, vendored folders and imgopt working folders, and say what they skipped; a file the job cannot serve (a GIF in a resize) is skipped with its own line instead of stopping the batch.
 - `sheet` and `apply` act only on the last `candidates` run in a working folder and name the records they ignore, an interrupted run resumes from the last finished candidate, and `apply --approve a.jpg,b.png` writes only the lossy picks named.
+
+### Removed
+
+- `sheet --browser` and the Chrome dependency: the page now carries the 1:1 crops, which are what to judge from.
 
 ### Fixed
 

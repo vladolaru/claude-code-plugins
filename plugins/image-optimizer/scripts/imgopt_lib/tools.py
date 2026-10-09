@@ -27,8 +27,6 @@ BUNDLE_DIR = Path("/Applications/ImageOptim.app/Contents/Frameworks/"
                   "ImageOptimGPL.framework/Versions/A/Resources")
 KEG_DIRS = (Path("/opt/homebrew/opt/mozjpeg/bin"), Path("/usr/local/opt/mozjpeg/bin"),
             Path("/home/linuxbrew/.linuxbrew/opt/mozjpeg/bin"))
-CHROME_APP = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
 
 JOBS = ("audit", "recompress", "prepare", "convert", "compare")
 
@@ -37,7 +35,7 @@ VERSION_ARGS: dict[str, list[str] | None] = {
     "oxipng": ["--version"], "pngquant": ["--version"], "guetzli": None, "cjpegli": None,
     "gifsicle": ["--version"], "svgo": ["--version"], "rsvg-convert": ["--version"],
     "ffmpeg": ["-version"], "ssimulacra2": None, "butteraugli_main": None,
-    "cwebp": ["-version"], "avifenc": ["--version"], "chrome": ["--version"],
+    "cwebp": ["-version"], "avifenc": ["--version"],
 }
 
 ADDS = {
@@ -58,7 +56,6 @@ ADDS = {
     "butteraugli_main": "worst-spot perceptual score, reported next to the gates",
     "cwebp": "WebP encoder",
     "avifenc": "AVIF encoder",
-    "chrome": "screenshots of the comparison page at 2x",
 }
 
 BREW = {"jpegoptim": "jpegoptim", "jpegtran": "mozjpeg", "cjpeg": "mozjpeg", "oxipng": "oxipng",
@@ -82,13 +79,13 @@ OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install 
                     "-DJPEGLI_ENABLE_OPENEXR=OFF -DJPEGLI_BUNDLE_LIBPNG=ON -DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON "
                     "-DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON && cmake --build build --target cjpegli --parallel, "
                     "then put build/tools/cjpegli on PATH",
-         "oxipng": "cargo install oxipng", "chrome": "install Google Chrome or Chromium"}
+         "oxipng": "cargo install oxipng"}
 
 # The ImageOptim bundle comes first only for jpegoptim: it is the one build linked against mozjpeg (Homebrew's
 # links libjpeg-turbo). Everything else prefers what the package manager keeps current; the bundle is a
 # fallback that updates only with ImageOptim releases.
 ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("keg", "bundle", "path"),
-         "cjpeg": ("keg", "path"), "chrome": ("app", "path")}
+         "cjpeg": ("keg", "path")}
 DEFAULT_ORDER = ("path", "bundle")
 MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
 # Tools ImageOptim 1.9.3 bundles older than Homebrew ships them (oxipng 9.0.0 against 10.x, whose zopfli mode
@@ -112,13 +109,10 @@ class Env:
     path: str
     bundle: Path | None
     kegs: tuple[Path, ...]
-    chrome_app: Path | None
 
     @classmethod
     def current(cls) -> "Env":
-        darwin = sys.platform == "darwin"
-        return cls(os.environ.get("PATH", ""), BUNDLE_DIR if darwin else None, KEG_DIRS,
-                   CHROME_APP if darwin else None)
+        return cls(os.environ.get("PATH", ""), BUNDLE_DIR if sys.platform == "darwin" else None, KEG_DIRS)
 
 
 @dataclass(frozen=True)
@@ -182,10 +176,8 @@ def _locations(name: str, env: Env, source: str) -> list[Path]:
         return [env.bundle / name] if env.bundle else []
     if source == "keg":
         return [k / name for k in env.kegs]
-    if source == "app":
-        return [env.chrome_app] if env.chrome_app else []
-    names = CHROME_NAMES if name == "chrome" else (name,)
-    return [Path(f) for f in (shutil.which(n, path=env.path) for n in names) if f]
+    found = shutil.which(name, path=env.path)
+    return [Path(found)] if found else []
 
 
 def probe_version(path: Path, name: str) -> str:
@@ -287,7 +279,7 @@ def requirements(job: str, profile: str = "lossless", formats=None, target: str 
             required += [encoder] if encoder in ladder_tools else []
     if profile != "lossless":
         required += ["ffmpeg", "ssimulacra2"]
-        optional += ["butteraugli_main", "chrome"]
+        optional += ["butteraugli_main"]
     req = _dedupe(required)
     return Requirements(req, tuple(q for q in _dedupe(quality) if q not in req), _dedupe(optional))
 
@@ -313,14 +305,11 @@ def install_lines(names, platform: str | None = None) -> list[str]:
     packages: list[str] = []
     extra: list[str] = []
     for name in names:
-        if platform == "darwin" and name == "chrome":
-            command = "brew install --cask google-chrome"
-        elif name in table:
+        if name in table:
             if table[name] not in packages:
                 packages.append(table[name])
             continue
-        else:
-            command = OTHER.get(name, f"install {name}")
+        command = OTHER.get(name, f"install {name}")
         if command not in extra:
             extra.append(command)
     lines = []

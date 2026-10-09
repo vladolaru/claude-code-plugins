@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -7,7 +8,6 @@ import pytest
 from PIL import Image
 
 from imgopt_lib import sheet as S
-from imgopt_lib import tools as T
 from imgopt_lib.ladder import UsageError
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
@@ -33,6 +33,7 @@ def fake_out(tmp_path, factory, *, uncalibrated=False, band_gated=False, size=(1
                                      "size": pick.stat().st_size, "band_gated": band_gated, "ssim": 0.95,
                                      "ssim_white": 0.95, "ss2": 70.0, "band": 5.0, "pass": True, "reason": ""}],
         "pick": "pick.png", "verdict": "apply", "verdict_reason": "x", "profile": "high",
+        "gates": {"ssim": 0.98, "ss2": 80.0, "band": 3.0, "lossless_only": False},
     }
     (folder / "metrics.json").write_text(json.dumps(record))
     return out
@@ -119,31 +120,6 @@ def test_sheet_cli_exits_1_when_a_file_cannot_be_read(tmp_path, factory):
     proc = run_sheet(out)
     assert proc.returncode == 1
     assert "photo--x" in proc.stdout + proc.stderr
-
-
-def test_screenshot_with_a_real_chrome(tmp_path, factory):
-    chrome = T.resolve("chrome")
-    if not chrome.ok:
-        pytest.skip("needs chrome")
-    _, page = S.build(fake_out(tmp_path, factory))
-    png = S.screenshot(page, chrome.path)
-    assert png.name == "page@2x.png" and Image.open(png).width >= 2000
-
-
-def test_screenshot_failure_does_not_leave_a_stale_png(tmp_path):
-    page = tmp_path / "index.html"
-    page.write_text("<html></html>")
-    (tmp_path / "page@2x.png").write_bytes(b"stale")
-    with pytest.raises(RuntimeError, match="screenshot.*drop --browser"):
-        S.screenshot(page, "/usr/bin/false")
-
-
-def test_sheet_cli_browser_flag_takes_a_screenshot(tmp_path, factory):
-    if not T.resolve("chrome").ok:
-        pytest.skip("needs chrome")
-    proc = run_sheet(fake_out(tmp_path, factory), "--browser")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "Screenshot at 2x" in proc.stdout and "tools: " in proc.stdout and "chrome" in proc.stdout
 
 
 def window_flags(tiles):
@@ -268,3 +244,82 @@ def test_the_card_meta_names_the_metadata_the_pick_removes():
     chosen = {"size": 1024, "label": "x", "identical": True, "metadata_removed": ["exif"]}
     assert "removes exif" in S._meta(record, chosen)
     assert "removes" not in S._meta(record, {k: v for k, v in chosen.items() if k != "metadata_removed"})
+
+
+def _page_data(page: Path) -> dict:
+    """The page's embedded data (json.dumps writes it on one line)."""
+    line = re.search(r"const DATA = (.*);\n", page.read_text()).group(1)
+    return json.loads(line.replace("<\\/", "</"))
+
+
+def test_cards_carry_their_tiles_and_open_at_100_percent(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    tiles, page = S.build(out)
+    data = _page_data(page)
+    [card] = data["files"]
+    assert card["tiles"] and all(t["src"].startswith("tiles/") for t in card["tiles"])
+    assert {t["required"] for t in card["tiles"]} >= {True}
+    assert [t["required"] for t in card["tiles"]] == sorted((t["required"] for t in card["tiles"]), reverse=True)
+    assert 'id="actual" checked' in page.read_text() and '<body class="actual">' in page.read_text()
+
+
+def test_the_page_builds_an_apply_command_from_ticked_files(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    _, page = S.build(out, script=Path("/x/imgopt.py"))
+    data = _page_data(page)
+    assert data["apply_prefix"] == f"python3 /x/imgopt.py apply {out}"
+    assert data["files"][0]["approvable"] is True
+    assert "--approve" in page.read_text()
+
+
+def test_a_file_that_cannot_be_tiled_is_not_approvable(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    (out / "photo--x" / "pick.png").write_bytes(b"not an image")
+    _, page = S.build(out, problems=[])
+    [card] = _page_data(page)["files"]
+    assert card["approvable"] is False and card["tiles"] == []
+
+
+def test_same_basename_files_get_distinct_approve_values(tmp_path, factory):
+    out = fake_out(tmp_path, factory, name="a--x")
+    fake_out(tmp_path, factory, name="b--x")
+    for folder, source in (("a--x", "/shop/a/photo.png"), ("b--x", "/shop/b/photo.png")):
+        path = out / folder / "metrics.json"
+        record = json.loads(path.read_text())
+        record["source"]["path"] = source
+        path.write_text(json.dumps(record))
+    _, page = S.build(out)
+    names = [f["name"] for f in _page_data(page)["files"]]
+    assert sorted(names) == ["/shop/a/photo.png", "/shop/b/photo.png"]
+
+
+def test_meta_states_the_gate_beside_a_reported_banding(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    _, page = S.build(out)
+    meta = _page_data(page)["files"][0]["meta"]
+    assert "banding 5.0 (reported, not gated" in meta and "SSIM 0.9500 (floor 0.98)" in meta
+    assert "ss2 70.0 (floor 80)" in meta
+
+
+def test_meta_states_the_gate_on_a_gated_banding(tmp_path, factory):
+    out = fake_out(tmp_path, factory, band_gated=True)
+    _, page = S.build(out)
+    assert "banding 5.0 (gated at ≤3)" in _page_data(page)["files"][0]["meta"]
+
+
+def test_totals_cover_the_whole_batch(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    _, page = S.build(out)
+    totals = _page_data(page)["totals"]
+    assert "1 file(s)" in totals and "overall" in totals and "1 to apply" in totals
+
+
+def test_totals_count_an_untouched_file_at_its_original_size(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    record.update(pick=None, verdict="keep", verdict_reason="nothing beats the original")
+    path.write_text(json.dumps(record))
+    _, page = S.build(out)
+    size = f"{record['source']['size'] / 1024:.1f} KB"
+    assert _page_data(page)["totals"] == f"1 file(s), {size} -> {size} (-0.0%) overall; nothing to apply"

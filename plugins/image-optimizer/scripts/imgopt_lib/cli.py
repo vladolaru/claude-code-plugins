@@ -116,13 +116,13 @@ def _print_ignored(out: Path) -> None:
 
 
 def cmd_sheet(args) -> int:
-    chk = T.check(T.Requirements(("pillow", "chrome") if args.browser else ("pillow",), (), ()))
+    chk = T.check(T.Requirements(("pillow",), (), ()))
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="sheet", profile="-"))
     out = Path(args.out).resolve()
     _print_ignored(out)
     problems: list[str] = []
-    tiles, page = S.build(out, alt=args.alt, problems=problems)
+    tiles, page = S.build(out, alt=args.alt, problems=problems, script=SCRIPT)
     records = [r for _, r in C.load_records(out)]
     lossy = [r for r in records if S.needs_tiles(r)]
     untiled = len(lossy) - len({t.source for t in tiles})
@@ -138,16 +138,10 @@ def cmd_sheet(args) -> int:
         print(f"  problem: {problem}", file=sys.stderr)
     print(f"Page for the human: {page}   (macOS: open '{page}'; Linux: xdg-open '{page}')")
     failed = bool(problems)
-    if args.browser:
-        try:
-            print(f"Screenshot at 2x: {S.screenshot(page, chk.tools['chrome'].path)}")
-        except RuntimeError as error:
-            print(f"error: {error}", file=sys.stderr)
-            failed = True
     print(T.describe(chk.tools))
     if not failed and lossy:
-        print(f"Next: after the human approves on the page, python3 {SCRIPT} apply {out} "
-              "--approve <comma list of the files the human approved>")
+        print("Next: the human ticks the picks they approve on the page, which shows the apply command "
+              f"(python3 {SCRIPT} apply {out} --approve ...).")
     elif not failed and any(r["verdict"] == "apply" for r in records):
         print(f"Next: python3 {SCRIPT} apply {out}   (all picks are lossless; no approval gate)")
     return 1 if failed else 0
@@ -217,7 +211,6 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("sheet", help="1:1 tiles for the agent and a comparison page for the human")
     s.add_argument("out")
     s.add_argument("--alt", help="candidate label to show as a third pane, for example jpegoptim-m70")
-    s.add_argument("--browser", action="store_true", help="also screenshot the page at 2x with headless Chrome")
     s.set_defaults(func=cmd_sheet)
     a = sub.add_parser("apply", help="write approved picks and re-verify them")
     a.add_argument("out")
