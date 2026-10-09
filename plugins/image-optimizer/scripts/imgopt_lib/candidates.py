@@ -231,7 +231,7 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_meas
         if not metrics.frames_identical(inputs["source"], out):
             rec["discarded"] = f"{rung.tool} changed the frames"
         elif not inputs["ref_is_source"]:
-            rec["discarded"] = "the reference is not the source; GIF supports only lossless identity"
+            rec["discarded"] = "the reference is not the source; GIFs and other animated images support only lossless identity"
         else:
             _perfect(rec)
         return rec
