@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageOps, ImageStat, PngImagePlugin
 
 from imgopt_lib import applying as AP
 from imgopt_lib import candidates as C
@@ -645,3 +645,25 @@ def test_a_lossless_jpeg_pick_lists_removed_metadata(factory, toolset, tmp_path)
     assert stripped and all("comment" in c["metadata_removed"] for c in stripped)
     if C.pick_of(r) and C.pick_of(r).get("metadata_removed"):
         assert any("removes metadata: " in line for line in lines)
+
+
+def test_a_lossy_pixel_candidate_lists_removed_metadata(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Copyright", "Someone")
+    src = factory.root / "t.png"
+    Image.open(factory.gradient(colors=200)).save(src, pnginfo=info)
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
+    plan = ladder.plan(I.read_facts(src), profile="high")
+    from_pixels = {rung.label for rung in plan.rungs if rung.input.startswith("pixels")}
+    made = [c for c in r["candidates"] if c["label"] in from_pixels and "file" in c]
+    assert made and all(c.get("metadata_removed") == ["text"] for c in made)
+
+
+def test_print_record_names_the_metadata_the_pick_removes():
+    record = {"source": {"path": "a.jpg", "size": 2048, "width": 10, "height": 10, "format": "jpeg", "colors": None},
+              "notes": [], "verdict": "apply", "verdict_reason": "smaller", "pick": "a.jpg",
+              "candidates": [{"label": "x", "file": "a.jpg", "size": 1024, "pass": True, "metadata_removed": ["exif"]}]}
+    lines = []
+    C.print_record(record, log=lines.append)
+    assert any("pick removes metadata: exif" in line for line in lines)

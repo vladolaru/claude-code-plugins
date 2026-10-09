@@ -34,7 +34,9 @@ from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, meta
 from .tools import describe
 
 SCHEMA = 1
-CACHE_VERSION = 4  # 4: source rungs record metadata_removed; 3: svgo keeps ids, roles and classes; 2: a rung's kind follows its input
+# Bump when a cached record would be wrong or lack a key. 5: every raster rung records metadata_removed;
+# 3: svgo keeps ids, roles and classes; 2: a rung's kind follows its input.
+CACHE_VERSION = 5
 UNCALIBRATED = ("webp", "avif")
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
@@ -121,7 +123,7 @@ def _perfect(rec: dict) -> dict:
     return rec
 
 
-def _run_rung(rung, key, inputs, folder, facts, ref_img, tools, can_measure) -> dict:
+def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure) -> dict:
     rec = {"key": key, "label": rung.label, "tool": rung.tool, "kind": rung.kind, "band_gated": rung.palette}
     try:
         out = ladder.generate(rung, inputs=inputs, out_dir=folder, tools=tools)
@@ -133,18 +135,17 @@ def _run_rung(rung, key, inputs, folder, facts, ref_img, tools, can_measure) -> 
         return rec
     rec["file"], rec["size"] = out.name, out.stat().st_size
     try:
-        return _judge(rec, rung, out, inputs, facts, ref_img, tools, can_measure, folder)
+        return _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, folder)
     except READ_FAILURES as error:
         rec["error"] = str(error)
         return rec
 
 
-def _judge(rec, rung, out, inputs, facts, ref_img, tools, can_measure, folder) -> dict:
+def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, folder) -> dict:
     """Read the encoded file and fill in its metadata verdict and scores."""
     ofacts = read_facts(out)
     rec["progressive"] = ofacts.progressive
-    # Pixel rungs never carry the source's metadata, which a lossy pick already says; only source rungs list it.
-    removed = sorted(metadata_kinds(inputs["source"]) - metadata_kinds(out)) if rung.input == "source" else []
+    removed = sorted(source_kinds - metadata_kinds(out))
     if removed:
         rec["metadata_removed"] = removed
     if rung.kind == "lossless":  # made from the source file, so its metadata must survive
@@ -272,6 +273,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         folder.mkdir(parents=True, exist_ok=True)
     else:
         facts = read_facts(src)
+        source_kinds = metadata_kinds(src)
         ref_facts = read_facts(ref_path) if opts.ref else facts
         if opts.resize and opts.resize == facts.display_width == ref_facts.display_width:
             raise ImagingError(f"{src.name}: already displays {opts.resize} px wide, so there is nothing to "
@@ -327,7 +329,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         elif fmt == "svg":
             rec = _svg_rung(rung, key, inputs, folder, src, tools)
         else:
-            rec = _run_rung(rung, key, inputs, folder, facts, ref_img, tools, can_measure)
+            rec = _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure)
         rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
         cands.append(rec)
     if fmt == "svg":

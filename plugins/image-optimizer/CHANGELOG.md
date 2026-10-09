@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lossy JPEG jobs also try jpegli, which is needed for the best JPEG results but which neither Homebrew nor apt packages: `imgopt.py doctor` prints a one-time build that keeps working after Homebrew upgrades, and the job waits until it is built or explicitly waived.
 - PNGs up to 2 megapixels also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because it took minutes on screenshots for 0.4% or less.
 - Under `high` and `medium`, a lossy pick's Evidence SSIM (what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
-- Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), so copyright and credit fields are never dropped silently.
+- Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.
 
 ### Fixed
 

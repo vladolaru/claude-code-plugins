@@ -260,3 +260,11 @@ def test_a_pixel_identical_pick_in_a_new_format_gets_no_tiles(tmp_path, factory)
     _edit_record(out, source_format="png", format="jpeg", pick={"kind": "lossless", "identical": True})
     tiles, _ = S.build(out)
     assert tiles == []
+
+
+def test_the_card_meta_names_the_metadata_the_pick_removes():
+    record = {"source": {"width": 10, "height": 10, "format": "jpeg", "size": 2048}, "format": "jpeg",
+              "verdict": "apply", "verdict_reason": "smaller"}
+    chosen = {"size": 1024, "label": "x", "identical": True, "metadata_removed": ["exif"]}
+    assert "removes exif" in S._meta(record, chosen)
+    assert "removes" not in S._meta(record, {k: v for k, v in chosen.items() if k != "metadata_removed"})
