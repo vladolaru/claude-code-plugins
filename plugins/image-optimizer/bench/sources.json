@@ -76,7 +76,7 @@
   "category": "photo-camera",
   "url": "https://upload.wikimedia.org/wikipedia/commons/b/be/Elvis_Presley%2C_Modern_Screen%2C_June_1958.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
   "license": "Public domain",
-  "author": "Unknown authorUnknown author",
+  "author": "Unknown author",
   "sha1": "52cabb752cb134767b91a55d396c256c21fe4db0",
   "sha256": null
  },
@@ -531,33 +531,6 @@
   "sha256": "1071c68372cc5a01435c2c225a5cf7d4bb803846ec08bb6b3d6721b156d7cb96"
  },
  {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__man-person-winter-photography-statue-coat.png",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/man-person-winter-photography-statue-coat.png",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "1d1709a238492af93e9d8437d5ce7d840abb4082ad6566b7f9cee38ed1cbcb25"
- },
- {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__table-wood-house-chair-floor-window.jpg",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/table-wood-house-chair-floor-window.jpg",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "d46a7cfff2506b211de962d9616f3dd731e0fafae7b7fa04d3c810b2805e90cb"
- },
- {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__girls-in-the-hills.jpg",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/girls-in-the-hills.jpg",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "926e5627f0267a433c435edcea6d0ce14b7cc00350a4c93320225dffde0c442d"
- },
- {
   "key": "woocommerce__plugins__woocommerce__assets__images__onboarding__other-small.jpg",
   "category": "gpl-asset",
   "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/onboarding/other-small.jpg",
@@ -567,51 +540,6 @@
   "sha256": "547cec57066d6be71e97c592229a8d16f1373f8dc844f4b6f7a3047cd4beaac3"
  },
  {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__sun-glass-vase-green-ceramic-shelf.jpg",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/sun-glass-vase-green-ceramic-shelf.jpg",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "7d3234ce2236ef279ff08b409e14a780010f81383bf75f5b95896aa0a7a15d2e"
- },
- {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__portrait.png",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/portrait.png",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "1904957d8669b0e61e225cb1a21d8d538e4f3a0b4d65692e31ff15a35029c2cb"
- },
- {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__man-person-music-black-and-white-white-photography.jpg",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/man-person-music-black-and-white-white-photography.jpg",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "1954dd413583b2ce3ac72f196ae589b082a745a4c094456e92e330b1bcdb5f57"
- },
- {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__Image-table-wood-chair-stool-interior-restaurant.jpg",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/Image-table-wood-chair-stool-interior-restaurant.jpg",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "81191f35cf72ac6255c8d2d6e55f4d9455592b51f090d84df4132fbee597fb1a"
- },
- {
-  "key": "woocommerce__plugins__woocommerce__assets__images__pattern-placeholders__green-glass-jars-on-stairs.jpg",
-  "category": "gpl-asset",
-  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/pattern-placeholders/green-glass-jars-on-stairs.jpg",
-  "license": "GPL-3.0-only",
-  "author": "woocommerce/woocommerce contributors",
-  "sha1": null,
-  "sha256": "2b726d404fa90f785a1e205b63183e63c6134951901b681f970a7d686588db2a"
- },
- {
   "key": "woocommerce__plugins__woocommerce__assets__images__previews__collection.jpg",
   "category": "gpl-asset",
   "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/collection.jpg",
@@ -619,6 +547,78 @@
   "author": "woocommerce/woocommerce contributors",
   "sha1": null,
   "sha256": "a8caa01d141976d46c4094e9bbe2e0826df275476d38732c5a6bcfa9ebaa5564"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__hoodie-with-logo.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/hoodie-with-logo.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "065f4fd526649132e6527f5c3d547b201f661723e470d57509a0fe0f6ef98024"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__long-sleeve-tee.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/long-sleeve-tee.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "60bd67dbb740b95e76fd10a2722ba7a7560cc4150b648a31afcec4e4ffd4a357"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__hoodie-with-zipper.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/hoodie-with-zipper.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "ebe36eaf563b84a8a1e02cf335c74439fa90964830faa58313c373a91f628392"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__hoodie-with-pocket.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/hoodie-with-pocket.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "c7ca38ff87d2966c997386c2f67c55b048b9bdafa2d7c5800734f1062040ffc5"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__polo.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/polo.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "c7336c3a22f90893f21c9a40db27bc7eabef0dbdd73d7ce9ccfaeeb35e787ac0"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__pennant.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/pennant.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "b40359e5ab83e524487f841bd3a915ca3588d9fc65976eac45d280ea5862e600"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__tshirt.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/tshirt.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "5a6e58945aa213e3317962ca5155fe16f9556cf3177936cba9f0fd6308e2dfee"
+ },
+ {
+  "key": "woocommerce__plugins__woocommerce__assets__images__previews__cap.jpg",
+  "category": "gpl-asset",
+  "url": "https://raw.githubusercontent.com/woocommerce/woocommerce/224881b084b826949109d93697ef7f4fff87fd47/plugins/woocommerce/assets/images/previews/cap.jpg",
+  "license": "GPL-3.0-only",
+  "author": "woocommerce/woocommerce contributors",
+  "sha1": null,
+  "sha256": "96e4d8a155c85c976241a217c0f65fc35dc2cd0323e8a7054efaf5d2e0eda311"
  },
  {
   "key": "woocommerce__plugins__woocommerce__assets__images__block-error.svg",

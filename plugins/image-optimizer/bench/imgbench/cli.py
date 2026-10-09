@@ -15,8 +15,27 @@ def _counts(found: list[sources.Source]) -> str:
     return ", ".join(f"{category}: {n}" for category, n in sorted(Counter(s.category for s in found).items()))
 
 
+def _select_gpl() -> int:
+    """Re-pick the GPL assets at the commits already pinned; every other entry stays exactly as it is."""
+    listed = sources.load(SOURCES_FILE)
+    fresh = sources.gpl_assets(commits=sources.pinned_commits(listed))
+    chosen = sources.replace_category(listed, "gpl-asset", fresh)
+    sources.save(chosen, SOURCES_FILE)
+    print(f"wrote {SOURCES_FILE.name}: {_counts(chosen)}")
+    return 0
+
+
 def cmd_select(args) -> int:
     """Query Wikimedia, Kodak and the GPL repositories and pin the result in sources.json."""
+    if args.only:
+        if not SOURCES_FILE.is_file():
+            print(f"{SOURCES_FILE.name} does not exist yet: run `select` without --only first")
+            return 2
+        return _select_gpl()
+    if SOURCES_FILE.is_file() and not args.force:
+        print(f"{SOURCES_FILE.name} already exists and holds the pins: `select --only gpl-asset` refreshes the GPL "
+              "part alone, `select --force` starts over")
+        return 2
     found = sources.camera_photos()
     print(f"photo-camera: {len(found)} found ({sources.PER_CATEGORY} wanted from each of "
           f"{len(sources.PHOTO_CAMERA_CATEGORIES)} categories)")
@@ -51,8 +70,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="imgbench",
         description="Build the benchmark corpus and run imgopt on it: select, fetch, build, run, report, review.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("select", help="choose the real images and pin them in sources.json").set_defaults(
-        func=cmd_select)
+    select = commands.add_parser("select", help="choose the real images and pin them in sources.json")
+    select.add_argument("--only", choices=["gpl-asset"], help="re-pick only this category, merging into sources.json")
+    select.add_argument("--force", action="store_true", help="overwrite an existing sources.json and its pins")
+    select.set_defaults(func=cmd_select)
     commands.add_parser("fetch", help="download the pinned originals and verify their checksums").set_defaults(
         func=cmd_fetch)
     return parser

@@ -59,16 +59,21 @@ class Source:
 @dataclass(frozen=True)
 class GplRepo:
     """A repository whose images join the corpus: the largest `raster` PNG/JPEG files and `svg` SVG files under
-    `paths`, with the license read from `license_file` (a WordPress readme.txt) at the pinned commit."""
+    `paths` (minus anything under `exclude`), with the license read from `license_file` (a WordPress readme.txt)
+    at the pinned commit."""
     repo: str
     paths: tuple[str, ...]
     license_file: str
     raster: int = 10
     svg: int = 3
+    exclude: tuple[str, ...] = ()
 
 
 GPL_REPOS = (
-    GplRepo("woocommerce/woocommerce", ("plugins/woocommerce/assets/images",), "plugins/woocommerce/readme.txt"),
+    # pattern-placeholders are third-party stock photos with no license note, and the folder WooCommerce's recompression
+    # work was calibrated on, so a benchmark of the floors must not grade them on it
+    GplRepo("woocommerce/woocommerce", ("plugins/woocommerce/assets/images",), "plugins/woocommerce/readme.txt",
+            exclude=("plugins/woocommerce/assets/images/pattern-placeholders",)),
     GplRepo("WordPress/gutenberg", ("packages/block-library/src", "docs/assets"), "readme.txt"),
     GplRepo("Automattic/jetpack", ("projects/plugins/jetpack/images",), "projects/plugins/jetpack/readme.txt"),
 )
@@ -82,7 +87,7 @@ def _api_get(params: dict) -> dict:
 
 
 def _text(html: str) -> str:
-    return re.sub(r"<[^>]+>", "", html or "").strip()
+    return " ".join(re.sub(r"<[^>]+>", " ", html or "").split())
 
 
 def select(categories: dict[str, list[str]], counts: dict[str, int], *, rules: dict, api=_api_get) -> list[Source]:
@@ -162,14 +167,23 @@ def _files_under(gh, repo: str, sha: str, path: str) -> list[dict]:
     return [{"path": f"{path.strip('/')}/{e['path']}", "size": e["size"]} for e in node["tree"] if e["type"] == "blob"]
 
 
-def gpl_assets(repos=GPL_REPOS, gh=_gh) -> list[Source]:
-    """The largest raster and SVG images of each repository at its current HEAD, pinned to that commit's sha."""
+def pinned_commits(listed: list[Source]) -> dict[str, str]:
+    """The commit each GPL repository was pinned to, read back from the raw URLs of the listed gpl-asset entries."""
+    found = (re.match(r"https://raw\.githubusercontent\.com/([^/]+/[^/]+)/([0-9a-f]{40})/", s.url)
+             for s in listed if s.category == "gpl-asset")
+    return {m.group(1): m.group(2) for m in found if m}
+
+
+def gpl_assets(repos=GPL_REPOS, gh=_gh, commits: dict[str, str] | None = None) -> list[Source]:
+    """The largest raster and SVG images of each repository, pinned to a commit sha: the one in `commits` for the
+    repository when given (to refresh a list without moving its pins), else the repository's current HEAD."""
     found: list[Source] = []
     for r in repos:
-        sha = gh(f"repos/{r.repo}/commits/HEAD")["sha"]
+        sha = (commits or {}).get(r.repo) or gh(f"repos/{r.repo}/commits/HEAD")["sha"]
         readme = base64.b64decode(gh(f"repos/{r.repo}/contents/{r.license_file}?ref={sha}")["content"]).decode()
         license_id = _spdx(readme)
-        files = [f for path in r.paths for f in _files_under(gh, r.repo, sha, path)]
+        files = [f for path in r.paths for f in _files_under(gh, r.repo, sha, path)
+                 if not any(f["path"].startswith(prefix.rstrip("/") + "/") for prefix in r.exclude)]
 
         def largest(suffixes: tuple[str, ...], n: int) -> list[dict]:
             return sorted((f for f in files if f["path"].lower().endswith(suffixes)),
@@ -299,8 +313,14 @@ def pin_unpinned(sources: list[Source], dest: Path) -> list[Source]:
             Source(**{**asdict(s), "sha256": _digest(dest / s.category / s.key, "sha256")}) for s in sources]
 
 
+def replace_category(listed: list[Source], category: str, fresh: list[Source]) -> list[Source]:
+    """`listed` with its `category` entries swapped for `fresh`, keeping the sha256 of an entry that is unchanged."""
+    known = {(s.key, s.url): s for s in listed if s.category == category}
+    return [s for s in listed if s.category != category] + [known.get((s.key, s.url), s) for s in fresh]
+
+
 def save(sources: list[Source], path: Path) -> None:
-    path.write_text(json.dumps([asdict(s) for s in sources], indent=1))
+    path.write_text(json.dumps([asdict(s) for s in sources], indent=1) + "\n")
 
 
 def load(path: Path) -> list[Source]:

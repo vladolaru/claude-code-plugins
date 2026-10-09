@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import re
 import sys
 from pathlib import Path
 
@@ -43,10 +44,10 @@ def test_fetch_checks_the_checksum(tmp_path):
 
 def test_the_committed_sources_follow_the_license_rule():
     path = BENCH / "sources.json"
-    if not path.exists():
-        return  # before Task 2 Step 4 writes it
+    assert path.is_file()
     for s in SR.load(path):
         assert s.license.startswith(SR.ALLOWED_LICENSE_PREFIXES), s
+        assert not re.search(r"\b(NC|ND)\b|-(NC|ND)", s.license), s
         assert s.sha1 or s.sha256, s
 
 
@@ -172,3 +173,73 @@ def test_download_waits_and_retries_when_the_server_says_slow_down(monkeypatch, 
     monkeypatch.setattr(SR.time, "sleep", naps.append)
     SR.download("https://e/a.jpg", tmp_path / "a.jpg")
     assert len(calls) == 2 and naps == [7] and (tmp_path / "a.jpg").read_bytes() == b"image"
+
+
+def test_artist_markup_becomes_spaced_plain_text():
+    assert SR._text('<span>Unknown author</span><span>Unknown author</span>') == "Unknown author Unknown author"
+    assert SR._text('<a href="x">Ann</a>\n  <b>Lee</b>') == "Ann Lee"
+
+
+def test_save_ends_with_a_newline(tmp_path):
+    SR.save([], tmp_path / "s.json")
+    assert (tmp_path / "s.json").read_text().endswith("\n")
+
+
+def _tree_gh(files, calls):
+    def gh(path):
+        calls.append(path)
+        if path.endswith("/commits/HEAD"):
+            return {"sha": "f" * 40}
+        if path.endswith("/readme.txt?ref=" + "a" * 40) or path.endswith("/readme.txt?ref=" + "f" * 40):
+            return {"content": base64.b64encode(b"License: GPLv3\n").decode()}
+        if "?recursive=1" in path:
+            return {"tree": [{"path": n, "type": "blob", "size": z} for n, z in files]}
+        return {"tree": [{"path": "img", "type": "tree", "sha": "t1"}]}
+    return gh
+
+
+def test_gpl_assets_skip_excluded_folders_and_keep_given_commits():
+    calls: list[str] = []
+    gh = _tree_gh([("stock/big.png", 900), ("stock/deep/more.png", 800), ("ui.png", 100), ("logo.svg", 5)], calls)
+    repo = SR.GplRepo("o/r", ("img",), "readme.txt", exclude=("img/stock",))
+    got = SR.gpl_assets([repo], gh=gh, commits={"o/r": "a" * 40})
+    assert [s.key for s in got] == ["r__img__ui.png", "r__img__logo.svg"]
+    assert all("/" + "a" * 40 + "/" in s.url for s in got) and got[0].license == "GPL-3.0-only"
+    assert not any(call.endswith("/commits/HEAD") for call in calls)  # a given commit is never replaced by HEAD
+
+
+def test_pinned_commits_come_back_from_the_raw_urls():
+    url = "https://raw.githubusercontent.com/o/r/" + "a" * 40 + "/img/x.png"
+    listed = [SR.Source("r__img__x.png", "gpl-asset", url, "GPL-3.0-only", "o/r contributors", None, None),
+              SR.Source("k.png", "photo-small", "https://e/k.png", "Kodak", "Kodak", None, None)]
+    assert SR.pinned_commits(listed) == {"o/r": "a" * 40}
+
+
+def test_replace_category_keeps_other_entries_and_known_checksums():
+    old_gpl = SR.Source("a.png", "gpl-asset", "https://e/a", "GPL-3.0-only", "o", None, "11" * 32)
+    gone = SR.Source("b.png", "gpl-asset", "https://e/b", "GPL-3.0-only", "o", None, "22" * 32)
+    other = SR.Source("k.png", "photo-small", "https://e/k", "Kodak", "Kodak", None, "33" * 32)
+    fresh = [SR.Source("a.png", "gpl-asset", "https://e/a", "GPL-3.0-only", "o", None, None),
+             SR.Source("c.png", "gpl-asset", "https://e/c", "GPL-3.0-only", "o", None, None)]
+    out = SR.replace_category([old_gpl, gone, other], "gpl-asset", fresh)
+    assert out == [other, old_gpl, fresh[1]]
+
+
+def test_select_refuses_to_overwrite_pins_and_only_refreshes_the_gpl_part(monkeypatch, tmp_path, capsys):
+    from imgbench import cli
+
+    kodak = SR.Source("k.png", "photo-small", "https://e/k", "Kodak", "Kodak", None, "33" * 32)
+    old = SR.Source("old.png", "gpl-asset", "https://raw.githubusercontent.com/o/r/" + "a" * 40 + "/old.png",
+                    "GPL-3.0-only", "o/r contributors", None, "44" * 32)
+    monkeypatch.setattr(cli, "SOURCES_FILE", tmp_path / "sources.json")
+    SR.save([kodak, old], cli.SOURCES_FILE)
+    monkeypatch.setattr(SR, "camera_photos", lambda: (_ for _ in ()).throw(AssertionError("re-selected")))
+    assert cli.main(["select"]) == 2 and "--force" in capsys.readouterr().out
+    assert SR.load(cli.SOURCES_FILE) == [kodak, old]
+
+    seen = {}
+    new = SR.Source("new.png", "gpl-asset", old.url.replace("old", "new"), "GPL-3.0-only", "o/r contributors",
+                    None, None)
+    monkeypatch.setattr(SR, "gpl_assets", lambda commits: seen.update(commits) or [new])
+    assert cli.main(["select", "--only", "gpl-asset"]) == 0
+    assert seen == {"o/r": "a" * 40} and SR.load(cli.SOURCES_FILE) == [kodak, new]
