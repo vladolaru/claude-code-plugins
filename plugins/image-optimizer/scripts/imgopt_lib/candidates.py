@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass
@@ -437,16 +438,19 @@ def print_record(record: dict, log=print) -> None:
     if chosen and "ssim_evidence" in chosen:
         evidence = (f"{chosen['ssim_evidence']:.6f}" if chosen["ssim_evidence"] is not None
                     else f"not reproducible with ffmpeg alone ({chosen['evidence_note']})")
-        log(f"   Evidence SSIM: {evidence}")
+        log(f"   Evidence SSIM (luma): {evidence}")
 
 
 def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=print) -> None:
     applied = [r for r in records if r["verdict"] == "apply"]
     before = sum(r["source"]["size"] for r in applied)
     after = sum(pick_of(r)["size"] for r in applied)
-    saved = f" (-{(before - after) / before:.0%})" if before else ""
-    log(f"\n{len(records)} file(s): {len(applied)} to apply, {len(records) - len(applied)} untouched. "
-        f"Apply total {kb(before)} -> {kb(after)}{saved}.")
+    total_before = sum(r["source"]["size"] for r in records)
+    total_after = sum(pick_of(r)["size"] if r in applied else r["source"]["size"] for r in records)
+    # Signed like the comparison page's totals: a resized or converted pick can be larger than its original.
+    change = f" ({(total_after - total_before) / total_before:+.1%})" if total_before else ""
+    log(f"\n{len(records)} file(s), {kb(total_before)} -> {kb(total_after)}{change} overall; "
+        f"{len(applied)} to apply ({kb(before)} -> {kb(after)}), {len(records) - len(applied)} untouched.")
     log(describe(tools))
     if any(r["uncalibrated"] for r in records):
         log("UNCALIBRATED FORMAT: WebP/AVIF output was never calibrated against these gates; "
@@ -461,11 +465,12 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
         log("WAIVED TOOLS (fewer candidates were tried, so picks may be larger than with them; state this in "
             "any report): " + ", ".join(waived))
     lossy = [r for r in applied if pick_of(r)["kind"] == "lossy"]
+    command = f"python3 {shlex.quote(str(script))}"
     if lossy:
-        log(f"Next: python3 {script} sheet {out}   (view the required tiles, show the page; "
+        log(f"Next: {command} sheet {shlex.quote(str(out))}   (view the required tiles, show the page; "
             f"{len(lossy)} lossy pick(s) need the human's approval before apply --approve)")
     elif applied:
-        log(f"Next: python3 {script} apply {out}   (all picks are lossless; no approval gate)")
+        log(f"Next: {command} apply {shlex.quote(str(out))}   (all picks are lossless; no approval gate)")
     else:
         log("Next: nothing to apply.")
 

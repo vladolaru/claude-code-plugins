@@ -26,6 +26,25 @@ def quiet(_):
     return None
 
 
+def test_the_summary_leads_with_the_whole_batch(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png", "jpeg"})
+    lines = []
+    C.run([factory.logo().resolve(), factory.photo().resolve()], opts(tmp_path / "out"), tools, log=lines.append)
+    summary = next(l for l in lines if "file(s)," in l)
+    assert "overall;" in summary and "to apply" in summary
+
+
+def test_next_commands_quote_paths_with_spaces(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    lines = []
+    out = tmp_path / "out with space"
+    C.run([factory.logo().resolve()], opts(out), tools, log=lines.append, script=Path("/a b/imgopt.py"))
+    nxt = next(l for l in lines if l.startswith("Next:"))
+    assert "'/a b/imgopt.py'" in nxt or "nothing to apply" in nxt
+    if "apply" in nxt:
+        assert f"'{out}'" in nxt
+
+
 def test_lossless_default_on_a_folder(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"jpeg", "png"})
     factory.photo()

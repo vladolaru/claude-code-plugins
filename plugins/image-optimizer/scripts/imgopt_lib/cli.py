@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -136,14 +137,16 @@ def cmd_sheet(args) -> int:
         print("No lossy picks: no tiles to view.")
     for problem in problems:
         print(f"  problem: {problem}", file=sys.stderr)
-    print(f"Page for the human: {page}   (macOS: open '{page}'; Linux: xdg-open '{page}')")
+    quoted_page = shlex.quote(str(page))
+    print(f"Page for the human: {page}   (macOS: open {quoted_page}; Linux: xdg-open {quoted_page})")
     failed = bool(problems)
+    apply_command = f"python3 {shlex.quote(str(SCRIPT))} apply {shlex.quote(str(out))}"
     print(T.describe(chk.tools))
     if not failed and lossy:
         print("Next: the human ticks the picks they approve on the page, which shows the apply command "
-              f"(python3 {SCRIPT} apply {out} --approve ...).")
+              f"({apply_command} --approve ...).")
     elif not failed and any(r["verdict"] == "apply" for r in records):
-        print(f"Next: python3 {SCRIPT} apply {out}   (all picks are lossless; no approval gate)")
+        print(f"Next: {apply_command}   (all picks are lossless; no approval gate)")
     return 1 if failed else 0
 
 

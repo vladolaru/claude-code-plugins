@@ -20,13 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles for the agent and a comparison page where the human approves each lossy pick from its own 1:1 crops, re-measured writes, and a reviewer-runnable SSIM check.
 - Lossy JPEG jobs also try jpegli, which is needed for the best JPEG results but which neither Homebrew nor apt packages: `imgopt.py doctor` prints a one-time build that keeps working after Homebrew upgrades, and the job waits until it is built or explicitly waived.
 - PNGs up to 2 megapixels also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because it took minutes on screenshots for 0.4% or less.
-- Under `high` and `medium`, a lossy pick's Evidence SSIM (what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
+- Under `high` and `medium`, a lossy pick's Evidence SSIM (a luma SSIM, so ssimulacra2 goes in the evidence table too; what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
 - Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.
 - Folder inputs skip git-ignored files, vendored folders and imgopt working folders, and say what they skipped; a file the job cannot serve (a GIF in a resize) is skipped with its own line instead of stopping the batch.
 - `sheet` and `apply` act only on the last `candidates` run in a working folder and name the records they ignore, an interrupted run resumes from the last finished candidate, and `apply --approve a.jpg,b.png` writes only the lossy picks named.
 
 ### Fixed
 
+- Totals lead with the whole batch rather than only the files that change, and printed commands quote paths.
 - Animated PNGs keep every frame (they get lossless candidates only), and lossless PNG picks keep the gAMA, cHRM and sBIT chunks browsers use to render them.
 - SVG optimization uses svgo 4 or newer with a bundled config that keeps ids, `role` and `aria-*` attributes; a pick that loses one, or changes the rendering, is discarded, and an older svgo is refused.
 - The working folder is refused inside an input folder or a git work tree and gets a `.gitignore`, and a Git LFS pointer is named as one.

@@ -129,7 +129,8 @@ def test_cli_prints_the_evidence_number_and_the_tools_line(factory, toolset, tmp
     b = factory.photo(name="b.jpg", quality=60)
     assert cli.main(["compare", str(a), str(b)]) == 0
     out = capsys.readouterr().out
-    assert "Evidence SSIM: " in out and "ffmpeg -hide_banner -i REF -i NEW" in out
+    assert "Evidence SSIM (luma): " in out and "ffmpeg -hide_banner -i REF -i NEW" in out
+    assert "ffmpeg version" in out or "ffmpeg:" in out
     assert "ffmpeg" in out.splitlines()[-1]
 
 

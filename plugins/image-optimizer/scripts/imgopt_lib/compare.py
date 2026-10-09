@@ -10,6 +10,8 @@ floor; `candidates` therefore runs the same check, ``reviewer_check()``, on
 each lossy pick and holds it to the SSIM floor). Alpha images are composited
 onto white with `overlay=...:format=rgb`: the default YUV compositing drifted
 5e-4 from Pillow's flatten (self-review, 2026-10-08).
+A reviewer reproduces the number with the same ffmpeg build (`compare` prints
+its version); across builds expect agreement to about 1e-4.
 The one-liner cannot reproduce numbers when dimensions differ or when either
 file carries a device colour profile or an EXIF orientation, because ffmpeg
 ignores both; then the evidence must say "verified locally".
@@ -126,7 +128,7 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
     animated = rf.frames > 1 or nf.frames > 1
     identical = (metrics.frames_identical(ref, new) if animated
                  else ri.size == ni.size and ri.tobytes() == ni.tobytes())
-    result = {"ref": ref_spec, "new": new_spec, "identical": identical}
+    result = {"ref": ref_spec, "new": new_spec, "identical": identical, "ffmpeg": tools["ffmpeg"].version}
     reasons = reviewer_obstacles(rf, nf, ri.size, ni.size)
     if ri.size != ni.size:
         ri = ri.resize(ni.size, Image.LANCZOS)
@@ -155,9 +157,11 @@ def print_result(r: dict, log=print) -> None:
     log(f"gate SSIM {r['ssim']:.4f} (white {r['ssim_white']:.4f})  ssimulacra2 {r['ss2']:.1f}  "
         f"banding {r['band']:.1f} (reported){ba}")
     if r["reproducible"]:
-        log(f"Evidence SSIM: {r['ssim_evidence']:.6f}  (what the reviewer check prints; quote this one)")
+        log(f"Evidence SSIM (luma): {r['ssim_evidence']:.6f}  (what the reviewer check prints with this ffmpeg; "
+            "other builds can differ by about 1e-4)")
         log("Reviewer check (replace REF and NEW with the two files, quoted if the paths contain spaces):")
         log(f"  {r['command']}")
+        log(f"ffmpeg: {r['ffmpeg']}")
     else:
         log(f"Reviewer check: not reproducible with ffmpeg alone ({r['reason']}); "
             "quote the gate SSIM and state 'verified locally with imgopt compare' in the evidence.")
