@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -183,3 +185,31 @@ def svg_identical(rsvg: str, a: Path, b: Path, workdir: Path) -> bool:
             with Image.open(png) as im:
                 renders.append((im.size, im.convert("RGBA").tobytes()))
     return renders[0] == renders[1]
+
+
+def _svg_semantics(path: Path) -> Counter:
+    """ids, classes, roles, aria-* attributes and title/desc text, as (name, value) counts. Keyed without the
+    element, because svgo may move attributes between elements without changing what they mean."""
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        raise MetricError(f"{Path(path).name}: not parseable as XML ({exc})") from exc
+    found: Counter = Counter()
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1]
+        for key, value in el.attrib.items():
+            name = key.rsplit("}", 1)[-1]
+            if name in ("id", "class", "role") or name.startswith("aria-"):
+                found[(name, " ".join(value.split()))] += 1
+        if tag in ("title", "desc") and el.text and el.text.strip():
+            found[(tag, " ".join(el.text.split()))] += 1
+    return found
+
+
+def svg_semantics_lost(a: Path, b: Path) -> str:
+    """Empty when ``b`` keeps every id, class, role, aria-* attribute and title/desc text of ``a``."""
+    lost = sorted((_svg_semantics(a) - _svg_semantics(b)).elements())
+    if not lost:
+        return ""
+    shown = ", ".join(f"{name}={value!r}" for name, value in lost[:6])
+    return f"removed {shown}" + (f" and {len(lost) - 6} more" if len(lost) > 6 else "")

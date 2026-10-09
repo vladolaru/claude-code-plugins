@@ -179,10 +179,12 @@ def _svg_rung(rung, key, inputs, folder, src, tools) -> dict:
     try:
         out = ladder.generate(rung, inputs=inputs, out_dir=folder, tools=tools)
         rec["file"], rec["size"], rec["progressive"] = out.name, out.stat().st_size, False
-        if metrics.svg_identical(tools["rsvg-convert"].path, src, out, folder):
-            _perfect(rec)
-        else:
+        if not metrics.svg_identical(tools["rsvg-convert"].path, src, out, folder):
             rec["discarded"] = "svgo changed the rendering"
+        elif lost := metrics.svg_semantics_lost(src, out):
+            rec["discarded"] = f"svgo {lost} (ids, roles and aria attributes must survive)"
+        else:
+            _perfect(rec)
     except (ladder.EncodeError, metrics.MetricError) as error:
         rec["error"] = str(error)
     return rec

@@ -161,3 +161,12 @@ def test_losing_a_gamma_chunk_is_not_lossless(factory):
     plain = I.read_facts(factory.photo(name="plain.png", size=(200, 120)))
     ok, why = M.metadata_preserved(src, plain)
     assert not ok and "gAMA" in why
+
+
+def test_svg_semantics_lost_names_removed_ids_and_roles(factory, tmp_path):
+    src = factory.accessible_svg()
+    stripped = tmp_path / "stripped.svg"
+    stripped.write_text(src.read_text().replace(' role="img"', "").replace(' id="t"', ""))
+    lost = M.svg_semantics_lost(src, stripped)
+    assert "role='img'" in lost and "id='t'" in lost
+    assert M.svg_semantics_lost(src, src) == ""

@@ -82,8 +82,10 @@ def _verify(folder: Path, record: dict, chosen: dict, written: Path, tools: dict
     """Empty when ``written`` is what the record promised, else why it is not."""
     fmt = record["format"]
     if fmt == "svg":
-        ok = metrics.svg_identical(tools["rsvg-convert"].path, next(folder.glob("source.*")), written, folder)
-        return "" if ok else "rendering differs from the source"
+        source = next(folder.glob("source.*"))
+        if not metrics.svg_identical(tools["rsvg-convert"].path, source, written, folder):
+            return "rendering differs from the source"
+        return metrics.svg_semantics_lost(source, written)
     if fmt == "gif" or record["source"].get("frames", 1) > 1:
         return "" if metrics.frames_identical(next(folder.glob("source.*")), written) else "frames differ"
     ref = Image.open(folder / "reference.png").convert("RGBA")

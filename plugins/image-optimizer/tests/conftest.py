@@ -142,6 +142,16 @@ class Factory:
         path.write_bytes(data[:ihdr_end] + extra + data[ihdr_end:])
         return path
 
+    def accessible_svg(self, name="icon.svg") -> Path:
+        """An inline-style SVG whose accessible name lives in role, aria-labelledby, title/desc and their ids."""
+        path = self.root / name
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="t d">'
+            '<title id="t">Shopping cart</title><desc id="d">A cart with two wheels</desc>'
+            '<g id="cart-body" class="icon-body"><path d="M3 4h2l2 10h10l2-7H7" fill="none" stroke="#222"/></g>'
+            '<circle id="wheel-left" cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/></svg>')
+        return path
+
     def logo(self, name="logo.png", size=(120, 120)) -> Path:
         big = Image.new("RGBA", (size[0] * 4, size[1] * 4), (0, 0, 0, 0))
         ImageDraw.Draw(big).ellipse((16, 16, big.width - 16, big.height - 16), fill=(200, 40, 90, 255))
