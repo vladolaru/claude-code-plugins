@@ -1,7 +1,7 @@
 ---
 description: Optimize images with measured quality profiles - lossless by default, per-file lossy picks, resizing and format conversion, with a 1:1 review before anything is written
 argument-hint: "<files or folders> [what the images are for]"
-allowed-tools: Bash, Read, AskUserQuestion, Skill
+allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion, Skill
 ---
 
 # Optimize Images
