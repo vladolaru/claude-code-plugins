@@ -65,10 +65,12 @@ def test_clean_keep_picks_leaves_records_sources_and_picks(tmp_path):
     for name in ("source.png", "reference.png", "pixels.png", "oxipng.png", "pngquant-q80-95.png"):
         (f / name).write_bytes(b"x" * 100)
     (f / "metrics.json").write_text(json.dumps({"pick": "oxipng.png", "candidates": []}))
+    (f / "tmpk1ll3d").mkdir()  # the measurement folder of a run that was killed
+    (f / "tmpk1ll3d" / "ref-white.png").write_bytes(b"x" * 50)
     freed = W.clean(out, keep_picks=True)
     assert sorted(p.name for p in f.iterdir()) == ["metrics.json", "oxipng.png", "reference.png", "source.png"]
     assert sorted(p.name for p in out.iterdir()) == sorted([WORKDIR_MARKER, ".gitignore", "a--1", "run.json"])
-    assert freed == 200
+    assert freed == 250
     W.clean(out, keep_picks=False)
     assert not out.exists()
 
