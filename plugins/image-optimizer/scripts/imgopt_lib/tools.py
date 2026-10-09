@@ -71,10 +71,16 @@ APT = {"jpegoptim": "jpegoptim", "pngquant": "pngquant", "guetzli": "guetzli",
 OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install -g svgo",
          "jpegtran": "build mozjpeg: https://github.com/mozilla/mozjpeg",
          "cjpeg": "build mozjpeg: https://github.com/mozilla/mozjpeg",
-         "cjpegli": "build jpegli (not packaged by Homebrew or apt; needs git, cmake and a C++ compiler): "
+         # Self-contained: jpegli static, libpng bundled, OpenEXR/GIF/JPEG readers off (imgopt feeds it PNG
+         # only), so the binary loads nothing but system libraries and survives deleting the build folder or
+         # upgrading Homebrew libraries.
+         "cjpegli": "build jpegli (not packaged by Homebrew or apt; needs git, "
+                    "cmake and a C++ compiler): "
                     "git clone --recursive https://github.com/google/jpegli && cd jpegli && "
-                    "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF && "
-                    "cmake --build build --target cjpegli, then put build/tools/cjpegli on PATH",
+                    "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF "
+                    "-DJPEGLI_ENABLE_OPENEXR=OFF -DJPEGLI_BUNDLE_LIBPNG=ON -DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON "
+                    "-DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON && cmake --build build --target cjpegli --parallel, "
+                    "then put build/tools/cjpegli on PATH",
          "oxipng": "cargo install oxipng", "chrome": "install Google Chrome or Chromium"}
 
 # The ImageOptim bundle comes first only for jpegoptim: it is the one build linked against mozjpeg (Homebrew's
@@ -92,8 +98,8 @@ FRESHER_ON_BREW = frozenset({"oxipng", "pngquant", "gifsicle"})
 # svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
 MIN_MAJOR = {"svgo": 4}
 # Tools that print no version are run with these arguments at resolve time, so a binary that cannot start
-# is reported missing instead of failing every rung later. A cjpegli built with shared libraries aborts
-# (exit -6, "Library not loaded") once its build folder is gone.
+# is reported missing instead of failing every rung later. A cjpegli linked to shared libraries aborts
+# (exit -6, "Library not loaded") once its build folder is gone or an upgrade replaces a library it loads.
 RUN_CHECK = {"cjpegli": ["-h"]}
 
 TARGET_ENCODER = {"jpeg": "cjpeg", "webp": "cwebp", "avif": "avifenc", "png": "oxipng"}

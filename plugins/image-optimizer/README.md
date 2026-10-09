@@ -58,9 +58,13 @@ The lossy JPEG ladder also uses jpegli's `cjpegli`, which no package manager shi
 
 ```bash
 git clone --recursive https://github.com/google/jpegli && cd jpegli
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF
-cmake --build build --target cjpegli    # then copy build/tools/cjpegli somewhere on PATH
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF \
+  -DJPEGLI_ENABLE_OPENEXR=OFF -DJPEGLI_BUNDLE_LIBPNG=ON \
+  -DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON
+cmake --build build --target cjpegli --parallel    # then copy build/tools/cjpegli somewhere on PATH
 ```
+
+These flags make a binary that loads only system libraries, so it keeps working after you delete the build folder or upgrade Homebrew.
 
 ImageOptim.app, if installed, is the first choice for jpegoptim, because its build is linked to mozjpeg and Homebrew's is not. For the mozjpeg jpegtran, oxipng, pngquant, guetzli and gifsicle it is only a fallback when they are not on `PATH`; its copies date from 2023, and `doctor` suggests Homebrew's oxipng, pngquant and gifsicle when it finds only the bundled ones. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`).
 

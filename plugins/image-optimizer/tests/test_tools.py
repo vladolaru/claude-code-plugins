@@ -197,6 +197,14 @@ def test_lossy_jpeg_jobs_ask_for_jpegli_with_build_steps():
     assert "github.com/google/jpegli" in line and "cjpegli on PATH" in line
 
 
+def test_the_jpegli_build_line_makes_a_binary_that_loads_only_system_libraries():
+    """-DBUILD_SHARED_LIBS=OFF alone still linked Homebrew's OpenEXR, giflib, libjpeg-turbo and libpng."""
+    line = T.OTHER["cjpegli"]
+    for flag in ("-DBUILD_SHARED_LIBS=OFF", "-DJPEGLI_ENABLE_OPENEXR=OFF", "-DJPEGLI_BUNDLE_LIBPNG=ON",
+                 "-DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON", "-DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON"):
+        assert flag in line
+
+
 def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):
     fake(tmp_path / "bundle", "oxipng", "oxipng 9.0.0")
     fake(tmp_path / "bundle", "jpegoptim", "jpegoptim v1.4.4")
