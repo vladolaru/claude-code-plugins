@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -51,3 +52,26 @@ def test_expand_inputs_keeps_first_seen_order_without_duplicates(tmp_path):
         (tmp_path / name).write_bytes(b"x")
     got = expand_inputs([tmp_path / "c.jpg", tmp_path, tmp_path / "b.png", tmp_path / "." / "c.jpg"])
     assert [p.name for p in got] == ["c.jpg", "a.png", "b.png"]
+
+
+def test_folder_inputs_skip_vendored_ignored_and_working_folders(tmp_path):
+    root = tmp_path / "site"
+    for rel in ("img/a.png", "node_modules/pkg/b.png", "vendor/c.png", "build/d.png", "work/x--1/e.png"):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    (root / "work" / "run.json").write_text("{}")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / ".gitignore").write_text("build/\n")
+    skipped: list[str] = []
+    found = expand_inputs([root], skipped=skipped)
+    assert [p.name for p in found] == ["a.png"]
+    assert any("node_modules" in s for s in skipped) and any("git-ignored" in s for s in skipped)
+    assert any("imgopt working folder" in s for s in skipped)
+
+
+def test_an_explicit_file_is_never_skipped(tmp_path):
+    p = tmp_path / "node_modules" / "a.png"
+    p.parent.mkdir()
+    p.write_bytes(b"x")
+    assert expand_inputs([p]) == [p.resolve()]

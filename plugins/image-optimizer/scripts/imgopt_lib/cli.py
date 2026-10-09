@@ -45,18 +45,41 @@ def _job_for(args) -> str:
     return "prepare" if args.resize else "recompress"
 
 
+def _git_top(folder: Path) -> Path | None:
+    try:
+        proc = subprocess.run(["git", "-C", str(folder), "rev-parse", "--show-toplevel"], capture_output=True,
+                              text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return Path(proc.stdout.strip()).resolve() if proc.returncode == 0 else None
+
+
 def _refuse_out_inside_inputs(out: Path, paths) -> None:
-    """A working folder inside an input folder would be read as input on the next run (its own candidates)."""
+    """--out inside an input's folder would be read as input next run, and inside a git work tree it is one
+    `git add -A` from a commit; both are refused before anything is written."""
     for raw in paths:
-        folder = Path(raw).resolve()
-        if folder.is_dir() and out.is_relative_to(folder):
-            raise UsageError(f"--out {out} is inside the input folder {folder}; use the session scratchpad "
-                             "(or $TMPDIR/image-optimization/<task>/), never a folder being optimized")
+        p = Path(raw).resolve()
+        folder = p if p.is_dir() else p.parent
+        if out.is_relative_to(folder):
+            raise UsageError(f"--out {out} is inside the input folder {folder}; use `imgopt workdir <task>`")
+        top = _git_top(folder)
+        if top and out.is_relative_to(top):
+            raise UsageError(f"--out {out} is inside the git work tree {top}; use `imgopt workdir <task>`")
+
+
+def _expand_reporting(paths) -> list[Path]:
+    """expand_inputs, saying on stderr what the folder walk left out."""
+    skipped: list[str] = []
+    files = expand_inputs(paths, skipped=skipped)
+    if skipped:
+        more = " ..." if len(skipped) > 5 else ""
+        print(f"Skipped {len(skipped)} file(s) in folders: {'; '.join(skipped[:5])}{more}", file=sys.stderr)
+    return files
 
 
 def cmd_candidates(args) -> int:
     _refuse_out_inside_inputs(Path(args.out).resolve(), args.paths)
-    inputs = expand_inputs(args.paths)
+    inputs = _expand_reporting(args.paths)
     if args.ref and len(inputs) != 1:
         raise ValueError("--ref works with exactly one input file")
     if args.ref and any(format_of(p) == "svg" for p in inputs):
@@ -73,7 +96,7 @@ def cmd_candidates(args) -> int:
 
 
 def cmd_inspect(args) -> int:
-    files = expand_inputs(args.paths)
+    files = _expand_reporting(args.paths)
     chk = T.ensure("audit", "lossless", {format_of(p) for p in files}, allow_missing=split_csv(args.allow_missing))
     with tempfile.TemporaryDirectory() as tmp:
         rows = [A.inspect_file(p, chk.tools, Path(tmp)) for p in files]

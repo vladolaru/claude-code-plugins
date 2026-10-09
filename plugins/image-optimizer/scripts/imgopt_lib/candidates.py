@@ -425,22 +425,36 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
         log("Next: nothing to apply.")
 
 
-def check_inputs(inputs: list[Path], opts: Options) -> None:
-    """Raise UsageError, naming the file, for the first input the ladder cannot serve; nothing is written yet."""
+def check_inputs(inputs: list[Path], opts: Options) -> list[tuple[Path, str]]:
+    """The inputs the ladder cannot serve, with why; nothing is written yet. When every input is refused the
+    request itself is wrong, so that is a UsageError naming the first file."""
+    refused = []
     for src in inputs:
         try:
             ladder.check_job(format_of(src), profile=opts.profile, out_format=opts.out_format, resize=opts.resize)
         except ladder.UsageError as error:
-            raise ladder.UsageError(f"{Path(src).name}: {error}") from error
+            refused.append((Path(src), str(error)))
+    if inputs and len(refused) == len(inputs):
+        src, why = refused[0]
+        raise ladder.UsageError(f"{src.name}: {why}")
+    return refused
 
 
 def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path | None = None) -> list[dict]:
     """One record per input that could be prepared; a skipped input is logged and left out.
 
-    A request the ladder cannot serve for any input is a UsageError before anything is written.
+    An input the ladder cannot serve is logged and left out; a request it cannot serve for any input is a
+    UsageError before anything is written.
     """
-    check_inputs(inputs, opts)
+    refused = check_inputs(inputs, opts)
+    for src, why in refused:
+        log(f"\n== {src}: skipped: {why}")
+    refused_paths = {src for src, _ in refused}
+    inputs = [p for p in inputs if Path(p) not in refused_paths]
     opts.out.mkdir(parents=True, exist_ok=True)
+    ignore = opts.out / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("*\n")  # a working folder never belongs in a commit
     records = []
     for src in inputs:
         try:

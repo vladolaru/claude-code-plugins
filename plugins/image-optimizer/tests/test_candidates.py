@@ -256,7 +256,7 @@ def test_unconvertible_colour_profile_skips_that_file_and_continues(factory, too
     assert any(f"== {bad.resolve()}: skipped:" in line for line in lines)
     assert [r["source"]["path"] for _, r in C.load_records(tmp_path / "out")] == [str(good.resolve())]
     assert not list((tmp_path / "out").glob("*/metrics.json.tmp"))
-    assert len(list((tmp_path / "out").iterdir())) == 1, "the skipped source left a folder behind"
+    assert len([d for d in (tmp_path / "out").iterdir() if d.is_dir()]) == 1, "the skipped source left a folder behind"
 
 
 def test_cli_exits_1_when_a_file_was_skipped(factory, tmp_path):
@@ -279,7 +279,7 @@ def test_unreadable_source_skips_that_file_and_continues(factory, toolset, tmp_p
     records = C.run([bad.resolve(), good.resolve()], opts(tmp_path / "out"), tools, log=lines.append)
     assert [r["source"]["path"] for r in records] == [str(good.resolve())]
     assert any(f"== {bad.resolve()}: skipped:" in line for line in lines)
-    assert len(list((tmp_path / "out").iterdir())) == 1, "the skipped source left a folder behind"
+    assert len([d for d in (tmp_path / "out").iterdir() if d.is_dir()]) == 1, "the skipped source left a folder behind"
 
 
 def test_cli_exits_1_when_a_source_is_unreadable(factory, tmp_path):
@@ -475,6 +475,44 @@ def test_cli_refuses_an_out_folder_inside_an_input_folder(factory, inside):
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "--out" in proc.stderr and str(factory.root.resolve()) in proc.stderr
     assert sorted(p.name for p in factory.root.iterdir()) == ["logo.png"]
+
+
+def test_a_gif_in_a_convert_batch_is_skipped_not_the_batch(factory, toolset, tmp_path):
+    tools = toolset("convert", "high", {"jpeg"}, "webp")
+    photo = factory.photo(size=(200, 150))
+    gif = factory.root / "a.gif"
+    Image.new("P", (10, 10)).save(gif)
+    lines = []
+    records = C.run([photo.resolve(), gif.resolve()], opts(tmp_path / "out", "high", out_format="webp"), tools,
+                    log=lines.append)
+    assert len(records) == 1
+    assert any("a.gif: skipped: GIF supports only in-place lossless optimization" in l for l in lines)
+
+
+def test_a_batch_where_every_file_is_refused_is_a_usage_error(factory, tmp_path):
+    gif = factory.root / "a.gif"
+    factory.root.mkdir(parents=True, exist_ok=True)
+    Image.new("P", (10, 10)).save(gif)
+    with pytest.raises(ladder.UsageError, match="a.gif"):
+        C.run([gif.resolve()], opts(tmp_path / "out", "high", out_format="webp"), {}, log=quiet)
+
+
+def test_out_inside_the_git_work_tree_of_a_file_input_is_refused(factory, tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "img").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    src = repo / "img" / "a.png"
+    src.write_bytes(factory.logo().read_bytes())
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(src), "--out", str(repo / "work")],
+                          capture_output=True, text=True)
+    assert proc.returncode == 2 and "inside the git work tree" in proc.stderr
+    assert not (repo / "work").exists()
+
+
+def test_out_gets_a_gitignore(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    C.run([factory.logo().resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    assert (tmp_path / "out" / ".gitignore").read_text() == "*\n"
 
 
 def test_the_pick_records_the_ssim_a_reviewer_will_see(factory, toolset, tmp_path):

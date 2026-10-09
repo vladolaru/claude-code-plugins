@@ -25,6 +25,9 @@ IJG_LUMA = (16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55,
             49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99)
 
 
+LFS_SIGNATURE = b"version https://git-lfs.github.com/spec/v1"
+
+
 class ImagingError(ValueError):
     """A file's pixels cannot be prepared (unreadable profile, no usable transform)."""
 
@@ -107,8 +110,20 @@ def decoded_format(im: Image.Image, path: Path, *, check_name: bool = True) -> s
     return decoded
 
 
+def _open(path: Path) -> Image.Image:
+    """Image.open, naming a Git LFS pointer instead of "cannot identify image file"."""
+    try:
+        return Image.open(path)
+    except OSError:
+        with open(path, "rb") as fh:
+            if fh.read(len(LFS_SIGNATURE)) == LFS_SIGNATURE:
+                raise ImagingError(f"{Path(path).name}: a Git LFS pointer, not the image; run `git lfs pull` "
+                                   "first (evidence links: media.githubusercontent.com serves LFS files)") from None
+        raise
+
+
 def read_facts(path: Path, *, check_name: bool = True) -> Facts:
-    with Image.open(path) as im:
+    with _open(path) as im:
         _refuse_16_bit(im, path)
         icc = im.info.get("icc_profile") or None
         desc = profile_description(icc)
@@ -210,7 +225,7 @@ def to_srgb(rgba: Image.Image, icc: bytes) -> Image.Image:
 
 def _oriented(path: Path) -> tuple[Image.Image, bytes | None]:
     """The file's pixels in their native mode with EXIF orientation applied."""
-    with Image.open(path) as im:
+    with _open(path) as im:
         _refuse_16_bit(im, path)
         im.load()
         icc = im.info.get("icc_profile") or None

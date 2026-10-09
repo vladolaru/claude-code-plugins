@@ -172,3 +172,10 @@ def test_metadata_kinds_reads_png_text(factory, tmp_path):
     info.add_text("Copyright", "Someone")
     Image.open(factory.logo()).save(tmp_path / "t.png", pnginfo=info)
     assert "text" in I.metadata_kinds(tmp_path / "t.png")
+
+
+def test_a_git_lfs_pointer_is_named(tmp_path):
+    p = tmp_path / "hero.png"
+    p.write_text("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12345\n")
+    with pytest.raises(I.ImagingError, match="Git LFS pointer"):
+        I.read_facts(p)
