@@ -149,3 +149,13 @@ def test_load_backfills_identical_and_band_gated_from_the_kept_record(tmp_path):
     assert loaded["pick_scores"]["identical"] is False and loaded["pick_scores"]["band_gated"] is True
     assert R.changes_pixels(loaded) and R.band_gated(loaded)
     assert "identical" not in gone["pick_scores"] and not R.changes_pixels(gone)
+
+
+def test_ablation_says_not_tried_where_a_category_never_ran_the_encoder():
+    # guetzli is capped out above 6 MP: one photo-camera file and no phone-upload file got a guetzli candidate
+    rows = [row("photo-camera", 100_000, [("cjpegli", 60_000, True), ("guetzli", 50_000, True)]),
+            row("photo-camera", 100_000, [("cjpegli", 60_000, True)]),
+            row("phone-upload", 100_000, [("cjpegli", 70_000, True)])]
+    md = R.markdown(rows)
+    assert "| photo-camera | 45.0% | 25.0% | 40.0% (tried on 1 of 2) |" in md
+    assert "| phone-upload | 30.0% | 0.0% | not tried |" in md

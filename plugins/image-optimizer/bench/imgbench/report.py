@@ -147,6 +147,12 @@ def _summary(group: list[dict]) -> list[list[str]]:
     return body
 
 
+def _tried(rows: list[dict], families: set[str]) -> int:
+    """How many of ``rows`` got at least one candidate of ``families``: an encoder capped out by size (guetzli
+    above 6 MP, zopfli above 2 MP) or skipped (pngquant on few colours) was never tried on the others."""
+    return sum(any(c["family"] in families for c in r["candidates"]) for r in rows)
+
+
 def _ablation(group: list[dict]) -> list[str]:
     present = {c["family"] for r in group for c in r["candidates"]}
     columns = [(name, families) for name, families in ABLATION_COLUMNS if present & families]
@@ -154,7 +160,17 @@ def _ablation(group: list[dict]) -> list[str]:
         return []
     full = ablate(group, set())
     cuts = [ablate(group, families) for _, families in columns]
-    body = [[category, _pct(full[category]), *(_pct(cut[category]) for cut in cuts)] for category in full]
+    done = _by(_done(group), "category")
+    body = []
+    for category in full:
+        cells = []
+        for (_, families), cut in zip(columns, cuts):
+            tried, files = _tried(done[category], families), len(done[category])
+            if not tried:
+                cells.append("not tried")  # dropping it changes nothing because it never ran here
+            else:
+                cells.append(_pct(cut[category]) + (f" (tried on {tried} of {files})" if tried < files else ""))
+        body.append([category, _pct(full[category]), *cells])
     return _table(["Category", "All", *(f"−{name}" for name, _ in columns)], body)
 
 
@@ -231,7 +247,8 @@ def markdown(rows: list[dict]) -> str:
         ("Per-category results", lambda g: _table(
             ["Category", "Files", "Skipped", "No pick", "Saved", "Pick families", "Median s/file", "Disk/file"],
             _summary(g))),
-        ("Encoder ablations (saving with that encoder removed)", _ablation),
+        ("Encoder ablations (saving with that encoder removed; \"not tried\" where no file of the category got its "
+         "candidates, \"tried on n of m\" where only some did)", _ablation),
         ("Picks at the floor (lossy picks within 0.002 SSIM, gate or Evidence, or 2 ss2 points of a floor)",
          _floor),
         ("Evidence vs gate SSIM (|Evidence SSIM − gate SSIM| of the picks)", _evidence),
