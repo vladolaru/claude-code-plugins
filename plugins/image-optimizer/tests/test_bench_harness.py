@@ -43,6 +43,8 @@ def test_run_writes_rows_prunes_to_picks_and_records_skips(factory, toolset, tmp
     assert FIELDS <= set(done) and done["in_place"] is True and done["job"] == "lossless"
     assert done["category"] == "photo-small" and done["profile"] == "lossless"
     assert done["pick_family"] == harness.family_of(done["pick"])
+    # a lossless pick keeps every pixel; the record says so, and whether its banding was gated
+    assert done["pick_scores"]["identical"] is True and done["pick_scores"]["band_gated"] is False
     assert all({"label", "family", "size", "pass", "ssim", "ss2", "band"} <= set(c) for c in done["candidates"])
     assert done["disk"] > 0 and done["seconds"] >= 0
     assert by_name["cut.jpg"]["verdict"] == "skipped" and by_name["cut.jpg"]["reason"]

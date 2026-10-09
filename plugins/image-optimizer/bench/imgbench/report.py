@@ -17,6 +17,7 @@ import statistics
 from collections import Counter
 from pathlib import Path
 
+from imgopt_lib import candidates as C
 from imgopt_lib import gates as G
 
 from . import harness
@@ -25,14 +26,26 @@ from . import harness
 ABLATION_COLUMNS = (("jpegli", {"cjpegli"}), ("guetzli", {"guetzli"}),
                     ("jpegoptim", {"jpegoptim", "lossless-jpegoptim"}), ("zopfli", {"oxipng-zopfli"}),
                     ("pngquant", {"pngquant"}))
-PALETTE_FAMILIES = {"pngquant"}  # the picks whose banding is gated; the others' banding is only reported
 SS2_PER_SSIM = 1000  # ss2 points per SSIM unit when the two margins are compared: 2 ss2 points = 0.002 SSIM
 AT_FLOOR = 0.002  # a pick within this `floor_margin` of a floor is "at the floor"
 
 
 def load(run_dir: Path) -> list[dict]:
-    """The rows of a run: what `report` and `review` read."""
-    return [json.loads(line) for line in (Path(run_dir) / harness.ROWS).read_text().splitlines() if line.strip()]
+    """The rows of a run: what `report` and `review` read. A row written before the harness carried the pick's
+    ``identical`` and ``band_gated`` takes them from the record folder the run kept for it (see `_backfill`)."""
+    rows = [json.loads(line) for line in (Path(run_dir) / harness.ROWS).read_text().splitlines() if line.strip()]
+    return [_backfill(row, run_dir) for row in rows]
+
+
+def _backfill(row: dict, run_dir: Path) -> dict:
+    scores = row.get("pick_scores")
+    if not row.get("pick") or scores is None or "identical" in scores:
+        return row
+    path = harness.record_dir(run_dir, row) / "metrics.json"
+    chosen = C.pick_of(json.loads(path.read_text())) if path.is_file() else None
+    if chosen is not None:
+        scores.update(identical=bool(chosen.get("identical")), band_gated=bool(chosen.get("band_gated")))
+    return row
 
 
 def timing(run_dir: Path) -> dict:
@@ -99,8 +112,26 @@ def _scores(row: dict) -> dict:
     return row.get("pick_scores") or {}
 
 
-def _lossy(row: dict) -> bool:
-    return row.get("pick_kind") == "lossy"
+def identical(row: dict) -> bool:
+    """The pick is pixel-identical to the reference. Rows with no ``identical`` (written before the harness
+    carried it, and with no record folder left) are read by the signature imgopt's `_perfect` stamps on such a
+    candidate: SSIM exactly 1.0 and banding exactly 0.0."""
+    scores = _scores(row)
+    if "identical" in scores:
+        return bool(scores["identical"])
+    return scores.get("ssim") == 1.0 and scores.get("band") == 0.0
+
+
+def band_gated(row: dict) -> bool:
+    """The pick's banding was gated (palette output), not only reported. Unknown on a row that lacks it."""
+    return bool(_scores(row).get("band_gated"))
+
+
+def changes_pixels(row: dict) -> bool:
+    """A lossy pick that is not pixel-identical: the picks the floor and banding tables describe and the review
+    shows a human. imgopt files every rung that reads prepared pixels as kind "lossy", oxipng on resized pixels
+    and cwebp-lossless included, though those keep every pixel."""
+    return bool(row.get("pick")) and row.get("pick_kind") == "lossy" and not identical(row)
 
 
 def _summary(group: list[dict]) -> list[list[str]]:
@@ -147,7 +178,7 @@ def _floor(group: list[dict]) -> list[str]:
     body = []
     for category, rows in _by(group, "category").items():
         picks = [r for r in _done(rows)
-                 if r.get("pick") and _lossy(r) and (r.get("gates") or {}).get("ssim") is not None]
+                 if changes_pixels(r) and (r.get("gates") or {}).get("ssim") is not None]
         if not picks:
             continue
         at_floor = sum(floor_margin(r) <= AT_FLOOR for r in picks)
@@ -170,8 +201,7 @@ def _banding(group: list[dict]) -> list[str]:
     body = []
     for category, rows in _by(group, "category").items():
         bands = [_scores(r)["band"] for r in _done(rows)
-                 if r.get("pick") and _lossy(r) and r["pick_family"] not in PALETTE_FAMILIES
-                 and _scores(r).get("band") is not None]
+                 if changes_pixels(r) and not band_gated(r) and _scores(r).get("band") is not None]
         if bands:
             body.append([category, str(len(bands)), f"{statistics.median(bands):.2f}",
                          f"{_percentile(bands, 0.9):.2f}", f"{max(bands):.2f}"])
@@ -195,7 +225,8 @@ def markdown(rows: list[dict]) -> str:
            "reference, source copy and pick). Seconds per file are the category's wall time divided by its files; "
            "files run in parallel, so they are not single-file timings. \"Saved\" is the real picks' saving, the "
            "ablation's \"All\" the same rule applied to the gate pass alone (the Evidence SSIM was measured for "
-           "the real picks only). Every number is per category.", ""]
+           "the real picks only). Pixel-identical picks (oxipng or cwebp-lossless on prepared pixels, which imgopt "
+           "files as lossy) are left out of the floor and banding tables. Every number is per category.", ""]
     sections = [
         ("Per-category results", lambda g: _table(
             ["Category", "Files", "Skipped", "No pick", "Saved", "Pick families", "Median s/file", "Disk/file"],
@@ -204,7 +235,8 @@ def markdown(rows: list[dict]) -> str:
         ("Picks at the floor (lossy picks within 0.002 SSIM, gate or Evidence, or 2 ss2 points of a floor)",
          _floor),
         ("Evidence vs gate SSIM (|Evidence SSIM − gate SSIM| of the picks)", _evidence),
-        ("Banding on lossy non-palette picks (the input for calibrating JPEG/WebP/AVIF thresholds)", _banding),
+        ("Banding on lossy picks whose banding is not gated (the input for calibrating JPEG/WebP/AVIF thresholds)",
+         _banding),
     ]
     for title, build_section in sections:
         out += [f"## {title}", ""]

@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 BENCH = Path(__file__).resolve().parents[1] / "bench"
 sys.path.insert(0, str(BENCH))
 
+from imgbench import harness  # noqa: E402
 from imgbench import report as R  # noqa: E402
 from imgbench.harness import family_of  # noqa: E402
 
@@ -103,3 +105,47 @@ def test_a_pick_whose_evidence_ssim_sits_at_the_floor_counts_at_the_floor():
              gates={"ssim": 0.98, "ss2": 80.0, "band": 3.0, "lossless_only": False},
              pick_scores={"ssim": 0.99, "ss2": 95.0, "band": 1.0, "ssim_evidence": 0.9805})
     assert "| photo-camera | 1 | 1 | 100.0% |" in R.markdown([r])
+
+
+def lossy_pick(ssim, band, *, family="cjpegli", identical=None, band_gated=None):
+    r = row("photo-camera", 1000, [(family, 500, True)])
+    scores = {"ssim": ssim, "ss2": 99.0, "band": band}
+    if identical is not None:
+        scores.update(identical=identical, band_gated=band_gated)
+    r.update(verdict="apply", pick=family + "-q50", pick_family=family, pick_size=500, pick_kind="lossy",
+             gates={"ssim": 0.98, "ss2": 80.0, "band": 3.0, "lossless_only": False}, pick_scores=scores)
+    return r
+
+
+def test_identical_picks_stay_out_of_the_floor_and_banding_tables():
+    rows = [lossy_pick(0.981, 2.5, identical=False, band_gated=False),
+            lossy_pick(1.0, 0.0, family="oxipng", identical=True, band_gated=False),  # pixel-identical, kind lossy
+            lossy_pick(1.0, 0.0, family="cwebp-lossless")]  # an older row: the _perfect signature marks it
+    md = R.markdown(rows)
+    assert "| photo-camera | 1 | 1 | 100.0% |" in md  # floor: the one pick that changes pixels
+    assert "| photo-camera | 1 | 2.50 | 2.50 | 2.50 |" in md  # banding: same pick
+
+
+def test_banding_leaves_out_the_picks_whose_banding_was_gated():
+    # the record says which picks had their banding gated; the report does not guess from the family
+    rows = [lossy_pick(0.99, 2.0, family="some-palette-rung", identical=False, band_gated=True),
+            lossy_pick(0.99, 1.0, identical=False, band_gated=False)]
+    assert "| photo-camera | 1 | 1.00 | 1.00 | 1.00 |" in R.markdown(rows)
+
+
+def test_load_backfills_identical_and_band_gated_from_the_kept_record(tmp_path):
+    old = lossy_pick(0.99, 1.5, family="pngquant")
+    old.update(file=str(tmp_path / "corpus" / "x.png"))
+    del old["pick_scores"]["band"]
+    bare = lossy_pick(1.0, 0.0, family="oxipng")  # no record folder left: the signature decides
+    bare.update(file=str(tmp_path / "corpus" / "gone.png"))
+    (tmp_path / "rows.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(bare) + "\n")
+    folder = harness.record_dir(tmp_path, old)
+    folder.mkdir(parents=True)
+    (folder / "metrics.json").write_text(json.dumps({"pick": "p.png", "candidates": [
+        {"file": "q.png", "identical": True, "band_gated": False},
+        {"file": "p.png", "identical": False, "band_gated": True}]}))
+    loaded, gone = R.load(tmp_path)
+    assert loaded["pick_scores"]["identical"] is False and loaded["pick_scores"]["band_gated"] is True
+    assert R.changes_pixels(loaded) and R.band_gated(loaded)
+    assert "identical" not in gone["pick_scores"] and not R.changes_pixels(gone)

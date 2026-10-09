@@ -15,7 +15,7 @@ from imgopt_lib.ladder import UsageError  # noqa: E402
 
 
 def make_row(i, category="c", job="recompress-high", **extra):
-    return {"job": job, "category": category, "file": f"f{i}", "verdict": "apply", "pick": "x",
+    return {"job": job, "category": category, "file": f"f{i}", "verdict": "apply", "pick": "x", "pick_kind": "lossy",
             "pick_scores": {"ssim": 0.98 + i / 1000, "ss2": 90}, "gates": {"ssim": 0.98, "ss2": 80}, **extra}
 
 
@@ -36,9 +36,10 @@ def test_sample_works_within_each_job_and_category():
             assert [r["file"] for r in picked if (r["job"], r["category"]) == (job, category)][:2] == ["f0", "f1"]
 
 
-def test_sample_leaves_out_lossless_untouched_and_pickless_rows():
+def test_sample_leaves_out_lossless_identical_untouched_and_pickless_rows():
+    identical = {"ssim": 1.0, "ss2": 100.0, "band": 0.0, "identical": True}  # oxipng on resized pixels: kind lossy
     rows = [make_row(0, pick_kind="lossless"), make_row(1, verdict="untouched"), make_row(2, pick=None),
-            make_row(3, pick_kind="lossy"), make_row(4)]
+            make_row(3), make_row(4), make_row(5, pick_scores=identical)]
     assert sorted(r["file"] for r in RV.sample(rows, per_category=5)) == ["f3", "f4"]
 
 

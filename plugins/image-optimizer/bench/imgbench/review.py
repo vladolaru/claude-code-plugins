@@ -1,10 +1,11 @@
 """`review`: pick the lossy picks a human should judge at 1:1, and keep the verdict.
 
-A lossless pick keeps every pixel, so only a lossy pick that would be applied is worth a human's eye. Within each
-(job, category) of a run, `sample` takes the picks closest to a floor (the ones a gate barely let through, where a
-wrong floor shows first) plus one random pick from the rest, so the review also catches a floor that is too tight
-everywhere. `assemble` builds, for one job, an imgopt working folder holding copies of the sampled record folders
-and the comparison page `sheet` makes; `review-record` turns the page's ticks into `verdicts.json`.
+A lossless or pixel-identical pick keeps every pixel, so only a lossy pick that changes pixels and would be
+applied is worth a human's eye. Within each (job, category) of a run, `sample` takes the picks closest to a floor
+(the ones a gate barely let through, where a wrong floor shows first) plus one random pick from the rest, so the
+review also catches a floor that is too tight everywhere. `assemble` builds, for one job, an imgopt working
+folder holding copies of the sampled record folders and the comparison page `sheet` makes; `review-record` turns
+the page's ticks into `verdicts.json`.
 
 One folder per job, because a `run.json` carries one profile, resize and format and `load_records` keeps only the
 records that match it. The folders live under `paths.bench_root()/review/<run name>/<job>/`, never in the run.
@@ -25,7 +26,6 @@ from imgopt_lib import candidates as C
 from imgopt_lib import gates as G
 from imgopt_lib import sheet as S
 from imgopt_lib import workdirs as W
-from imgopt_lib.formats import subdir_name
 from imgopt_lib.ladder import UsageError
 
 from . import harness, report
@@ -36,9 +36,9 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "imgopt.py"
 
 
 def is_reviewable(row: dict) -> bool:
-    """A lossy pick that would be applied: what the sheet offers a tick for. Rows without `pick_kind` (older
-    rows, hand-made ones) count when they have a pick."""
-    return row.get("verdict") == "apply" and bool(row.get("pick")) and row.get("pick_kind", "lossy") == "lossy"
+    """A pick that would be applied and changes pixels (`report.changes_pixels`): what `sheet.needs_tiles`
+    offers a tick for, less the pixel-identical picks no eye can fault."""
+    return row.get("verdict") == "apply" and report.changes_pixels(row)
 
 
 def sample(rows: list[dict], per_category: int = 3, seed: int = 1) -> list[dict]:
@@ -85,11 +85,10 @@ def assemble(run_dir: Path, sampled: list[dict], dest: Path, *, script: Path | N
     dest = Path(dest)
     W.mark(dest)
     for row in sampled:
-        name = subdir_name(Path(row["file"]))
-        folder = Path(run_dir) / job.name / row["category"] / name
+        folder = harness.record_dir(run_dir, row)
         if not (folder / "metrics.json").is_file():
             raise UsageError(f"{folder}: no record folder in the run for {row['file']}")
-        shutil.copytree(folder, dest / name, dirs_exist_ok=True)
+        shutil.copytree(folder, dest / folder.name, dirs_exist_ok=True)
     opts = C.Options(profile=job.profile, out=dest, gates=G.gates_for(job.profile), resize=job.resize,
                      out_format=job.out_format)
     C.write_run(dest, [Path(r["file"]) for r in sampled], opts)

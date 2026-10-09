@@ -82,7 +82,15 @@ def new_run_dir(base: Path, date: str, sha: str) -> Path:
     return folder
 
 
+def record_dir(run_dir: Path, row: dict) -> Path:
+    """The record folder `run` keeps for a row: `<run>/<job>/<category>/<imgopt's subfolder of the file>/`."""
+    return Path(run_dir) / row["job"] / row["category"] / subdir_name(Path(row["file"]))
+
+
 def _row(job: Job, category: str, rel: str, record: dict, seconds: float, disk: int) -> dict:
+    """One file's row. ``pick_scores`` also carries the pick's ``identical`` (imgopt stamps a pixel-identical
+    candidate with perfect scores, and files oxipng or cwebp-lossless on prepared pixels as kind "lossy") and
+    ``band_gated`` (whether its banding was gated or only reported)."""
     chosen = C.pick_of(record) or {}
     return {
         "job": job.name, "category": category, "profile": job.profile, "file": record["source"]["path"], "rel": rel,
@@ -90,7 +98,8 @@ def _row(job: Job, category: str, rel: str, record: dict, seconds: float, disk: 
         "verdict": record["verdict"], "reason": record["verdict_reason"],
         "pick": chosen.get("label"), "pick_family": family_of(chosen.get("label")), "pick_size": chosen.get("size"),
         "pick_kind": chosen.get("kind"),
-        "pick_scores": {k: chosen.get(k) for k in ("ssim", "ssim_evidence", "ss2", "band", "butteraugli")},
+        "pick_scores": {**{k: chosen.get(k) for k in ("ssim", "ssim_evidence", "ss2", "band", "butteraugli")},
+                        "identical": bool(chosen.get("identical")), "band_gated": bool(chosen.get("band_gated"))},
         "gates": record["gates"], "notes": record["notes"], "errored": C.all_errored(record),
         "candidates": [{"label": c["label"], "family": family_of(c["label"]), "size": c.get("size"),
                         "pass": c["pass"], "ssim": c.get("ssim"), "ss2": c.get("ss2"), "band": c.get("band")}
