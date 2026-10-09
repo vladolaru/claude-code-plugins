@@ -118,6 +118,30 @@ class Factory:
                          + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
         return path
 
+    def apng(self, name="anim.png", frames=3, size=(64, 64)) -> Path:
+        """An animated PNG: one solid colour per frame."""
+        colours = [(255, 0, 0), (0, 160, 0), (0, 0, 255), (240, 200, 0)]
+        ims = [Image.new("RGB", size, colours[i % len(colours)]) for i in range(frames)]
+        path = self.root / name
+        ims[0].save(path, "PNG", save_all=True, append_images=ims[1:], duration=100, loop=0)
+        return path
+
+    def gamma_png(self, name="gamma.png", gamma=1.0, size=(200, 120)) -> Path:
+        """A PNG whose gAMA (and cHRM) chunks change how browsers render it; Pillow ignores them on decode."""
+        im = _photo(size)
+        path = self.root / name
+        im.save(path, "PNG")
+        data = path.read_bytes()
+
+        def chunk(tag: bytes, body: bytes) -> bytes:
+            return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body))
+
+        ihdr_end = 8 + 12 + 13
+        extra = (chunk(b"gAMA", struct.pack(">I", round(gamma * 100000)))
+                 + chunk(b"cHRM", struct.pack(">8I", 31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)))
+        path.write_bytes(data[:ihdr_end] + extra + data[ihdr_end:])
+        return path
+
     def logo(self, name="logo.png", size=(120, 120)) -> Path:
         big = Image.new("RGBA", (size[0] * 4, size[1] * 4), (0, 0, 0, 0))
         ImageDraw.Draw(big).ellipse((16, 16, big.width - 16, big.height - 16), fill=(200, 40, 90, 255))

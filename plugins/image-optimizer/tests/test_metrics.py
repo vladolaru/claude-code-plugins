@@ -154,3 +154,10 @@ def test_a_tool_that_cannot_run_raises_metric_error(tmp_path):
     missing = str(tmp_path / "no-such-ffmpeg")
     with pytest.raises(M.MetricError, match="no-such-ffmpeg"):
         M.ssim_gray(missing, tmp_path / "a.png", tmp_path / "b.png")
+
+
+def test_losing_a_gamma_chunk_is_not_lossless(factory):
+    src = I.read_facts(factory.gamma_png())
+    plain = I.read_facts(factory.photo(name="plain.png", size=(200, 120)))
+    ok, why = M.metadata_preserved(src, plain)
+    assert not ok and "gAMA" in why

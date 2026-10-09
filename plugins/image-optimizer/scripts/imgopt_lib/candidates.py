@@ -147,9 +147,9 @@ def _judge(rec, rung, out, inputs, facts, ref_img, tools, can_measure, folder) -
         if not ok:
             rec["discarded"] = why
             return rec
-    if facts.format == "gif":
+    if facts.format == "gif" or facts.frames > 1:
         if not metrics.frames_identical(inputs["source"], out):
-            rec["discarded"] = "gifsicle changed the frames"
+            rec["discarded"] = f"{rung.tool} changed the frames"
         elif not inputs["ref_is_source"]:
             rec["discarded"] = "the reference is not the source; GIF supports only lossless identity"
         else:
@@ -261,7 +261,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         if opts.profile != "lossless":
             notes.append("SVG gets the lossless svgo rung only")
         rungs, target_fmt, facts = [ladder.SVG_RUNG], "svg", None
-        source_info = {"format": "svg", "width": None, "height": None, "colors": None}
+        source_info = {"format": "svg", "width": None, "height": None, "colors": None, "frames": 1}
         folder.mkdir(parents=True, exist_ok=True)
     else:
         facts = read_facts(src)
@@ -272,7 +272,8 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         plan = ladder.plan(facts, profile=opts.profile, out_format=opts.out_format, resize=opts.resize)
         notes += plan.notes
         rungs, target_fmt = plan.rungs, plan.out_format
-        source_info = {"format": facts.format, "width": facts.width, "height": facts.height, "colors": facts.colors}
+        source_info = {"format": facts.format, "width": facts.width, "height": facts.height, "colors": facts.colors,
+                       "frames": facts.frames}
         # Prepared before the folder exists: an unconvertible profile skips the file cleanly.
         ref_img = display_pixels(ref_path, width=opts.resize)
         pix = display_pixels(src, width=opts.resize)

@@ -170,7 +170,7 @@ def test_lossless_png_rung_keeps_orientation_and_icc(factory, device_icc, toolse
 
 def test_lossless_png_rung_still_strips_without_orientation():
     rungs = L.plan(facts(fmt="png"), profile="lossless").rungs
-    assert rungs and all(r.args[-2:] == ("--strip", "safe") for r in rungs)
+    assert rungs and all(r.args[-2:] == ("--keep", L.PNG_KEEP) for r in rungs)
 
 
 def test_lossless_jpeg_rungs_keep_orientation_and_icc(factory, device_icc, toolset, tmp_path):
@@ -264,3 +264,29 @@ def test_gray_sources_reach_jpegli_as_one_channel():
     for mode, expected in (("L", "pixels_gray"), ("LA", "pixels_gray"), ("RGB", "pixels_flat")):
         jpegli = [r for r in L.plan(facts(mode=mode), profile="high").rungs if r.tool == "cjpegli"]
         assert jpegli and all(r.input == expected for r in jpegli), mode
+
+
+def test_png_rungs_keep_gamma_and_chromaticity(factory):
+    f = I.read_facts(factory.logo())
+    oxipng = [r for r in L.plan(f, profile="high").rungs if r.tool == "oxipng"]
+    assert oxipng
+    for rung in oxipng:
+        assert ("--keep", L.PNG_KEEP) in zip(rung.args, rung.args[1:])
+    assert {"gAMA", "cHRM", "sBIT"} <= set(L.PNG_KEEP.split(","))
+
+
+@pytest.mark.parametrize("make", ["apng", "gamma_png"])
+def test_animated_or_gamma_png_gets_lossless_rungs_only(factory, make):
+    f = I.read_facts(getattr(factory, make)())
+    p = L.plan(f, profile="high")
+    assert {r.tool for r in p.rungs} == {"oxipng"} and all(r.kind == "lossless" for r in p.rungs)
+    assert any("lossless rungs only" in n for n in p.notes)
+
+
+@pytest.mark.parametrize("make", ["apng", "gamma_png"])
+def test_animated_or_gamma_png_cannot_be_resized_or_converted(factory, make):
+    f = I.read_facts(getattr(factory, make)())
+    with pytest.raises(I.ImagingError, match="only in-place lossless"):
+        L.plan(f, profile="high", resize=32)
+    with pytest.raises(I.ImagingError, match="only in-place lossless"):
+        L.plan(f, profile="high", out_format="webp")

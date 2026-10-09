@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Animated PNGs keep every frame (they get lossless candidates only), and lossless PNG picks keep the gAMA, cHRM and sBIT chunks browsers use to render them.
 - SVG optimization uses svgo 4 or newer with an updated bundled config; an older svgo is refused, because its defaults drop `viewBox` and `<title>`.
 
 ### Removed

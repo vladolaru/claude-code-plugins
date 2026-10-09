@@ -150,13 +150,17 @@ def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path) -> S
 
 
 def metadata_preserved(src: Facts, out: Facts) -> tuple[bool, str]:
-    """Lossless means the file still displays the same: orientation and device profile intact."""
+    """Lossless means the file still displays the same: orientation, device profile and PNG colour chunks intact."""
     if src.orientation != out.orientation:
         return False, f"orientation tag {src.orientation} became {out.orientation}"
     if src.device_profile and out.icc != src.icc:
         return False, f"device colour profile '{src.icc_desc}' was not preserved"
     if not src.device_profile and out.device_profile:
         return False, "output gained a device colour profile"
+    if src.colour_chunks != out.colour_chunks:
+        names = {"gamma": "gAMA", "chromaticity": "cHRM", "srgb": "sRGB"}
+        lost = sorted(names[k] for k, _ in set(src.colour_chunks) ^ set(out.colour_chunks))
+        return False, f"PNG colour chunks changed ({', '.join(lost)}): browsers would render it differently"
     return True, ""
 
 

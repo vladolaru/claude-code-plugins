@@ -146,3 +146,14 @@ def test_the_16_bit_check_reads_plain_tuple_tiles():
         tile = [("zip", (0, 0, 4, 4), 0, "RGB;16B")]
     with pytest.raises(I.ImagingError, match="16-bit"):
         I._refuse_16_bit(Old(), Path("old.png"))
+
+
+def test_png_colour_chunks_are_facts(factory):
+    f = I.read_facts(factory.gamma_png())
+    assert dict(f.colour_chunks)["gamma"] == "1.0" and "chromaticity" in dict(f.colour_chunks)
+    assert f.png_colour  # no sRGB chunk and no ICC profile: gAMA decides how browsers render it
+    assert not I.read_facts(factory.logo()).png_colour
+
+
+def test_apng_frames_are_counted(factory):
+    assert I.read_facts(factory.apng(frames=3)).frames == 3

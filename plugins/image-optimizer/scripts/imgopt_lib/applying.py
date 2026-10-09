@@ -84,7 +84,7 @@ def _verify(folder: Path, record: dict, chosen: dict, written: Path, tools: dict
     if fmt == "svg":
         ok = metrics.svg_identical(tools["rsvg-convert"].path, next(folder.glob("source.*")), written, folder)
         return "" if ok else "rendering differs from the source"
-    if fmt == "gif":
+    if fmt == "gif" or record["source"].get("frames", 1) > 1:
         return "" if metrics.frames_identical(next(folder.glob("source.*")), written) else "frames differ"
     ref = Image.open(folder / "reference.png").convert("RGBA")
     if chosen.get("identical"):

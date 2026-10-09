@@ -50,6 +50,16 @@ class Facts:
     orientation: int
     progressive: bool
     frames: int
+    # PNG gAMA / cHRM / sRGB as Pillow reads them ("gamma", "chromaticity", "srgb"), as sorted (key, repr) pairs.
+    # Pillow's decoder ignores gAMA and cHRM; browsers apply them, so they are compared, not just pixels.
+    colour_chunks: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def png_colour(self) -> bool:
+        """gAMA or cHRM decide how browsers render this PNG: there is no sRGB chunk or ICC profile to override
+        them. Pixels decoded by Pillow (every pixel rung's input) do not carry that rendering."""
+        keys = dict(self.colour_chunks)
+        return self.format == "png" and not self.icc and "srgb" not in keys and bool({"gamma", "chromaticity"} & set(keys))
 
     @property
     def display_width(self) -> int:
@@ -104,6 +114,8 @@ def read_facts(path: Path, *, check_name: bool = True) -> Facts:
         desc = profile_description(icc)
         colors = im.convert("RGBA").getcolors(maxcolors=4096)
         fmt = decoded_format(im, path, check_name=check_name)
+        chunks = tuple(sorted((k, repr(im.info[k])) for k in ("gamma", "chromaticity", "srgb")
+                              if fmt == "png" and k in im.info))
         return Facts(
             path=Path(path),
             format=fmt,
@@ -119,6 +131,7 @@ def read_facts(path: Path, *, check_name: bool = True) -> Facts:
             progressive=bool(im.info.get("progressive") or im.info.get("progression")),
             # An MPO's extra pictures are not shown by browsers (and ffmpeg reads only the first): one frame.
             frames=1 if fmt == "jpeg" else getattr(im, "n_frames", 1),
+            colour_chunks=chunks,
         )
 
 

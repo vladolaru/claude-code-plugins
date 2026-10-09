@@ -22,13 +22,16 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .imaging import Facts
+from .imaging import Facts, ImagingError
 
 JPEG_LEVELS = tuple(range(95, 35, -5))          # 95 .. 40
 PNG_QUALITY_RANGES = ("95-100", "90-100", "85-100", "80-95", "70-95", "60-85", "50-80")
 PNG_COLOURS = (256, 192, 128, 96, 64, 48, 32, 16)
 FEW_COLOURS = 32
-PNG_KEEP_WITH_EXIF = "eXIf,cICP,iCCP,sRGB,pHYs,acTL,fcTL,fdAT"
+# What every lossless PNG rung keeps: oxipng's --strip safe set plus gAMA, cHRM and sBIT, which change how
+# browsers render the file (a gamma 1.0 PNG rendered 73/255 lighter without its gAMA in Chrome, 2026-10-09).
+PNG_KEEP = "cICP,iCCP,sRGB,gAMA,cHRM,sBIT,pHYs,acTL,fcTL,fdAT"
+PNG_KEEP_WITH_EXIF = "eXIf," + PNG_KEEP
 GUETZLI_LEVELS = (84, 90)
 WEB_LEVELS = tuple(range(95, 45, -5))           # 95 .. 50
 GUETZLI_PROGRESSIVE = True                      # jpegtran -progressive shrank guetzli output 4-6% on all three samples
@@ -122,6 +125,15 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
     # Reshaped pixels have no source file to keep; a device profile alone sends only the lossy
     # rungs to sRGB pixels, so the source's lossless rungs still offer a profile-keeping pick.
     reshaped = bool(resize) or target != f.format
+    if f.format == "png" and (f.frames > 1 or f.png_colour):
+        why = (f"animated PNG ({f.frames} frames)" if f.frames > 1
+               else "PNG gAMA/cHRM chunks that browsers apply and pixel encoders drop")
+        if reshaped:
+            raise ImagingError(f"{f.path.name}: {why}: only in-place lossless optimization keeps it, "
+                               "so it cannot be resized or converted")
+        if lossy:
+            notes.append(f"{why}: lossless rungs only, so it renders as before")
+        lossy = False
     pixel = reshaped or (lossy and f.device_profile)
     rungs: list[Rung] = []
     if target == "jpeg":
@@ -146,10 +158,10 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),
                            post_jpegtran=GUETZLI_PROGRESSIVE) for q in GUETZLI_LEVELS]
     elif target == "png":
-        # --strip safe drops eXIf, the PNG orientation carrier; a source that has one keeps
-        # exactly the chunks --strip safe keeps plus eXIf. Baked pixels have no orientation.
+        # --strip safe drops eXIf, the PNG orientation carrier; a source that has one keeps eXIf as well.
+        # Baked pixels have no orientation.
         keep_orientation = not reshaped and f.orientation != 1
-        strip = ("--keep", PNG_KEEP_WITH_EXIF) if keep_orientation else ("--strip", "safe")
+        strip = ("--keep", PNG_KEEP_WITH_EXIF if keep_orientation else PNG_KEEP)
         png_in = "pixels" if reshaped else "source"
         rungs.append(Rung("oxipng", "oxipng", "lossless", png_in, ".png", ("-o", "max", *strip)))
         if f.width * f.height <= ZOPFLI_MAX_PIXELS:

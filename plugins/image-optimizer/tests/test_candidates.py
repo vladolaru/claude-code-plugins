@@ -581,3 +581,25 @@ def test_a_gray_source_gets_a_one_channel_pixels_file(factory, toolset, tmp_path
     C.run([src], opts(tmp_path / "out", "high"), tools, log=quiet)
     folder = C.load_records(tmp_path / "out")[0][0]
     assert Image.open(folder / "pixels_gray.png").mode == "L"
+
+
+def test_an_apng_keeps_every_frame_under_high(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.apng(frames=3)
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
+    chosen = C.pick_of(r)
+    assert r["source"]["frames"] == 3
+    if chosen:
+        folder = C.load_records(tmp_path / "out")[0][0]
+        with Image.open(folder / chosen["file"]) as im:
+            assert im.n_frames == 3
+
+
+def test_a_lossless_pick_keeps_the_gamma_chunk(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.gamma_png(size=(400, 300))
+    [r] = C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    for c in r["candidates"]:
+        if c.get("file"):
+            folder = C.load_records(tmp_path / "out")[0][0]
+            assert I.read_facts(folder / c["file"]).colour_chunks == I.read_facts(src).colour_chunks
