@@ -5,8 +5,10 @@ the ladder can do to them, and a corpus-wide figure would only reflect how many 
 
 The ablation answers "what would the saving be without this encoder?" from the recorded candidates: per file,
 the smallest candidate that passed the gates and whose family is not dropped, under the same in-place rule
-`imgopt_lib.gates.verdict` applies. It uses the gate pass alone (the Evidence SSIM was measured for the real
-picks only), so its "All" column can differ slightly from the real picks' "Saved".
+`imgopt_lib.gates.verdict` applies. It reads the recorded gate pass, which already holds the Evidence check: a
+smaller candidate whose Evidence SSIM failed is recorded pass=False. So its "All" column equals the real picks'
+"Saved" in every job and category of a run (a tested invariant); `markdown` warns where they differ, because then
+the ablation no longer replays imgopt's pick rule and its other columns cannot be trusted either.
 """
 
 from __future__ import annotations
@@ -239,15 +241,32 @@ def _skip_reasons(rows: list[dict]) -> list[list[str]]:
     return [[job, reason, str(n)] for (job, reason), n in sorted(counts.items())]
 
 
+def _saving_mismatches(jobs: dict[str, list[dict]]) -> list[str]:
+    """A line per job and category whose ablation "All" differs from the real picks' "Saved"."""
+    lines = []
+    for job, group in jobs.items():
+        full = ablate(group, set())
+        for category, rows in _by(_done(group), "category").items():
+            real = _real_saved(rows)
+            if not math.isclose(full[category], real, abs_tol=1e-9):
+                lines.append(f"WARNING: {job}/{category}: the ablation's All ({_pct(full[category])}) differs from "
+                             f"Saved ({_pct(real)}); the ablation does not replay imgopt's pick rule here, so its "
+                             "columns cannot be trusted.")
+    return lines
+
+
 def markdown(rows: list[dict]) -> str:
     """The run's tables, per job and category."""
     jobs = _by(rows, "job")
     out = ["Candidate files other than picks are pruned after measurement (each record keeps its metrics, "
            "reference, source copy and pick). Seconds per file are the category's wall time divided by its files; "
-           "files run in parallel, so they are not single-file timings. \"Saved\" is the real picks' saving, the "
-           "ablation's \"All\" the same rule applied to the gate pass alone (the Evidence SSIM was measured for "
-           "the real picks only). Pixel-identical picks (oxipng or cwebp-lossless on prepared pixels, which imgopt "
-           "files as lossy) are left out of the floor and banding tables. Every number is per category.", ""]
+           "files run in parallel, so they are not single-file timings. \"Saved\" is the real picks' saving; the "
+           "ablation's \"All\" replays the pick rule on the recorded gate pass and must equal it. Pixel-identical "
+           "picks (oxipng or cwebp-lossless on prepared pixels, which imgopt files as lossy) are left out of the "
+           "floor and banding tables. Every number is per category.", ""]
+    mismatches = _saving_mismatches(jobs)
+    if mismatches:
+        out += [*mismatches, ""]
     sections = [
         ("Per-category results", lambda g: _table(
             ["Category", "Files", "Skipped", "No pick", "Errored", "Saved", "Pick families", "Median s/file",

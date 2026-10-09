@@ -7,7 +7,7 @@ import pytest
 BENCH = Path(__file__).resolve().parents[1] / "bench"
 sys.path.insert(0, str(BENCH))
 
-from imgbench import harness  # noqa: E402
+from imgbench import harness, manifest  # noqa: E402
 from imgbench import report as R  # noqa: E402
 from imgbench.harness import family_of  # noqa: E402
 
@@ -176,3 +176,33 @@ def test_ablate_refuses_rows_of_several_jobs():
     medium["job"] = "recompress-medium"
     with pytest.raises(ValueError, match="recompress-high, recompress-medium"):
         R.ablate([row("photo-camera", 1000, [("cjpegli", 600, True)]), medium], drop=set())
+
+
+def test_markdown_warns_when_all_differs_from_saved():
+    r = row("photo-camera", 100_000, [("cjpegli", 50_000, False)])  # the pick failed its gates on the record
+    r.update(verdict="apply", pick="cjpegli-q50", pick_family="cjpegli", pick_size=50_000)
+    md = R.markdown([r])
+    assert "WARNING: recompress-high/photo-camera: the ablation's All (0.0%) differs from Saved (50.0%)" in md
+
+
+def test_all_equals_saved_on_a_real_run(factory, toolset, tmp_path):
+    """The ablation replays imgopt's pick rule from the recorded gate pass: a smaller candidate that failed the
+    Evidence check is recorded pass=False, so on a fresh run "All" and "Saved" agree in every job and category."""
+    toolset("recompress", "high", {"jpeg", "png"})
+    corpus = tmp_path / "corpus"
+    entries = []
+    sources = [factory.photo("a.jpg", size=(320, 240), quality=97), factory.photo("b.jpg", size=(200, 150)),
+               factory.gradient("c.png", size=(240, 60))]
+    for src in sources:
+        dest = corpus / "photo-small" / src.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(src.read_bytes())
+        entries.append(manifest.entry_for(dest, corpus, category="photo-small", origin="test", transform="",
+                                          license="CC0"))
+    manifest.write(entries, corpus)
+    run_dir = harness.run(corpus, tmp_path / "run", [harness.Job("recompress-high", ("photo-small",), "high")],
+                          say=lambda _: None)
+    rows = R.load(run_dir)
+    assert any(r["verdict"] == "apply" for r in rows)  # the invariant is about something
+    assert R.ablate(rows, set())["photo-small"] == pytest.approx(R._real_saved(rows))
+    assert "WARNING" not in R.markdown(rows)
