@@ -15,7 +15,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .formats import WORKDIR_MARKER
+from .formats import WORKDIR_MARKER, WORKDIR_MARKER_TEXT
 from .ladder import UsageError
 
 
@@ -56,6 +56,46 @@ def workdir(task: str) -> Path:
         if _writable(folder):
             return folder
     raise UsageError("no writable working folder (tried " + ", ".join(map(str, options)) + "); pass --out yourself")
+
+
+def mark(out: Path) -> None:
+    """Make ``out`` an imgopt working folder: created if needed, never committed (.gitignore), and carrying the
+    marker `clean` requires. `candidates` calls it before it writes anything into ``out``."""
+    out.mkdir(parents=True, exist_ok=True)
+    ignore = out / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("*\n")  # a working folder never belongs in a commit
+    (out / WORKDIR_MARKER).write_text(WORKDIR_MARKER_TEXT)
+
+
+def ledger_path() -> Path:
+    """One line per lossy pick `apply` wrote (sha256 of the written file): how `candidates` recognises a file
+    an earlier lossy pass produced, so it is not re-encoded against itself."""
+    return cache_root() / "written.jsonl"
+
+
+def record_written(path: Path, sha: str, label: str) -> None:
+    ledger = ledger_path()
+    try:
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        with open(ledger, "a") as fh:
+            fh.write(json.dumps({"sha256": sha, "path": str(path), "label": label}) + "\n")
+    except OSError:  # a sandbox that cannot write the cache: the guard is best effort there
+        pass
+
+
+def written_hashes() -> set[str]:
+    try:
+        lines = ledger_path().read_text().splitlines()
+    except OSError:
+        return set()
+    hashes = set()
+    for line in lines:
+        try:
+            hashes.add(json.loads(line)["sha256"])
+        except (json.JSONDecodeError, KeyError, TypeError):  # a torn or foreign line: skip it, keep the rest
+            continue
+    return hashes
 
 
 def folder_size(path: Path) -> int:

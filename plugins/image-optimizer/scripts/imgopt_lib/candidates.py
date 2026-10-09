@@ -29,17 +29,17 @@ import json
 import shlex
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import compare as CP
 from . import gates as G
 from . import ladder, metrics
-from .formats import EXT_BY_FORMAT, WORKDIR_MARKER, WORKDIR_MARKER_TEXT, format_of, subdir_name
+from .formats import EXT_BY_FORMAT, format_of, subdir_name
 from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
                       srgb_shift)
 from .tools import OPTIONAL_ENCODERS, describe
-from .workdirs import folder_size
+from .workdirs import folder_size, mark, written_hashes
 
 SCHEMA = 1
 # Bump when a cached record would be wrong or lack a key. 5: every raster rung records metadata_removed;
@@ -58,7 +58,7 @@ class Options:
     profile: str
     out: Path
     gates: G.Gates
-    ref: Path | None = None
+    refs: dict = field(default_factory=dict)  # input path -> the file its pick is measured against
     resize: int | None = None
     out_format: str = "keep"
     waived: tuple[str, ...] = ()
@@ -317,8 +317,12 @@ def _no_pick_reason(cands: list[dict], opts: Options) -> str:
 
 def _process(src: Path, opts: Options, tools: dict) -> dict:
     folder = opts.out / subdir_name(src)
-    ref_path = opts.ref or src
+    ref_path = opts.refs.get(src, src)
     src_hash, ref_hash = sha256(src), sha256(ref_path)
+    if opts.profile != "lossless" and src not in opts.refs and src_hash in written_hashes():
+        raise ImagingError(f"{src.name}: an earlier imgopt lossy pick wrote this file, so measuring it again "
+                           "would stack a second lossy pass; measure against the original with --ref-rev <commit "
+                           "before that change> or --ref <original>")
     fmt = format_of(src)
     notes: list[str] = []
     can_measure = all(n in tools and tools[n].ok for n in ("ffmpeg", "ssimulacra2"))
@@ -331,7 +335,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     else:
         facts = read_facts(src)
         source_kinds = metadata_kinds(src)
-        ref_facts = read_facts(ref_path) if opts.ref else facts
+        ref_facts = read_facts(ref_path) if src in opts.refs else facts
         if opts.resize and opts.resize == facts.display_width == ref_facts.display_width:
             raise ImagingError(f"{src.name}: already displays {opts.resize} px wide, so there is nothing to "
                                "resize (optimize it without --resize)")
@@ -370,8 +374,8 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
                          "the reference is scaled the same way")
     previous = _previous(folder / "metrics.json")
     shutil.copyfile(src, folder / f"source{src.suffix.lower()}")
-    if opts.ref:
-        notes.append(f"measured against {opts.ref}")
+    if src in opts.refs:
+        notes.append(f"measured against {ref_path}")
     skipped = [r for r in rungs if not _available(r, tools)]
     missing = sorted({n for r in skipped for n in r.tools if not (n in tools and tools[n].ok)})
     optional_missing = [n for n in missing if n in OPTIONAL_ENCODERS]
@@ -417,7 +421,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     record = {
         "schema": SCHEMA,
         "source": {"path": str(src), "sha256": src_hash, "size": size, **source_info},
-        "ref": {"path": str(ref_path), "sha256": ref_hash},
+        "ref": {"path": str(ref_path), "sha256": ref_hash, "size": ref_path.stat().st_size},
         "profile": opts.profile, "gates": asdict(opts.gates), "resize": opts.resize,
         "format_requested": opts.out_format, "format": target_fmt, "target": str(target),
         "uncalibrated": target_fmt in UNCALIBRATED,
@@ -443,6 +447,9 @@ def print_record(record: dict, log=print) -> None:
     dims = f"{s['width']}x{s['height']} " if s.get("width") else ""
     colours = f", {s['colors']} colours" if s.get("colors") else ""
     log(f"\n== {s['path']}  {kb(s['size'])}  {dims}{s['format']}{colours}")
+    if record["ref"]["path"] != s["path"]:
+        log(f"   baseline: {record['ref']['path']}  {kb(record['ref']['size'])} "
+            "(scores are against it; sizes below are this file's)")
     for note in record["notes"]:
         log(f"   note: {note}")
     log(f"   {'candidate':22} {'size':>9} {'saved':>6} {'SSIM':>8} {'ss2':>6} {'banding':>11}  result")
@@ -476,6 +483,11 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     change = f" ({(total_after - total_before) / total_before:+.1%})" if total_before else ""
     log(f"\n{len(records)} file(s), {kb(total_before)} -> {kb(total_after)}{change} overall; "
         f"{len(applied)} to apply ({kb(before)} -> {kb(after)}), {len(records) - len(applied)} untouched.")
+    based = [r for r in records if r["ref"]["path"] != r["source"]["path"]]
+    if based:
+        based_before = sum(r["ref"]["size"] for r in based)
+        based_after = sum(pick_of(r)["size"] if r in applied else r["source"]["size"] for r in based)
+        log(f"Against the baselines: {kb(based_before)} -> {kb(based_after)} for {len(based)} file(s).")
     log(describe(tools))
     if any(r["uncalibrated"] for r in records):
         log("UNCALIBRATED FORMAT: WebP/AVIF output was never calibrated against these gates; "
@@ -533,11 +545,7 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
         log(f"\n== {src}: skipped: {why}")
     refused_paths = {src for src, _ in refused}
     inputs = [p for p in inputs if Path(p) not in refused_paths]
-    opts.out.mkdir(parents=True, exist_ok=True)
-    ignore = opts.out / ".gitignore"
-    if not ignore.exists():
-        ignore.write_text("*\n")  # a working folder never belongs in a commit
-    (opts.out / WORKDIR_MARKER).write_text(WORKDIR_MARKER_TEXT)
+    mark(opts.out)
     write_run(opts.out, inputs, opts)
     records = []
     for src in inputs:

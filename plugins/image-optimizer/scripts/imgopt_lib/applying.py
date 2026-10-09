@@ -25,6 +25,7 @@ from .candidates import kb, load_records, pick_of, sha256
 from .imaging import READ_FAILURES, display_pixels, read_facts
 from .ladder import UsageError
 from .sheet import needs_tiles
+from .workdirs import record_written
 
 TOLERANCE = {"ssim": 1e-6, "ss2": 1e-3, "band": 1e-6}
 
@@ -210,6 +211,8 @@ def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = No
             log(f"  MISMATCH {target}: {problem}; the target was left as it was")
             continue
         written += 1
+        if needs_tiles(record):  # candidates will not measure this file against itself without a baseline
+            record_written(target, sha256(target), chosen["label"])
         before += record["source"]["size"]
         after += target.stat().st_size
         log(f"  re-measured {target}  {kb(record['source']['size'])} -> {kb(target.stat().st_size)}  "

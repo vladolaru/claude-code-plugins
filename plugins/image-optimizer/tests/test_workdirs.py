@@ -95,3 +95,10 @@ def test_the_cli_prints_the_workdir_and_cleans_it(monkeypatch, tmp_path, capsys)
     (folder / WORKDIR_MARKER).write_text("")
     assert cli.main(["clean", str(folder)]) == 0
     assert "Freed" in capsys.readouterr().out and not folder.exists()
+
+
+def test_the_ledger_records_written_hashes(monkeypatch, tmp_path):
+    monkeypatch.setenv("IMGOPT_CACHE", str(tmp_path / "c"))
+    assert W.written_hashes() == set()
+    W.record_written(tmp_path / "a.jpg", "abc", "cjpegli-q55")
+    assert W.written_hashes() == {"abc"}

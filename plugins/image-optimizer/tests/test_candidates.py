@@ -244,7 +244,7 @@ def test_gif_under_ref_names_the_real_reason(factory, toolset, tmp_path):
     src, ref = factory.root / "a.gif", factory.root / "b.gif"
     for path, ordered in ((src, frames), (ref, frames[::-1])):
         ordered[0].save(path, save_all=True, append_images=ordered[1:], duration=100, loop=0)
-    [r] = C.run([src.resolve()], opts(tmp_path / "out", ref=ref.resolve()), tools, log=quiet)
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", refs={src.resolve(): ref.resolve()}), tools, log=quiet)
     [gif] = r["candidates"]
     assert "reference is not the source" in gif["reason"]
 
@@ -272,7 +272,8 @@ def test_ref_measures_lossless_candidates_against_the_baseline(factory, toolset,
     tools = toolset("recompress", "high", {"jpeg"})
     original = factory.photo(name="orig.jpg", quality=95)
     current = factory.photo(name="current.jpg", quality=50)
-    [r] = C.run([current.resolve()], opts(tmp_path / "out", "high", ref=original.resolve()), tools, log=quiet)
+    refs = {current.resolve(): original.resolve()}
+    [r] = C.run([current.resolve()], opts(tmp_path / "out", "high", refs=refs), tools, log=quiet)
     lossless = [c for c in r["candidates"] if c["label"].startswith("lossless-") and "ssim" in c]
     assert lossless and all(not c["identical"] and c["kind"] == "lossy" for c in lossless)
     assert r["ref"]["path"] == str(original.resolve())
@@ -627,7 +628,8 @@ def test_a_pick_ffmpeg_cannot_reproduce_says_why(factory, toolset, tmp_path):
 
 def test_the_summary_flags_picks_larger_than_their_original(tmp_path):
     def record(name, before, after):
-        return {"source": {"path": f"/x/{name}", "size": before}, "verdict": "apply", "pick": "p",
+        return {"source": {"path": f"/x/{name}", "size": before}, "ref": {"path": f"/x/{name}", "size": before},
+                "verdict": "apply", "pick": "p",
                 "candidates": [{"file": "p", "size": after, "kind": "lossy"}], "uncalibrated": False,
                 "waived": []}
     lines = []
@@ -659,7 +661,8 @@ def test_a_file_already_resized_can_be_measured_against_its_larger_original(fact
     original = factory.photo(name="original.jpg", size=(320, 240), quality=95).resolve()
     merged = factory.root / "merged.jpg"
     I.resize_width(Image.open(original), 160).save(merged, "JPEG", quality=90)
-    [r] = C.run([merged.resolve()], opts(tmp_path / "out", "high", resize=160, ref=original), tools, log=quiet)
+    refs = {merged.resolve(): original}
+    [r] = C.run([merged.resolve()], opts(tmp_path / "out", "high", resize=160, refs=refs), tools, log=quiet)
     assert r["candidates"] and r["ref"]["path"] == str(original)
 
 
@@ -768,7 +771,7 @@ def test_a_lossy_pixel_candidate_lists_removed_metadata(factory, toolset, tmp_pa
 
 def test_print_record_names_the_metadata_the_pick_removes():
     record = {"source": {"path": "a.jpg", "size": 2048, "width": 10, "height": 10, "format": "jpeg", "colors": None},
-              "notes": [], "verdict": "apply", "verdict_reason": "smaller", "pick": "a.jpg",
+              "ref": {"path": "a.jpg", "size": 2048}, "notes": [], "verdict": "apply", "verdict_reason": "smaller", "pick": "a.jpg",
               "candidates": [{"label": "x", "file": "a.jpg", "size": 1024, "pass": True, "metadata_removed": ["exif"]}]}
     lines = []
     C.print_record(record, log=lines.append)
@@ -874,3 +877,102 @@ def test_an_encoder_killed_by_a_signal_is_not_cached_as_a_refusal(factory, tools
     [record] = [json.loads(p.read_text()) for p in out.glob("*/metrics.json")]
     failed = next(c for c in record["candidates"] if c["label"] == "oxipng")
     assert "exited -9" in failed["error"] and "error_kind" not in failed
+
+
+def test_a_file_written_by_a_lossy_pick_is_not_measured_again_without_a_baseline(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src = factory.photo(size=(200, 150))
+    W.record_written(src, C.sha256(src), "jpegoptim-m70")
+    lines = []
+    records = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=lines.append)
+    assert records == [] and any("an earlier imgopt lossy pick wrote this file" in l for l in lines)
+    original = factory.photo(name="orig.jpg", size=(200, 150), quality=98)
+    lines = []
+    [r] = C.run([src.resolve()], opts(tmp_path / "out2", "high", refs={src.resolve(): original.resolve()}), tools,
+                log=lines.append)
+    assert r["ref"]["size"] == original.stat().st_size
+    assert any(f"baseline: {original.resolve()}" in l for l in lines)
+    assert any(l.startswith("Against the baselines: ") and "for 1 file(s)" in l for l in lines)
+
+
+def test_a_lossless_job_may_run_on_a_file_a_lossy_pick_wrote(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo()
+    W.record_written(src, C.sha256(src), "pngquant-q70")
+    assert len(C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)) == 1
+
+
+def _commit_two_versions(repo, factory):
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    repo.mkdir()
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    a = repo / "a.png"
+    first = factory.logo().read_bytes()
+    a.write_bytes(first)
+    run("add", "a.png")
+    run("commit", "-qm", "base")
+    a.write_bytes(factory.logo(name="l2.png", size=(60, 60)).read_bytes())
+    return a, first
+
+
+def test_baselines_extracts_each_input_as_of_the_revision(factory, tmp_path):
+    from imgopt_lib import cli
+    a, first = _commit_two_versions(tmp_path / "repo", factory)
+    refs = cli._baselines([a.resolve()], "HEAD", tmp_path / "out")
+    assert refs[a.resolve()].read_bytes() == first
+    assert (tmp_path / "out" / WORKDIR_MARKER).is_file()
+
+
+def test_baselines_names_a_file_the_revision_lacks(factory, tmp_path):
+    from imgopt_lib import cli
+    a, _ = _commit_two_versions(tmp_path / "repo", factory)
+    new = a.with_name("new.png")
+    new.write_bytes(a.read_bytes())
+    with pytest.raises(ladder.UsageError, match="new.png: not found at HEAD"):
+        cli._baselines([new.resolve()], "HEAD", tmp_path / "out")
+    with pytest.raises(ladder.UsageError, match="may not start with"):
+        cli._baselines([a.resolve()], "--output=x", tmp_path / "out")
+
+
+def test_ref_rev_measures_a_file_against_its_content_at_the_revision(factory, tmp_path):
+    a, first = _commit_two_versions(tmp_path / "repo", factory)
+    out = tmp_path / "out"
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(a), "--out", str(out), "--profile",
+                           "high", "--ref-rev", "HEAD"], capture_output=True, text=True)
+    if proc.returncode == 2 and "BLOCKED" in proc.stdout:
+        pytest.skip("tools missing on this machine")
+    assert "baseline:" in proc.stdout and "Against the baselines:" in proc.stdout, proc.stdout + proc.stderr
+    [folder] = [p for p in (out / "_baselines").iterdir()]
+    assert (folder / "a.png").read_bytes() == first
+
+
+def test_ref_and_ref_rev_exclude_each_other(factory, tmp_path):
+    src = factory.logo()
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(src), "--out", str(tmp_path / "o"),
+                           "--ref", str(src), "--ref-rev", "HEAD"], capture_output=True, text=True)
+    assert proc.returncode == 2 and "not allowed with" in proc.stderr
+
+
+def test_cli_refuses_a_non_empty_out_folder_it_did_not_make(factory, tmp_path):
+    out = tmp_path / "mine"
+    out.mkdir()
+    (out / "notes.txt").write_text("keep me")
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(factory.logo()), "--out", str(out)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "imgopt workdir" in proc.stderr and "writes only into an empty folder" in proc.stderr
+    assert sorted(p.name for p in out.iterdir()) == ["notes.txt"]
+
+
+def test_cli_accepts_an_empty_out_folder_and_one_candidates_made(factory, toolset, tmp_path):
+    out = tmp_path / "empty"
+    out.mkdir()
+    for _ in range(2):  # the second run finds the first run's marker
+        proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(factory.logo()), "--out", str(out)],
+                              capture_output=True, text=True)
+        if proc.returncode == 2 and "BLOCKED" in proc.stdout:
+            pytest.skip("tools missing on this machine")
+        assert proc.returncode in (0, 1) and "already has files" not in proc.stderr
+    assert (out / WORKDIR_MARKER).is_file()

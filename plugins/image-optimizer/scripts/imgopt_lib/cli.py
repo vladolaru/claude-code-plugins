@@ -20,7 +20,7 @@ from . import metrics as M
 from . import sheet as S
 from . import tools as T
 from . import workdirs as W
-from .formats import OUTPUT_FORMATS, expand_inputs, format_of
+from .formats import OUTPUT_FORMATS, WORKDIR_MARKER, expand_inputs, format_of, subdir_name
 from .ladder import UsageError
 
 SCRIPT = Path(__file__).resolve().parents[1] / "imgopt.py"
@@ -69,6 +69,36 @@ def _refuse_out_inside_inputs(out: Path, paths) -> None:
             raise UsageError(f"--out {out} is inside the git work tree {top}; use `imgopt workdir <task>`")
 
 
+def _refuse_unmarked_out(out: Path) -> None:
+    """A later `clean` deletes any marked folder, so `candidates` marks only an empty folder or one it made."""
+    if out.is_dir() and not (out / WORKDIR_MARKER).is_file() and any(out.iterdir()):
+        raise UsageError(f"--out {out} already has files and was not made by `imgopt candidates`, which writes "
+                         "only into an empty folder or one it made earlier; use `imgopt workdir <task>`")
+
+
+def _baselines(inputs: list[Path], rev: str, out: Path) -> dict[Path, Path]:
+    """Each input's content at ``rev``, extracted under out/_baselines (git show); UsageError naming a file
+    the revision does not have."""
+    if rev.startswith("-"):
+        raise UsageError(f"--ref-rev {rev}: a revision may not start with '-'")
+    W.mark(out)  # the folder holds our files from here on, even if the run stops before candidates marks it
+    refs = {}
+    for src in inputs:
+        top = _git_top(src.parent)
+        if top is None:
+            raise UsageError(f"{src}: not inside a git work tree, so --ref-rev cannot find its baseline")
+        rel = src.relative_to(top).as_posix()
+        proc = subprocess.run(["git", "-C", str(top), "show", "--end-of-options", f"{rev}:{rel}"],
+                              capture_output=True)
+        if proc.returncode != 0:
+            raise UsageError(f"{rel}: not found at {rev} ({proc.stderr.decode(errors='replace').strip()})")
+        target = out / "_baselines" / subdir_name(src) / src.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(proc.stdout)
+        refs[src] = target
+    return refs
+
+
 def _expand_reporting(paths) -> list[Path]:
     """expand_inputs, saying on stderr what the folder walk left out."""
     skipped: list[str] = []
@@ -80,18 +110,24 @@ def _expand_reporting(paths) -> list[Path]:
 
 
 def cmd_candidates(args) -> int:
-    _refuse_out_inside_inputs(Path(args.out).resolve(), args.paths)
+    out = Path(args.out).resolve()
+    _refuse_out_inside_inputs(out, args.paths)
+    _refuse_unmarked_out(out)
     inputs = _expand_reporting(args.paths)
     if args.ref and len(inputs) != 1:
         raise ValueError("--ref works with exactly one input file")
-    if args.ref and any(format_of(p) == "svg" for p in inputs):
-        raise UsageError("--ref does not apply to SVG: the rendering check compares svgo's output "
+    if (args.ref or args.ref_rev) and any(format_of(p) == "svg" for p in inputs):
+        raise UsageError("--ref and --ref-rev do not apply to SVG: the rendering check compares svgo's output "
                          "with the source itself")
     waive = split_csv(args.allow_missing)
     chk = T.ensure(_job_for(args), args.profile, {format_of(p) for p in inputs}, args.format, waive)
     gates = G.gates_for(args.profile, ssim=args.ssim, ss2=args.ss2, band=args.band)
-    opts = C.Options(profile=args.profile, out=Path(args.out).resolve(), gates=gates,
-                     ref=Path(args.ref).resolve() if args.ref else None, resize=args.resize,
+    refs = {}
+    if args.ref:
+        refs = {inputs[0]: Path(args.ref).resolve()}
+    elif args.ref_rev:
+        refs = _baselines(inputs, args.ref_rev, out)
+    opts = C.Options(profile=args.profile, out=out, gates=gates, refs=refs, resize=args.resize,
                      out_format=args.format, waived=chk.waived)
     records = C.run(inputs, opts, chk.tools, script=SCRIPT)
     return 0 if len(records) == len(inputs) and not any(C.all_errored(r) for r in records) else 1
@@ -210,7 +246,10 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("paths", nargs="+", help="files or folders")
     c.add_argument("--out", required=True, help="working folder (from `imgopt workdir <task>`; never the repo)")
     c.add_argument("--profile", choices=PROFILE_NAMES, default="lossless")
-    c.add_argument("--ref", help="baseline to measure against (single input only)")
+    baseline = c.add_mutually_exclusive_group()
+    baseline.add_argument("--ref", help="baseline to measure against (single input only)")
+    baseline.add_argument("--ref-rev", metavar="REV", help="measure each input against its content at this git "
+                          "revision (the original before an earlier pass)")
     c.add_argument("--resize", type=int, metavar="WIDTH", help="Lanczos resize to this width first")
     c.add_argument("--format", choices=OUTPUT_FORMATS, default="keep")
     c.add_argument("--ssim", type=float)

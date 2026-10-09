@@ -19,7 +19,7 @@ Every command is `python3 "$SKILL_DIR/../../scripts/imgopt.py" <command>`; call 
 |---|---|
 | `doctor --job <audit\|recompress\|prepare\|convert\|compare> --profile <p> [--format f] [paths]` | Check tools before any work (`prepare` = resizing, `convert` = a new format) |
 | `inspect <paths> [--json]` | Report facts and lossless headroom; changes nothing (the audit job) |
-| `candidates <paths> --out <dir> --profile <p> [--resize W] [--format f] [--ref file]` | Try encoder settings per file, measure, gate, pick |
+| `candidates <paths> --out <dir> --profile <p> [--resize W] [--format f] [--ref file | --ref-rev rev]` | Try encoder settings per file, measure, gate, pick |
 | `sheet <dir> [--alt <label>]` | 1:1 tiles for you, a comparison page for the human |
 | `apply <dir> [--approve a.jpg,b.png] [--only a,b] [--dest dir]` | Write picks and re-verify them |
 | `compare <ref> <new>` | Measure any pair (path, `git:<rev>:<path>`, URL) and get the reviewer check |
@@ -50,7 +50,7 @@ Banding is gated only on palette PNG output; for other lossy output it is report
 
 ## Baselines
 
-Measure against the original, never an already-optimized intermediate. For a follow-up on files a merged PR already compressed, extract the pre-merge version (`git show <pre-merge-sha>:<path> > <workdir>/ref.<ext>`) and pass it with `--ref` (one input file only, not for SVG). To check what a reviewer will see, run `IMGOPT compare` on the raw GitHub URLs pinned to the base and head commits.
+Measure against the original, never an already-optimized intermediate. For a follow-up on files a merged PR already compressed, extract the pre-merge version (`git show <pre-merge-sha>:<path> > <workdir>/ref.<ext>`) and pass it with `--ref` (one input file only, not for SVG); for a batch, `--ref-rev <pre-merge-sha>` extracts each file's content at that commit itself and measures against it, and the output shows each baseline's size beside the file's. A file an earlier lossy `apply` wrote is refused by `candidates` without a baseline, so a second lossy pass is never stacked on the first. To check what a reviewer will see, run `IMGOPT compare` on the raw GitHub URLs pinned to the base and head commits.
 
 ## What the scripts cannot enforce
 

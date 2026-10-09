@@ -117,6 +117,18 @@ def test_a_matching_lossy_pick_replaces_the_target(factory, toolset, tmp_path):
     assert staged_files(src.parent) == []
 
 
+def test_a_written_lossy_pick_is_ledgered(factory, toolset, tmp_path):
+    from imgopt_lib import workdirs as W
+    tools = toolset("recompress", "high", {"jpeg"})
+    out = tmp_path / "out"
+    src, folder = _lossy_record(out, factory)
+    record = json.loads((folder / "metrics.json").read_text())
+    record["candidates"][0].update(_measured(folder, tools))
+    (folder / "metrics.json").write_text(json.dumps(record))
+    assert AP.apply(out, tools=tools, approve=("photo.jpg",), log=lambda _: None) == 0
+    assert C.sha256(src) in W.written_hashes()
+
+
 def test_remeasure_mismatch_fails_loudly_and_leaves_the_target_alone(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
