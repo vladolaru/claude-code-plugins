@@ -139,8 +139,9 @@ def _summary(group: list[dict]) -> list[list[str]]:
     for category, rows in _by(group, "category").items():
         done = _done(rows)
         families = Counter(r["pick_family"] for r in done if r.get("pick"))
+        errored = sum(1 for r in done if r.get("errored"))  # every candidate failed: a tool problem
         body.append([category, str(len(done)), str(len(rows) - len(done)),
-                     str(sum(1 for r in done if not r.get("pick"))), _pct(_real_saved(done)),
+                     str(sum(1 for r in done if not r.get("pick")) - errored), str(errored), _pct(_real_saved(done)),
                      ", ".join(f"{f} {n}" for f, n in families.most_common()) or "-",
                      f"{statistics.median(r['seconds'] for r in rows):.1f}",
                      _bytes(statistics.median(r["disk"] for r in done)) if done else "-"])
@@ -245,7 +246,8 @@ def markdown(rows: list[dict]) -> str:
            "files as lossy) are left out of the floor and banding tables. Every number is per category.", ""]
     sections = [
         ("Per-category results", lambda g: _table(
-            ["Category", "Files", "Skipped", "No pick", "Saved", "Pick families", "Median s/file", "Disk/file"],
+            ["Category", "Files", "Skipped", "No pick", "Errored", "Saved", "Pick families", "Median s/file",
+             "Disk/file"],
             _summary(g))),
         ("Encoder ablations (saving with that encoder removed; \"not tried\" where no file of the category got its "
          "candidates, \"tried on n of m\" where only some did)", _ablation),

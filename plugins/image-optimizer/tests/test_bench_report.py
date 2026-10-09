@@ -69,7 +69,7 @@ def test_skipped_rows_are_counted_and_their_reasons_listed():
     done.update(job="lossless", verdict="apply", pick="oxipng", pick_family="oxipng", pick_size=500)
     skipped.update(seconds=1.0, disk=0)
     md = R.markdown([skipped, done])
-    assert "16-bit PNG" in md and "| edge | 1 | 1 | 0 |" in md
+    assert "16-bit PNG" in md and "| edge | 1 | 1 | 0 | 0 |" in md
 
 
 def test_picks_at_the_floor_and_banding_use_the_pick_scores():
@@ -159,3 +159,13 @@ def test_ablation_says_not_tried_where_a_category_never_ran_the_encoder():
     md = R.markdown(rows)
     assert "| photo-camera | 45.0% | 25.0% | 40.0% (tried on 1 of 2) |" in md
     assert "| phone-upload | 30.0% | 0.0% | not tried |" in md
+
+
+def test_rows_whose_candidates_all_errored_are_counted_apart_from_no_pick():
+    failed = row("icon", 1000, [("oxipng", None, False)])
+    failed.update(verdict="untouched", pick=None, errored=True)  # a tool failure, not a gate failure
+    gated = row("icon", 1000, [("pngquant", 400, False)])
+    gated.update(verdict="untouched", pick=None, errored=False)
+    md = R.markdown([failed, gated])
+    assert "| Category | Files | Skipped | No pick | Errored | Saved |" in md
+    assert "| icon | 2 | 0 | 1 | 1 | 0.0% |" in md
