@@ -6,13 +6,15 @@ reads the records back and appends one row per file to `rows.jsonl`: the pick, i
 size and gate outcome, the seconds and the disk the record folder took. Right after the rows are written the
 folder is pruned with `workdirs.clean(keep_picks=True)`, which leaves each record's metrics.json, reference,
 source copy and pick: all `sheet` and the human review need, and a small part of the ladder's output (the full
-ladder over this corpus does not fit on a laptop disk). `timing.json` carries the tool versions, the commit
-and each category's wall time. Row schema: see `_row`. `report.load` and `report.timing` are the one reader of
-both files; `report` and `review` use nothing else of the run but the kept record folders.
+ladder over this corpus does not fit on a laptop disk). `timing.json` carries the tool versions, the commit,
+the corpus.json checksum, each job's settings and missing optional tools, and each category's wall time. Row
+schema: see `_row`. `report.load` and `report.timing` are the one reader of both files; `report` and `review`
+use nothing else of the run but the kept record folders.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -195,7 +197,9 @@ def run(corpus: Path, run_dir: Path, jobs: list[Job], *, jobs_parallel: int = 1,
     tools = {name: tool for chk in checks.values() for name, tool in chk.tools.items()}
     timing = {**(meta or {}), "corpus_version": CORPUS_VERSION, "jobs_parallel": jobs_parallel,
               "tools": T.describe(tools),
-              "jobs": {job.name: {"missing_optional": list(checks[job].missing_optional)} for job in plan},
+              "corpus_sha256": hashlib.sha256((corpus / manifest.MANIFEST).read_bytes()).hexdigest(),
+              "jobs": {job.name: {"profile": job.profile, "resize": job.resize, "format": job.out_format,
+                                  "missing_optional": list(checks[job].missing_optional)} for job in plan},
               "categories": {}}
     run_dir.mkdir(parents=True, exist_ok=True)
     for job, by_category in plan.items():

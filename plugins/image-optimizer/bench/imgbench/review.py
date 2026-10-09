@@ -66,6 +66,18 @@ def _slim(row: dict) -> dict:
             "distance": None if distance == math.inf else distance}
 
 
+def job_settings(run_dir: Path, name: str) -> tuple[str, int | None, str]:
+    """(profile, resize, format) of a job as the run recorded it in timing.json; runs made before it recorded
+    them fall back to the harness's current job table. Raises UsageError for a job neither knows."""
+    recorded = report.timing(run_dir).get("jobs", {}).get(name, {})
+    if "profile" in recorded:
+        return recorded["profile"], recorded["resize"], recorded["format"]
+    job = next((j for j in harness.JOBS if j.name == name), None)
+    if job is None:
+        raise UsageError(f"{name}: not a job of this run's timing.json nor of the harness")
+    return job.profile, job.resize, job.out_format
+
+
 def page_of(dest: Path) -> Path:
     return Path(dest) / "_sheet" / "index.html"
 
@@ -79,9 +91,7 @@ def assemble(run_dir: Path, sampled: list[dict], dest: Path, *, script: Path | N
     jobs = {r["job"] for r in sampled}
     if len(jobs) != 1:
         raise UsageError(f"one review folder holds one job's picks (their settings differ); got {sorted(jobs)}")
-    job = next((j for j in harness.JOBS if j.name == jobs.pop()), None)
-    if job is None:
-        raise UsageError(f"{sampled[0]['job']}: not a job of the harness")
+    profile, resize, out_format = job_settings(run_dir, jobs.pop())
     dest = Path(dest)
     W.mark(dest)
     for row in sampled:
@@ -89,8 +99,7 @@ def assemble(run_dir: Path, sampled: list[dict], dest: Path, *, script: Path | N
         if not (folder / "metrics.json").is_file():
             raise UsageError(f"{folder}: no record folder in the run for {row['file']}")
         shutil.copytree(folder, dest / folder.name, dirs_exist_ok=True)
-    opts = C.Options(profile=job.profile, out=dest, gates=G.gates_for(job.profile), resize=job.resize,
-                     out_format=job.out_format)
+    opts = C.Options(profile=profile, out=dest, gates=G.gates_for(profile), resize=resize, out_format=out_format)
     C.write_run(dest, [Path(r["file"]) for r in sampled], opts)
     (dest / SAMPLE).write_text(json.dumps([_slim(r) for r in sampled], indent=1))
     S.build(dest, problems=problems, script=script or SCRIPT)

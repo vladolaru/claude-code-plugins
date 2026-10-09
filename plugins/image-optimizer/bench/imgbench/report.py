@@ -310,10 +310,14 @@ def render(run_dir: Path) -> str:
     meta = timing(run_dir)
     header = [f"# imgbench run {run_dir.name}", ""]
     for label, key in (("Commit", "commit"), ("Corpus version", "corpus_version"),
+                       ("Corpus checksum (corpus.json sha256)", "corpus_sha256"),
                        ("Files in parallel", "jobs_parallel")):
         if key in meta:
             header.append(f"- {label}: {meta[key]}")
     if meta.get("tools"):
         header.append(f"- {meta['tools']}")
     header.append(f"- Optional tools missing: {_missing_optional(meta)}")
+    header.append("- Machine-dependent skips: for the lossy profiles imgopt skips a file whose sha256 is in this "
+                  "machine's written.jsonl ledger (a file an earlier `apply` wrote); such skips are listed under "
+                  "Skip reasons.")
     return "\n".join(header + ["", markdown(load(run_dir))]).rstrip("\n") + "\n"

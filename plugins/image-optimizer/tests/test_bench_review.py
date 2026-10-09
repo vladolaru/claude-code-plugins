@@ -144,3 +144,13 @@ def test_sample_ranks_by_the_report_floor_margin_evidence_ssim_included():
     assert picked[0]["file"] == "f9"
     sampled = RV._slim(picked[0])
     assert sampled["distance"] == pytest.approx(R.floor_margin(near))
+
+
+def test_job_settings_come_from_the_run_then_from_the_job_table(tmp_path):
+    job = next(j for j in harness.JOBS if j.name == "prepare-catalog")
+    assert RV.job_settings(tmp_path, "prepare-catalog") == (job.profile, job.resize, job.out_format)  # no timing
+    (tmp_path / "timing.json").write_text(json.dumps({"jobs": {"retired-job": {
+        "profile": "medium", "resize": 800, "format": "webp", "missing_optional": []}}}))
+    assert RV.job_settings(tmp_path, "retired-job") == ("medium", 800, "webp")  # the run's own record wins
+    with pytest.raises(UsageError, match="not-a-job"):
+        RV.job_settings(tmp_path, "not-a-job")

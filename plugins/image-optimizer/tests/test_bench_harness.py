@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -60,6 +61,9 @@ def test_run_writes_rows_prunes_to_picks_and_records_skips(factory, toolset, tmp
         assert {n for n in kept if not n.startswith("source.")} <= allowed
     timing = json.loads((run_dir / "timing.json").read_text())
     assert timing["tools"].startswith("tools: ") and "lossless/photo-small" in timing["categories"]
+    assert timing["jobs"]["lossless"] == {"profile": "lossless", "resize": None, "format": "keep",
+                                          "missing_optional": []}
+    assert timing["corpus_sha256"] == hashlib.sha256((corpus / "corpus.json").read_bytes()).hexdigest()
 
 
 def test_job_kinds_and_categories():
@@ -143,3 +147,11 @@ def test_report_header_names_the_missing_optional_tools(tmp_path):
     assert "- Optional tools missing: none" in report.render(tmp_path)
     (tmp_path / "timing.json").write_text("{}")
     assert "- Optional tools missing: not recorded" in report.render(tmp_path)
+
+
+def test_report_header_names_the_corpus_checksum_and_the_ledger_skips(tmp_path):
+    (tmp_path / "rows.jsonl").write_text("")
+    (tmp_path / "timing.json").write_text(json.dumps({"corpus_sha256": "ab12"}))
+    text = report.render(tmp_path)
+    assert "- Corpus checksum (corpus.json sha256): ab12" in text
+    assert "written.jsonl" in text
