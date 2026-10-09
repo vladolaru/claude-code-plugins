@@ -45,7 +45,10 @@ def slugs(keys: list[str]) -> list[str]:
 
 
 def _rgb(src: Path, width: int | None) -> Image.Image:
+    """The photo as displayed, in sRGB pixels with no profile attached: imgopt's converted image carries a generated
+    sRGB profile whose header holds the current time, which would make PNG outputs differ on every build."""
     im = display_pixels(src).convert("RGB")
+    im.info.pop("icc_profile", None)
     return resize_width(im, width) if width and im.width > width else im
 
 

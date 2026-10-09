@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 
-from . import paths, sources
+from . import build, paths, sources
 
 SOURCES_FILE = paths.SOURCES_FILE
 
@@ -64,6 +64,16 @@ def cmd_fetch(args) -> int:
     return 1 if problems else 0
 
 
+def cmd_build(args) -> int:
+    """Assemble the corpus and corpus.json; `--only` rebuilds just the named categories."""
+    only = [c for c in args.only.split(",") if c] if args.only else None
+    unknown = sorted(set(only or ()) - set(build.CATEGORIES))
+    if unknown:
+        print(f"unknown categories: {', '.join(unknown)}; choose from {', '.join(build.CATEGORIES)}")
+        return 2
+    return build.build(only)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgbench",
@@ -75,6 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
     select.set_defaults(func=cmd_select)
     commands.add_parser("fetch", help="download the pinned originals and verify their checksums").set_defaults(
         func=cmd_fetch)
+    assemble = commands.add_parser("build", help="assemble the corpus and corpus.json from the fetched originals")
+    assemble.add_argument("--only", metavar="CATEGORY,...", help="rebuild just these categories (the six photo "
+                          "categories rebuild together); others keep their files and manifest entries")
+    assemble.set_defaults(func=cmd_build)
     return parser
 
 

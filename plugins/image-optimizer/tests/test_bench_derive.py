@@ -62,6 +62,15 @@ def test_slugs_get_numbered_when_two_keys_collide():
     assert D.slugs(["A b.jpg", "a-b.png", "A,B.jpg", "c.jpg"]) == ["a-b", "a-b-2", "a-b-3", "c"]
 
 
+def test_png_master_of_a_device_profile_photo_embeds_no_generated_profile(tmp_path, device_icc):
+    """The sRGB profile imgopt converts to is generated with the current time in its header, so embedding it
+    would give every build different bytes."""
+    src = tmp_path / "p3.jpg"
+    Image.open(_big(tmp_path)).save(src, "JPEG", quality=90, icc_profile=device_icc)
+    with Image.open(D.png_master(src, tmp_path / "m.png")) as im:
+        assert "icc_profile" not in im.info
+
+
 def test_png_and_kodak_variants(tmp_path):
     src = _big(tmp_path)
     with Image.open(D.png_master(src, tmp_path / "m.png")) as im:

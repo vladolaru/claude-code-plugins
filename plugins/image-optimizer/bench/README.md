@@ -6,7 +6,7 @@ The six commands, in the order you use them:
 
 - `select`: pick candidate images from the allowed sources (Wikimedia Commons, the Kodak set, WooCommerce, Gutenberg and Jetpack assets) and write them to `sources.json` with their license, author and checksum.
 - `fetch`: download the originals listed in `sources.json`, verify their checksums and keep them in the shared downloads folder.
-- `build`: assemble the corpus from the fetched originals, generate the synthetic files from fixed seeds and derive the variants, then write `corpus.json`.
+- `build`: assemble the corpus from the fetched originals, generate the synthetic files from fixed seeds and derive the variants, then write `corpus.json` and print a table of files and size per category. `build --only icon,edge` rebuilds just those categories and keeps the rest (naming any photo category rebuilds all six together).
 - `run`: run `imgopt` over the corpus and record every measurement under a new run folder.
 - `report`: summarize a run into tables of savings, quality scores and gate outcomes per category.
 - `review`: build the side-by-side review sheets of a run for a human to judge, and record the verdicts.

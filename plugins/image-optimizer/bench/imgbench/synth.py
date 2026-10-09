@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Collection
 
 from . import manifest
 
@@ -96,8 +97,13 @@ def _rsvg(tools: dict) -> str | None:
     return tool.path if tool is not None and tool.ok else None
 
 
-def build_all(corpus: Path, tools: dict, chrome: str | None) -> tuple[list[manifest.Entry], list[str]]:
-    """Illustrations, icons and screenshots under `corpus`, one Entry each, plus a note for every skipped category."""
+CATEGORIES = ("illustration", "icon", "screenshot")
+
+
+def build_all(corpus: Path, tools: dict, chrome: str | None,
+              only: Collection[str] = CATEGORIES) -> tuple[list[manifest.Entry], list[str]]:
+    """The `only` categories (all three by default) under `corpus`, one Entry per file, plus a note for every
+    wanted category that had to be skipped."""
     entries: list[manifest.Entry] = []
     notes: list[str] = []
 
@@ -109,9 +115,9 @@ def build_all(corpus: Path, tools: dict, chrome: str | None) -> tuple[list[manif
                                           license=LICENSE))
 
     rsvg = _rsvg(tools)
-    if rsvg is None:
+    if rsvg is None and ("illustration" in only or "icon" in only):
         notes.append("illustration and icon categories skipped: rsvg-convert not found")
-    else:
+    if rsvg is not None and "illustration" in only:
         width, height = ILLUSTRATION_SIZE
         for dark in (False, True):
             for seed in ILLUSTRATION_SEEDS:
@@ -119,14 +125,15 @@ def build_all(corpus: Path, tools: dict, chrome: str | None) -> tuple[list[manif
                 add("illustration", f"illustration-{seed:02d}-{tone}.png",
                     f"illustration_svg(seed={seed}, {width}x{height}, {tone}) rendered by rsvg-convert",
                     lambda dest, s=seed, d=dark: render_svg(illustration_svg(s, width, height, d), dest, width, rsvg))
+    if rsvg is not None and "icon" in only:
         for seed in ICON_SEEDS:
             for icon_width in ICON_WIDTHS:
                 add("icon", f"icon-{seed:02d}-{icon_width}.png",
                     f"icon_svg(seed={seed}) rendered by rsvg-convert at {icon_width} px",
                     lambda dest, s=seed, w=icon_width: render_svg(icon_svg(s), dest, w, rsvg))
-    if chrome is None:
+    if chrome is None and "screenshot" in only:
         notes.append("screenshot category skipped: Chrome not found")
-    else:
+    if chrome is not None and "screenshot" in only:
         for name in SHOT_TEMPLATES:
             for width, scale in SHOT_VIEWPORTS:
                 for dark in (False, True):

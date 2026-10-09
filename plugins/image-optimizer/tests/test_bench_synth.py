@@ -25,7 +25,8 @@ def test_an_icon_renders_with_soft_alpha(tmp_path):
     png = SY.render_svg(SY.icon_svg(7), tmp_path / "i.png", 256, rsvg)
     with Image.open(png) as im:
         alpha = im.convert("RGBA").getchannel("A")
-        assert im.width == 256 and len(set(alpha.getdata())) > 2  # partial transparency, not just 0/255
+        partial = sum(alpha.histogram()[1:255])  # pixels that are neither fully clear nor fully opaque
+        assert im.width == 256 and partial > 0
 
 
 def test_edge_cases_cover_the_audit(tmp_path):
