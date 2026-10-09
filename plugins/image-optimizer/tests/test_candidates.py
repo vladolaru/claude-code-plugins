@@ -736,10 +736,11 @@ def test_a_gray_source_gets_a_one_channel_pixels_file(factory, toolset, tmp_path
 
 def test_an_apng_keeps_every_frame_under_high(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"png"})
-    src = factory.apng(frames=3)
+    src = factory.apng(frames=3, photo=True)
     [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
     chosen = C.pick_of(r)
     assert r["source"]["frames"] == 3
+    assert r["candidates"] and all(c["kind"] == "lossless" for c in r["candidates"])  # no pixel rung, no palette
     if chosen:
         folder = C.load_records(tmp_path / "out")[0][0]
         with Image.open(folder / chosen["file"]) as im:
@@ -750,10 +751,11 @@ def test_a_lossless_pick_keeps_the_gamma_chunk(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.gamma_png(size=(400, 300))
     [r] = C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
-    for c in r["candidates"]:
-        if c.get("file"):
-            folder = C.load_records(tmp_path / "out")[0][0]
-            assert I.read_facts(folder / c["file"]).colour_chunks == I.read_facts(src).colour_chunks
+    made = [c for c in r["candidates"] if c.get("file")]
+    assert made
+    folder = C.load_records(tmp_path / "out")[0][0]
+    for c in made:
+        assert I.read_facts(folder / c["file"]).colour_chunks == I.read_facts(src).colour_chunks
 
 
 def test_a_lossless_jpeg_pick_lists_removed_metadata(factory, toolset, tmp_path):

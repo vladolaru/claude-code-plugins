@@ -118,10 +118,12 @@ class Factory:
                          + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
         return path
 
-    def apng(self, name="anim.png", frames=3, size=(64, 64)) -> Path:
-        """An animated PNG: one solid colour per frame."""
+    def apng(self, name="anim.png", frames=3, size=(64, 64), photo=False) -> Path:
+        """An animated PNG: one solid colour per frame, or with ``photo`` a many-colour image per frame (enough
+        colours that a still PNG would get palette candidates)."""
         colours = [(255, 0, 0), (0, 160, 0), (0, 0, 255), (240, 200, 0)]
-        ims = [Image.new("RGB", size, colours[i % len(colours)]) for i in range(frames)]
+        ims = [_photo(size).rotate(90 * i) if photo else Image.new("RGB", size, colours[i % len(colours)])
+               for i in range(frames)]
         path = self.root / name
         ims[0].save(path, "PNG", save_all=True, append_images=ims[1:], duration=100, loop=0)
         return path
