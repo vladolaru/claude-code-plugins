@@ -29,6 +29,7 @@ import json
 import shlex
 import shutil
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -176,7 +177,8 @@ def _perfect(rec: dict) -> dict:
     return rec
 
 
-def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure) -> dict:
+def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure, size_limit,
+              measure_dir, ref_cache) -> dict:
     rec = {"key": key, "label": rung.label, "tool": rung.tool, "kind": rung.kind, "band_gated": rung.palette}
     try:
         out = ladder.generate(rung, inputs=inputs, out_dir=folder, tools=tools)
@@ -190,14 +192,17 @@ def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, ca
         return rec
     rec["file"], rec["size"] = out.name, out.stat().st_size
     try:
-        return _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, folder)
+        return _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, size_limit,
+                      measure_dir, ref_cache)
     except READ_FAILURES as error:
         rec["error"] = str(error)
         return rec
 
 
-def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, folder) -> dict:
-    """Read the encoded file and fill in its metadata verdict and scores."""
+def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, size_limit, measure_dir,
+           ref_cache) -> dict:
+    """Read the encoded file and fill in its metadata verdict and scores. ``size_limit`` is the source size of
+    an in-place job: a lossy candidate that is not smaller cannot be picked, so it is not measured."""
     ofacts = read_facts(out)
     rec["progressive"] = ofacts.progressive
     removed = sorted(source_kinds - metadata_kinds(out))
@@ -222,12 +227,14 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_meas
         return _perfect(rec)
     if rung.kind == "lossless":
         rec["kind"] = "lossy"
+    if size_limit is not None and rec["size"] >= size_limit:
+        rec["discarded"] = "not smaller than the original, so not measured (an in-place pick must be smaller)"
+        return rec
     if not can_measure:
         rec["discarded"] = "pixels differ and the metric tools are absent (lossless profile)"
         return rec
     try:
-        with tempfile.TemporaryDirectory(dir=folder) as tmp:
-            s = metrics.measure(ref_img, cand, tools, Path(tmp))
+        s = metrics.measure(ref_img, cand, tools, measure_dir, with_butteraugli=False, ref_cache=ref_cache)
     except metrics.MetricError as error:
         rec["error"] = str(error)
         return rec
@@ -394,28 +401,35 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     inputs = {"source": src, "pixels": folder / "pixels.png", "pixels_flat": folder / "pixels_flat.png",
               "pixels_gray": folder / "pixels_gray.png",
               "pixels_ppm": folder / "pixels.ppm", "ref_is_source": ref_hash == src_hash}
-    cands = []
-    for rung in (r for r in rungs if _available(r, tools)):
-        key = _key(src_hash, ref_hash, opts, rung, tools)
-        old = previous.get(key)
-        if _reusable(old, folder):
-            rec = _reuse(old)
-        elif fmt == "svg":
-            rec = _svg_rung(rung, key, inputs, folder, src, tools)
-        else:
-            rec = _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure)
-        rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
-        cands.append(rec)
-        _write_record(folder, {"schema": SCHEMA, "complete": False, "candidates": cands})
-    if fmt == "svg":
-        chosen = G.pick(cands)
-    else:
-        chosen = _pick(cands, opts.gates, lambda rec: _reviewer_check(rec, ref_path, ref_facts, folder, tools))
     # A same-format job rewrites the source itself (a resize too); only a new format gets a new name.
     target = src if target_fmt == fmt else src.with_suffix(EXT_BY_FORMAT[target_fmt])
     size = src.stat().st_size
-    verdict, why = G.verdict(size, chosen, in_place=target == src and not opts.resize,
-                             replaces_source=target == src)
+    in_place = target == src and not opts.resize
+    cands = []
+    with tempfile.TemporaryDirectory(dir=folder) as measure_dir:
+        ref_cache: dict = {}  # the flattened reference per background, written once for every candidate
+        for rung in (r for r in rungs if _available(r, tools)):
+            key = _key(src_hash, ref_hash, opts, rung, tools)
+            old = previous.get(key)
+            if _reusable(old, folder):
+                rec = _reuse(old)
+            elif fmt == "svg":
+                rec = _svg_rung(rung, key, inputs, folder, src, tools)
+            else:
+                rec = _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure,
+                                size if in_place else None, Path(measure_dir), ref_cache)
+            rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
+            cands.append(rec)
+            _write_record(folder, {"schema": SCHEMA, "complete": False, "candidates": cands})
+        if fmt == "svg":
+            chosen = G.pick(cands)
+        else:
+            chosen = _pick(cands, opts.gates, lambda rec: _reviewer_check(rec, ref_path, ref_facts, folder, tools))
+            # butteraugli is reported only, so it runs on the pick alone (a cached pick may have it already)
+            if chosen and "ssim" in chosen and not chosen.get("identical") and chosen.get("butteraugli") is None:
+                chosen["butteraugli"] = metrics.butteraugli_score(ref_img, display_pixels(folder / chosen["file"]),
+                                                                  tools, Path(measure_dir))
+    verdict, why = G.verdict(size, chosen, in_place=in_place, replaces_source=target == src)
     if chosen is None:
         why = _no_pick_reason(cands, opts)
     record = {
@@ -518,6 +532,25 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
         log("Next: nothing to apply.")
 
 
+def _process_or_skip(src: Path, opts: Options, tools: dict) -> tuple[dict | None, str]:
+    """``_process`` for a worker process: a source that cannot be read comes back as its reason. Nothing here
+    prints; the parent logs, in input order."""
+    try:
+        return _process(Path(src), opts, tools), ""
+    except READ_FAILURES as error:
+        return None, str(error)
+
+
+def _results(inputs: list[Path], opts: Options, tools: dict, jobs: int):
+    """``_process_or_skip`` for each input, in input order, in ``jobs`` worker processes when it pays."""
+    if jobs > 1 and len(inputs) > 1:
+        with ProcessPoolExecutor(max_workers=min(jobs, len(inputs))) as pool:
+            yield from pool.map(_process_or_skip, inputs, [opts] * len(inputs), [tools] * len(inputs))
+    else:
+        for src in inputs:
+            yield _process_or_skip(src, opts, tools)
+
+
 def check_inputs(inputs: list[Path], opts: Options) -> list[tuple[Path, str]]:
     """The inputs the ladder cannot serve, with why; nothing is written yet. When every input is refused the
     request itself is wrong, so that is a UsageError naming the first file."""
@@ -533,8 +566,12 @@ def check_inputs(inputs: list[Path], opts: Options) -> list[tuple[Path, str]]:
     return refused
 
 
-def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path | None = None) -> list[dict]:
+def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path | None = None,
+        jobs: int = 1) -> list[dict]:
     """One record per input that could be prepared; a skipped input is logged and left out.
+
+    With ``jobs`` above 1 that many files are processed at once in separate processes; the log still
+    follows input order.
 
     An input the ladder cannot serve is logged and left out; a request it cannot serve for any input is a
     UsageError before anything is written.
@@ -548,10 +585,8 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     mark(opts.out)
     write_run(opts.out, inputs, opts)
     records = []
-    for src in inputs:
-        try:
-            record = _process(Path(src), opts, tools)
-        except READ_FAILURES as error:
+    for src, (record, error) in zip(inputs, _results(inputs, opts, tools, jobs)):
+        if record is None:
             log(f"\n== {src}: skipped: {error}")
             continue
         print_record(record, log)

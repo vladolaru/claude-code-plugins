@@ -124,20 +124,30 @@ def band_score(ref: Image.Image, new: Image.Image) -> float:
     return percentile_from_histogram(hist, 99.5)
 
 
-def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path) -> Scores:
+def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path, *, with_butteraugli: bool = True,
+            ref_cache: dict | None = None) -> Scores:
+    """``ref_cache`` (a dict the caller keeps per reference) holds the flattened reference and its PNG per
+    background, written once instead of once per candidate; it must live as long as ``workdir``."""
     if ref.size != new.size:
         raise MetricError(f"cannot compare {ref.size} with {new.size}")
     workdir.mkdir(parents=True, exist_ok=True)
     ffmpeg = tools["ffmpeg"].path
     ss2_exe = tools["ssimulacra2"].path
-    ba = tools.get("butteraugli_main")
+    ba = tools.get("butteraugli_main") if with_butteraugli else None
     ssims, ss2s, bands, bas = {}, [], [], []
     ba_failed = False
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
         for bg in backgrounds(alpha_used(ref) or alpha_used(new)):
-            r, n = flatten(ref, bg), flatten(new, bg)
-            rp, np_ = Path(tmp) / f"ref_{bg}.png", Path(tmp) / f"new_{bg}.png"
-            r.save(rp)
+            if ref_cache is not None and bg in ref_cache:
+                r, rp = ref_cache[bg]
+            else:
+                r = flatten(ref, bg)
+                rp = (Path(workdir) if ref_cache is not None else Path(tmp)) / f"ref_{bg}.png"
+                r.save(rp)
+                if ref_cache is not None:
+                    ref_cache[bg] = (r, rp)
+            n = flatten(new, bg)
+            np_ = Path(tmp) / f"new_{bg}.png"
             n.save(np_)
             ssims[bg] = ssim_gray(ffmpeg, rp, np_)
             ss2s.append(ssimulacra2(ss2_exe, rp, np_))
@@ -149,6 +159,25 @@ def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path) -> S
                 else:
                     bas.append(value)
     return Scores(min(ssims.values()), ssims["white"], min(ss2s), max(bands), max(bas) if bas and not ba_failed else None)
+
+
+def butteraugli_score(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path) -> float | None:
+    """Worst-background butteraugli for one pair, or None when the tool is absent or fails (reported only)."""
+    ba = tools.get("butteraugli_main")
+    if ba is None or not ba.ok:
+        return None
+    workdir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=workdir) as tmp:
+        values = []
+        for bg in backgrounds(alpha_used(ref) or alpha_used(new)):
+            rp, np_ = Path(tmp) / f"r_{bg}.png", Path(tmp) / f"n_{bg}.png"
+            flatten(ref, bg).save(rp)
+            flatten(new, bg).save(np_)
+            value = butteraugli(ba.path, rp, np_)
+            if value is None:
+                return None
+            values.append(value)
+    return max(values)
 
 
 def metadata_preserved(src: Facts, out: Facts) -> tuple[bool, str]:

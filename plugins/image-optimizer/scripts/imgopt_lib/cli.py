@@ -129,7 +129,7 @@ def cmd_candidates(args) -> int:
         refs = _baselines(inputs, args.ref_rev, out)
     opts = C.Options(profile=args.profile, out=out, gates=gates, refs=refs, resize=args.resize,
                      out_format=args.format, waived=chk.waived)
-    records = C.run(inputs, opts, chk.tools, script=SCRIPT)
+    records = C.run(inputs, opts, chk.tools, script=SCRIPT, jobs=max(1, args.jobs))
     return 0 if len(records) == len(inputs) and not any(C.all_errored(r) for r in records) else 1
 
 
@@ -256,6 +256,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--ss2", type=float)
     c.add_argument("--band", type=float)
     c.add_argument("--allow-missing", help="comma list of quality tools the human chose to go without")
+    c.add_argument("--jobs", type=int, default=2,
+                   help="files measured in parallel (default 2; guetzli needs about 300 MB per megapixel each)")
     c.set_defaults(func=cmd_candidates)
     i = sub.add_parser("inspect", help="facts and lossless headroom per file; changes nothing")
     i.add_argument("paths", nargs="+")

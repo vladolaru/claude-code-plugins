@@ -43,6 +43,8 @@ JPEGLI_LEVELS = tuple(range(90, 20, -5))        # 90 .. 25
 # oxipng's zopfli mode saved 1.8% more on 13 small PNGs (oxipng 10) but took 25-45x longer on 5-7
 # megapixel screenshots for 0.4% or less, so it runs only up to this size.
 ZOPFLI_MAX_PIXELS = 2_000_000
+# guetzli needs about 300 MB per megapixel and minutes per encode; above this it is skipped (R5 in the audit).
+GUETZLI_MAX_PIXELS = 6_000_000
 SVGO_CONFIG = Path(__file__).resolve().parents[1] / "svgo.config.mjs"
 
 
@@ -158,9 +160,13 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             jl_in = "pixels_gray" if gray else "pixels_flat"  # cjpegli writes as many channels as it reads
             rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", jl_in, ".jpg", ("-q", str(q)))
                       for q in JPEGLI_LEVELS]
-            g_in = "source" if (not pixel and f.orientation == 1 and not gray) else "pixels_flat"
-            rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),
-                           post_jpegtran=GUETZLI_PROGRESSIVE) for q in GUETZLI_LEVELS]
+            if f.width * f.height <= GUETZLI_MAX_PIXELS:
+                g_in = "source" if (not pixel and f.orientation == 1 and not gray) else "pixels_flat"
+                rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),
+                               post_jpegtran=GUETZLI_PROGRESSIVE) for q in GUETZLI_LEVELS]
+            else:
+                notes.append(f"guetzli skipped above {GUETZLI_MAX_PIXELS // 1_000_000} MP "
+                             "(about 300 MB per megapixel)")
     elif target == "png":
         # --strip safe drops eXIf, the PNG orientation carrier; a source that has one keeps eXIf as well.
         # Baked pixels have no orientation.

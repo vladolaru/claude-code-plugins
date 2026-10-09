@@ -120,6 +120,7 @@ def test_few_colour_gradient_keeps_the_lossless_floor(factory, toolset, tmp_path
 def test_banded_palettes_fail_the_gate(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"png"})
     src = factory.gradient(size=(480, 60), lo=20, hi=230)
+    Image.open(src).save(src, compress_level=0)  # big enough that every palette candidate is smaller, so measured
     [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
     palette = [c for c in r["candidates"] if c.get("band_gated") and "band" in c]
     assert palette, "expected palette candidates"
@@ -976,3 +977,33 @@ def test_cli_accepts_an_empty_out_folder_and_one_candidates_made(factory, toolse
             pytest.skip("tools missing on this machine")
         assert proc.returncode in (0, 1) and "already has files" not in proc.stderr
     assert (out / WORKDIR_MARKER).is_file()
+
+
+def test_in_place_candidates_not_smaller_than_the_source_are_not_measured(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.gradient()  # a tiny file: every palette candidate comes out larger
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
+    big = [c for c in r["candidates"] if c.get("size", 0) >= r["source"]["size"] and c["kind"] == "lossy"
+           and not c.get("identical")]
+    assert big and all("ssim" not in c and "not measured" in c["reason"] for c in big)
+
+
+def test_butteraugli_is_measured_for_the_pick_only(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    if not tools.get("butteraugli_main") or not tools["butteraugli_main"].ok:
+        pytest.skip("needs butteraugli_main")
+    [r] = C.run([factory.photo(name="photo.png").resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
+    chosen = C.pick_of(r)
+    assert chosen and not chosen.get("identical")
+    others = [c for c in r["candidates"] if c is not chosen and "ssim" in c and not c.get("identical")]
+    assert others and all(c.get("butteraugli") is None for c in others)
+    assert chosen["butteraugli"] is not None
+
+
+def test_jobs_give_the_same_records_as_one_process(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png", "jpeg"})
+    inputs = [factory.logo().resolve(), factory.photo().resolve()]
+    one = C.run(inputs, opts(tmp_path / "a"), tools, log=quiet, jobs=1)
+    two = C.run(inputs, opts(tmp_path / "b"), tools, log=quiet, jobs=2)
+    strip = lambda rs: [(r["source"]["path"], r["pick"], r["verdict"]) for r in rs]
+    assert strip(one) == strip(two)

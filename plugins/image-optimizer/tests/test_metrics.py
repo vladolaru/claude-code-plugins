@@ -1,4 +1,5 @@
 import stat
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -148,6 +149,40 @@ def test_butteraugli_is_none_unless_every_background_has_a_value(factory, toolse
     assert M.measure(logo, other, tools, tmp_path / "w1").butteraugli is None
     tools["butteraugli_main"] = _fake_butteraugli(tmp_path, "echo 1.5\n")
     assert M.measure(logo, other, tools, tmp_path / "w2").butteraugli == 1.5
+
+
+def test_butteraugli_can_be_left_out_of_a_measurement(factory, toolset, tmp_path):
+    tools = dict(toolset("compare"))
+    logo = I.display_pixels(factory.logo())
+    other = I.display_pixels(factory.logo(name="l2.png"))
+    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, "echo 1.5\n")
+    assert M.measure(logo, other, tools, tmp_path / "w1", with_butteraugli=False).butteraugli is None
+    assert M.butteraugli_score(logo, other, tools, tmp_path / "w1") == 1.5
+
+
+def test_butteraugli_score_is_none_without_the_tool_or_a_value(factory, toolset, tmp_path):
+    tools = dict(toolset("compare"))
+    logo = I.display_pixels(factory.logo())
+    other = I.display_pixels(factory.logo(name="l2.png"))
+    tools.pop("butteraugli_main", None)
+    assert M.butteraugli_score(logo, other, tools, tmp_path) is None
+    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, 'case "$2" in *dark*) exit 1;; esac\necho 1.5\n')
+    assert M.butteraugli_score(logo, other, tools, tmp_path) is None
+
+
+def test_the_flattened_reference_is_written_once_per_background(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("compare")
+    ref = I.display_pixels(factory.logo())
+    others = [I.display_pixels(factory.logo(name=f"l{i}.png")) for i in range(2)]
+    saves, cache = [], {}
+    original = Image.Image.save
+    monkeypatch.setattr(Image.Image, "save", lambda self, fp, *a, **k: (saves.append(Path(fp).name),
+                                                                       original(self, fp, *a, **k))[1])
+    work = tmp_path / "w"
+    first = M.measure(ref, others[0], tools, work, with_butteraugli=False, ref_cache=cache)
+    M.measure(ref, others[1], tools, work, with_butteraugli=False, ref_cache=cache)
+    assert sorted(saves).count("ref_white.png") == 1 and sorted(saves).count("ref_dark.png") == 1
+    assert first.ssim == M.measure(ref, others[0], tools, tmp_path / "w2", with_butteraugli=False).ssim
 
 
 def test_a_tool_that_cannot_run_raises_metric_error(tmp_path):

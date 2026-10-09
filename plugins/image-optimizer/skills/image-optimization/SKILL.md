@@ -50,7 +50,7 @@ Measure against the original, never an already-optimized intermediate. For a fol
 
 ## What the scripts cannot enforce
 
-- guetzli is strong on larger photos and softens small thumbnails; it takes seconds to minutes per file and gigabytes of memory on multi-megapixel images.
+- guetzli is strong on larger photos and softens small thumbnails; it takes seconds to minutes per file and about 300 MB of memory per megapixel, so it is skipped above 6 megapixels.
 - Never stack two lossy passes; re-encode from the original.
 - `jpegoptim -m` is not the IJG quality scale: a file another tool calls "q60" may measure about q86 in `inspect`.
 - On sources that are already around q86, guetzli's advantage mostly disappears.

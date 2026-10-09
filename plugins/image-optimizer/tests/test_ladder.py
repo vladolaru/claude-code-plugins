@@ -40,6 +40,13 @@ def test_lossy_jpeg_adds_the_jpegoptim_ladder_and_guetzli():
     assert all(r.post_jpegtran for r in guetzli)
 
 
+def test_guetzli_is_skipped_above_its_pixel_cap():
+    p = L.plan(facts(width=4000, height=2000), profile="high")
+    assert not any(r.tool == "guetzli" for r in p.rungs)
+    assert any("guetzli skipped" in n for n in p.notes)
+    assert any(r.tool == "guetzli" for r in L.plan(facts(width=2000, height=3000), profile="high").rungs)
+
+
 def test_gray_jpeg_feeds_guetzli_rgb_pixels():
     p = L.plan(facts(mode="L"), profile="high")
     assert all(r.input == "pixels_flat" for r in p.rungs if r.tool == "guetzli")
