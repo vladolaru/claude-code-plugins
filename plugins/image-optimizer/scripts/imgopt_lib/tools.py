@@ -48,7 +48,8 @@ ADDS = {
     "oxipng": "lossless PNG optimization",
     "pngquant": "palette PNG candidates, usually the largest PNG savings",
     "guetzli": "perceptual JPEG encoder; often the best size for larger photos",
-    "cjpegli": "jpegli JPEG encoder; the smallest passing JPEG on 13 of 31 test photos, in milliseconds",
+    "cjpegli": "jpegli JPEG encoder, needed for the best JPEG results: the smallest passing JPEG on 13 of 31 "
+               "test photos, and the ladder saved 36.3% with it against 34.6% without (high profile)",
     "gifsicle": "lossless GIF optimization",
     "svgo": "SVG optimization",
     "rsvg-convert": "renders SVG before and after so a changed drawing is rejected",
@@ -74,7 +75,7 @@ OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install 
          # Self-contained: jpegli static, libpng bundled, OpenEXR/GIF/JPEG readers off (imgopt feeds it PNG
          # only), so the binary loads nothing but system libraries and survives deleting the build folder or
          # upgrading Homebrew libraries.
-         "cjpegli": "build jpegli (not packaged by Homebrew or apt; needs git, "
+         "cjpegli": "build jpegli once, for the best JPEG results (not packaged by Homebrew or apt; needs git, "
                     "cmake and a C++ compiler): "
                     "git clone --recursive https://github.com/google/jpegli && cd jpegli && "
                     "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF "
@@ -355,7 +356,8 @@ def report(chk: Check, *, job: str, profile: str, platform: str | None = None) -
     if chk.refused_waivers:
         lines.append("Cannot be waived (required for this job): " + ", ".join(chk.refused_waivers))
     if chk.waived:
-        lines.append("Waived by --allow-missing (stamped on every output): " + ", ".join(chk.waived))
+        lines.append("Waived by --allow-missing (stamped on every output): " + "; ".join(
+            f"{n} (goes without: {ADDS[n]})" for n in chk.waived))
     if chk.missing_optional:
         lines.append("Optional, ask the human once: " + "; ".join(
             f"{n} ({ADDS[n]})" for n in chk.missing_optional))

@@ -194,7 +194,7 @@ def test_lossy_jpeg_jobs_ask_for_jpegli_with_build_steps():
     assert "cjpegli" in req.quality
     assert "cjpegli" not in T.requirements("recompress", "lossless", {"jpeg"}).all
     [line] = T.install_lines(["cjpegli"], platform="darwin")
-    assert "github.com/google/jpegli" in line and "cjpegli on PATH" in line
+    assert "github.com/google/jpegli" in line and "cjpegli on PATH" in line and "best JPEG results" in line
 
 
 def test_the_jpegli_build_line_makes_a_binary_that_loads_only_system_libraries():
@@ -203,6 +203,15 @@ def test_the_jpegli_build_line_makes_a_binary_that_loads_only_system_libraries()
     for flag in ("-DBUILD_SHARED_LIBS=OFF", "-DJPEGLI_ENABLE_OPENEXR=OFF", "-DJPEGLI_BUNDLE_LIBPNG=ON",
                  "-DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON", "-DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON"):
         assert flag in line
+
+
+def test_doctor_says_what_a_blocking_or_waived_jpegli_costs(tmp_path):
+    req = T.Requirements(("pillow",), ("cjpegli",), ())
+    blocked = T.report(T.check(req, env()), job="recompress", profile="high", platform="darwin")
+    assert "cjpegli: jpegli JPEG encoder, needed for the best JPEG results" in blocked
+    waived = T.report(T.check(req, env(), allow_missing=["cjpegli"]), job="recompress", profile="high",
+                      platform="darwin")
+    assert "Waived by --allow-missing (stamped on every output): cjpegli (goes without: jpegli" in waived
 
 
 def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):

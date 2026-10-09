@@ -54,7 +54,7 @@ brew install mozjpeg jpegoptim oxipng pngquant guetzli gifsicle librsvg ffmpeg j
 npm install -g svgo   # svgo 4 or newer
 ```
 
-The lossy JPEG ladder also uses jpegli's `cjpegli`, which no package manager ships yet. Build it once (needs git, cmake and a C++ compiler; `brew install cmake` if missing) and put the binary on `PATH`:
+**For the best JPEG results, build jpegli.** The lossy JPEG ladder uses jpegli's `cjpegli`, which no package manager ships yet. On 31 test photos it gave the smallest passing JPEG for 13, and the `high` ladder saved 36.3% with it against 34.6% without. Lossy JPEG jobs stop until it is built or you choose to go without it (`--allow-missing cjpegli`, which every output then repeats). Build it once (needs git, cmake and a C++ compiler; `brew install cmake` if missing) and put the binary on `PATH`:
 
 ```bash
 git clone --recursive https://github.com/google/jpegli && cd jpegli

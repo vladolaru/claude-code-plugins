@@ -400,7 +400,8 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
             "tell the human before applying: " + ", ".join(Path(r["source"]["path"]).name for r in larger))
     waived = sorted({w for r in records for w in r["waived"]})
     if waived:
-        log("WAIVED TOOLS (state this in any report): " + ", ".join(waived))
+        log("WAIVED TOOLS (fewer candidates were tried, so picks may be larger than with them; state this in "
+            "any report): " + ", ".join(waived))
     lossy = [r for r in applied if pick_of(r)["kind"] == "lossy"]
     if lossy:
         log(f"Next: python3 {script} sheet {out}   (view the required tiles, show the page; "
