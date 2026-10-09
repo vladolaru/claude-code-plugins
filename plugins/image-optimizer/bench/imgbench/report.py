@@ -75,7 +75,11 @@ def _after_ablation(row: dict, drop: set[str]) -> int:
 
 
 def ablate(rows: list[dict], drop: set[str]) -> dict[str, float]:
-    """Per category, the share of bytes saved when the candidate families in ``drop`` are removed."""
+    """Per category, the share of bytes saved when the candidate families in ``drop`` are removed. The rows must
+    be one job's: two jobs over one category differ in profile and settings, and their sum means nothing."""
+    jobs = {r.get("job") for r in rows}
+    if len(jobs) > 1:
+        raise ValueError(f"ablate one job's rows at a time; got {', '.join(sorted(map(str, jobs)))}")
     saved: dict[str, float] = {}
     for category, group in _by(_done(rows), "category").items():
         before = sum(r["source_size"] for r in group)

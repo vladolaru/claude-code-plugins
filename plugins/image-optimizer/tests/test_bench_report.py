@@ -169,3 +169,10 @@ def test_rows_whose_candidates_all_errored_are_counted_apart_from_no_pick():
     md = R.markdown([failed, gated])
     assert "| Category | Files | Skipped | No pick | Errored | Saved |" in md
     assert "| icon | 2 | 0 | 1 | 1 | 0.0% |" in md
+
+
+def test_ablate_refuses_rows_of_several_jobs():
+    medium = row("photo-camera", 1000, [("cjpegli", 500, True)], profile="medium")
+    medium["job"] = "recompress-medium"
+    with pytest.raises(ValueError, match="recompress-high, recompress-medium"):
+        R.ablate([row("photo-camera", 1000, [("cjpegli", 600, True)]), medium], drop=set())
