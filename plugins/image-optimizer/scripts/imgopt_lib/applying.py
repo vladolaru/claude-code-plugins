@@ -151,13 +151,14 @@ def _refuse_clashes(rows: list[tuple[Path, dict]], dest: Path | None) -> None:
 
 
 def _tools_changed(record: dict, tools: dict) -> str:
-    """Why the metric tools differ from the ones that measured ``record``, or empty."""
+    """Why the metric tools differ from the ones that measured ``record``, or empty. A tool recorded without
+    an id (an older record) is not compared: its version alone cannot tell a versionless build apart."""
     for name in ("ffmpeg", "ssimulacra2"):
         then = record.get("tools", {}).get(name)
         now = tools.get(name)
-        if then and now and now.ok and then.get("id", then.get("version")) != now.cache_id:
-            return (f"{name} changed since candidates ran ({then.get('id', then.get('version'))} -> "
-                    f"{now.cache_id}); re-run candidates, then apply")
+        if then and "id" in then and now and now.ok and then["id"] != now.cache_id:
+            return (f"{name} changed since candidates ran ({then['id']} -> {now.cache_id}); "
+                    "re-run candidates, then apply")
     return ""
 
 

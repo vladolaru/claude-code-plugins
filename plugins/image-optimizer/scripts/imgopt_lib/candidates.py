@@ -414,7 +414,8 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "format_requested": opts.out_format, "format": target_fmt, "target": str(target),
         "uncalibrated": target_fmt in UNCALIBRATED,
         "waived": list(opts.waived), "optional_missing": optional_missing, "notes": notes,
-        "tools": {n: {"path": t.path, "version": t.version, "id": t.cache_id} for n, t in sorted(tools.items()) if t.ok},
+        "tools": {n: {"path": t.path, "version": t.version, "id": t.cache_id}
+                  for n, t in sorted(tools.items()) if t.ok},
         "candidates": cands, "pick": chosen["file"] if chosen else None,
         "verdict": verdict, "verdict_reason": why, "complete": True,
     }

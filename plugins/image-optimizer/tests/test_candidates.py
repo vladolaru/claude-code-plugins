@@ -814,3 +814,25 @@ def test_an_encoder_refusal_is_cached(factory, toolset, tmp_path, monkeypatch):
     C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
     C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
     assert calls.count("oxipng") == 1
+
+
+def test_an_encoder_killed_by_a_signal_is_not_cached_as_a_refusal(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo()
+    real = ladder._run
+    calls = []
+
+    def kill_oxipng(argv, label, tool):
+        if label == "oxipng":
+            calls.append(label)
+            return subprocess.CompletedProcess(argv, -9, "", "")
+        return real(argv, label, tool)
+
+    monkeypatch.setattr(ladder, "_run", kill_oxipng)
+    out = tmp_path / "out"
+    C.run([src.resolve()], opts(out), tools, log=quiet)
+    C.run([src.resolve()], opts(out), tools, log=quiet)
+    assert calls.count("oxipng") == 2
+    [record] = [json.loads(p.read_text()) for p in out.glob("*/metrics.json")]
+    failed = next(c for c in record["candidates"] if c["label"] == "oxipng")
+    assert "exited -9" in failed["error"] and "error_kind" not in failed

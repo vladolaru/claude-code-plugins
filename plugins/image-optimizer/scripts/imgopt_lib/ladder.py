@@ -282,7 +282,10 @@ def _encode(rung: Rung, exe: str, src: Path, out: Path, scratch: Path, tools: di
     if rung.tool == "pngquant" and proc.returncode == 99:
         return None
     if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
-        raise EncoderRefused(f"{rung.label}: {Path(exe).name} exited {proc.returncode}: {_tail(proc)}")
+        # Only an exit status is the encoder's own verdict; a signal (negative status, say an OOM kill) or a
+        # missing output after exit 0 may not repeat, so those are retried.
+        failure = EncoderRefused if proc.returncode > 0 else EncodeError
+        raise failure(f"{rung.label}: {Path(exe).name} exited {proc.returncode}: {_tail(proc)}")
     if rung.post_oxipng:
         post = _exe(tools, "oxipng")
         proc = _run([post, "-o", "max", "--strip", "safe", "-q", str(out)], rung.label, "oxipng")

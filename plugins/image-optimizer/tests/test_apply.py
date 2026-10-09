@@ -452,3 +452,17 @@ def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolse
     lines = []
     assert AP.apply(out, tools=tools, approve=("a.jpg",), log=lines.append) == 1
     assert any("ffmpeg changed since candidates ran" in l for l in lines)
+
+
+def test_a_record_without_tool_ids_is_not_called_changed(factory, toolset, tmp_path):
+    """Records from before ids existed have only versions; a versionless tool must not look upgraded."""
+    tools = toolset("recompress", "high", {"jpeg"})
+    out = tmp_path / "out"
+    _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
+    meta = out / "a--1" / "metrics.json"
+    rec = json.loads(meta.read_text())
+    rec["tools"] = {n: {"path": tools[n].path, "version": "unknown"} for n in ("ffmpeg", "ssimulacra2")}
+    meta.write_text(json.dumps(rec))
+    lines = []
+    AP.apply(out, tools=tools, approve=("a.jpg",), log=lines.append)
+    assert not any("changed since candidates ran" in l for l in lines)
