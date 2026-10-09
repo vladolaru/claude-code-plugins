@@ -70,7 +70,7 @@ def test_lossy_recompress_requires_metrics_and_blocks_on_encoders():
     req = T.requirements("recompress", "high", {"jpeg"})
     assert {"ffmpeg", "ssimulacra2"} <= set(req.required)
     assert {"guetzli", "cjpeg"} <= set(req.quality)
-    assert set(req.optional) == {"butteraugli_main"}
+    assert set(req.optional) == {"cjpegli", "butteraugli_main"}
 
 
 def test_formats_narrow_the_check():
@@ -189,12 +189,16 @@ def test_cache_id_follows_the_binary_when_it_prints_no_version(tmp_path, version
     assert T.Tool("guetzli", str(exe), version, "path").cache_id != before
 
 
-def test_lossy_jpeg_jobs_ask_for_jpegli_with_build_steps():
+def test_jpegli_is_optional_and_doctor_says_what_it_adds():
     req = T.requirements("recompress", "high", {"jpeg"})
-    assert "cjpegli" in req.quality
+    assert "cjpegli" in req.optional and "cjpegli" not in req.quality
     assert "cjpegli" not in T.requirements("recompress", "lossless", {"jpeg"}).all
+    text = T.report(T.check(T.Requirements(("pillow",), (), ("cjpegli",)), env()), job="recompress",
+                    profile="high", platform="darwin")
+    assert "Ready." in text and "BLOCKED" not in text
+    assert "31 WooCommerce photos" in text and "best" not in text
     [line] = T.install_lines(["cjpegli"], platform="darwin")
-    assert "github.com/google/jpegli" in line and "cjpegli on PATH" in line and "best JPEG results" in line
+    assert "-DJPEGLI_ENABLE_OPENEXR=OFF" in line and "cjpegli on PATH" in line
 
 
 def test_the_jpegli_build_line_makes_a_binary_that_loads_only_system_libraries():
@@ -203,15 +207,6 @@ def test_the_jpegli_build_line_makes_a_binary_that_loads_only_system_libraries()
     for flag in ("-DBUILD_SHARED_LIBS=OFF", "-DJPEGLI_ENABLE_OPENEXR=OFF", "-DJPEGLI_BUNDLE_LIBPNG=ON",
                  "-DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON", "-DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON"):
         assert flag in line
-
-
-def test_doctor_says_what_a_blocking_or_waived_jpegli_costs(tmp_path):
-    req = T.Requirements(("pillow",), ("cjpegli",), ())
-    blocked = T.report(T.check(req, env()), job="recompress", profile="high", platform="darwin")
-    assert "cjpegli: jpegli JPEG encoder, needed for the best JPEG results" in blocked
-    waived = T.report(T.check(req, env(), allow_missing=["cjpegli"]), job="recompress", profile="high",
-                      platform="darwin")
-    assert "Waived by --allow-missing (stamped on every output): cjpegli (goes without: jpegli" in waived
 
 
 def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):

@@ -18,7 +18,6 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
 
 
 def opts(out, profile="lossless", **kw):
-    kw.setdefault("waived", ("cjpegli",))  # the toolset fixture waives jpegli too (conftest.JPEGLI_WAIVER)
     return C.Options(profile=profile, out=out, gates=G.gates_for(profile), **kw)
 
 
@@ -437,9 +436,20 @@ def _without(tools, name):
 def test_the_waived_note_names_only_tools_the_human_waived(factory, toolset, tmp_path):
     tools = _without(toolset("recompress", "high", {"jpeg"}), "guetzli")
     src = factory.photo().resolve()
-    [r] = C.run([src], opts(tmp_path / "out", "high", waived=("guetzli", "cjpegli")), tools, log=quiet)
+    [r] = C.run([src], opts(tmp_path / "out", "high", waived=("guetzli",)), tools, log=quiet)
     assert any("tools waived:" in n and "guetzli" in n for n in r["notes"])
     assert not any(c["label"].startswith("guetzli") for c in r["candidates"])
+
+
+def test_a_missing_jpegli_skips_its_rungs_with_a_note(factory, toolset, tmp_path):
+    tools = dict(toolset("recompress", "high", {"jpeg"}))
+    tools["cjpegli"] = Tool("cjpegli", None)
+    lines = []
+    [r] = C.run([factory.photo(size=(200, 150)).resolve()], opts(tmp_path / "out", "high", waived=()), tools,
+                log=lines.append)
+    assert r["optional_missing"] == ["cjpegli"]
+    assert not any(c["tool"] == "cjpegli" for c in r["candidates"])
+    assert any(l.startswith("OPTIONAL TOOLS MISSING") and "cjpegli" in l for l in lines)
 
 
 def test_a_missing_tool_nobody_waived_is_a_bug_not_a_note(factory, toolset, tmp_path):

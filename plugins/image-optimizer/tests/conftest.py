@@ -182,14 +182,9 @@ def device_icc() -> bytes:
     pytest.skip("needs a Display P3 ICC profile on this machine")
 
 
-# jpegli has no package, so most machines lack it. Tests that do not exercise it waive it (and pass
-# waived=("cjpegli",) to candidates) instead of skipping; a test that needs it passes waive=().
-JPEGLI_WAIVER = ("cjpegli",)
-
-
 @pytest.fixture
 def toolset():
-    def _toolset(job, profile="lossless", formats=None, target="keep", waive=JPEGLI_WAIVER):
+    def _toolset(job, profile="lossless", formats=None, target="keep", waive=()):
         chk = T.check(T.requirements(job, profile, formats, target), allow_missing=waive)
         missing = chk.missing_required + chk.missing_quality
         if missing:

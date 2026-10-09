@@ -19,7 +19,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
 
 
 def run_candidates(src, out, tools, profile="lossless"):
-    opts = C.Options(profile=profile, out=out, gates=G.gates_for(profile), waived=("cjpegli",))
+    opts = C.Options(profile=profile, out=out, gates=G.gates_for(profile))
     return C.run([src.resolve()], opts, tools, log=lambda _: None)
 
 

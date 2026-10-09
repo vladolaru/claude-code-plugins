@@ -315,6 +315,9 @@ def build(out: Path, *, alt: str | None = None, problems: list[str] | None = Non
                            "judge every file by eye.")
         if record.get("waived"):
             banners.append("Waived tools (fewer candidates were tried): " + ", ".join(record["waived"]))
+        if record.get("optional_missing"):
+            banners.append("Optional tools missing (fewer candidates were tried): "
+                           + ", ".join(record["optional_missing"]))
     if alt and not alt_found and problems is not None:
         problems.append(f"--alt {alt!r} matches no candidate in any record")
     overall = (f"{len(files)} file(s), {kb(total_before)} -> {kb(total_after)}"
