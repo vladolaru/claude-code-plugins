@@ -19,6 +19,8 @@ from pathlib import Path
 
 from imgopt_lib import gates as G
 
+from . import harness
+
 # Ablation column -> the candidate families that encoder contributes. jpegoptim covers its lossless rung too.
 ABLATION_COLUMNS = (("jpegli", {"cjpegli"}), ("guetzli", {"guetzli"}),
                     ("jpegoptim", {"jpegoptim", "lossless-jpegoptim"}), ("zopfli", {"oxipng-zopfli"}),
@@ -29,7 +31,14 @@ FLOOR_SS2 = 2.0
 
 
 def load(run_dir: Path) -> list[dict]:
-    return [json.loads(line) for line in (Path(run_dir) / "rows.jsonl").read_text().splitlines() if line.strip()]
+    """The rows of a run: what `report` and `review` read."""
+    return [json.loads(line) for line in (Path(run_dir) / harness.ROWS).read_text().splitlines() if line.strip()]
+
+
+def timing(run_dir: Path) -> dict:
+    """The run's timing.json (tool versions, commit, per-category wall time), or {} when the run has none."""
+    path = Path(run_dir) / harness.TIMING
+    return json.loads(path.read_text()) if path.is_file() else {}
 
 
 def _done(rows: list[dict]) -> list[dict]:
@@ -205,13 +214,12 @@ def markdown(rows: list[dict]) -> str:
 def render(run_dir: Path) -> str:
     """The full report: a header naming the run, commit, corpus version and tool versions, then ``markdown``."""
     run_dir = Path(run_dir)
-    timing_path = run_dir / "timing.json"
-    timing = json.loads(timing_path.read_text()) if timing_path.is_file() else {}
+    meta = timing(run_dir)
     header = [f"# imgbench run {run_dir.name}", ""]
     for label, key in (("Commit", "commit"), ("Corpus version", "corpus_version"),
                        ("Files in parallel", "jobs_parallel")):
-        if key in timing:
-            header.append(f"- {label}: {timing[key]}")
-    if timing.get("tools"):
-        header.append(f"- {timing['tools']}")
+        if key in meta:
+            header.append(f"- {label}: {meta[key]}")
+    if meta.get("tools"):
+        header.append(f"- {meta['tools']}")
     return "\n".join(header + ["", markdown(load(run_dir))]).rstrip("\n") + "\n"

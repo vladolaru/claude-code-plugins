@@ -27,7 +27,7 @@ from imgopt_lib import workdirs as W
 from imgopt_lib.formats import subdir_name
 from imgopt_lib.ladder import UsageError
 
-from . import harness
+from . import harness, report
 
 SAMPLE = "sample.json"
 VERDICTS = "verdicts.json"
@@ -113,7 +113,7 @@ def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3, seed
                  script: Path | None = None) -> tuple[dict[str, Path], list[str]]:
     """Sample a run's rows and build one review folder per job under ``review_dir``. Returns ({job: folder},
     problems). Refuses before writing when a folder already holds verdicts: a rebuild would erase them."""
-    rows = [json.loads(line) for line in (Path(run_dir) / harness.ROWS).read_text().splitlines() if line.strip()]
+    rows = report.load(run_dir)
     by_job: dict[str, list[dict]] = defaultdict(list)
     for row in sample(rows, per_category, seed):
         by_job[row["job"]].append(row)

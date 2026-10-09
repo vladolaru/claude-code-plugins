@@ -7,7 +7,8 @@ size and gate outcome, the seconds and the disk the record folder took. Right af
 folder is pruned with `workdirs.clean(keep_picks=True)`, which leaves each record's metrics.json, reference,
 source copy and pick: all `sheet` and the human review need, and a small part of the ladder's output (the full
 ladder over this corpus does not fit on a laptop disk). `timing.json` carries the tool versions, the commit
-and each category's wall time. Row schema: see `_row`; `report.py` reads these rows and nothing else.
+and each category's wall time. Row schema: see `_row`. `report.load` and `report.timing` are the one reader of
+both files; `report` and `review` use nothing else of the run but the kept record folders.
 """
 
 from __future__ import annotations
