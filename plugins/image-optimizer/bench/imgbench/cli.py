@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from pathlib import Path
 
 from . import paths, sources
 
-SOURCES_FILE = Path(__file__).resolve().parents[1] / "sources.json"
+SOURCES_FILE = paths.SOURCES_FILE
 
 
 def _counts(found: list[sources.Source]) -> str:

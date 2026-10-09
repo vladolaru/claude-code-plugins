@@ -6,6 +6,8 @@ from imgopt_lib.workdirs import cache_root
 
 from . import CORPUS_VERSION
 
+SOURCES_FILE = Path(__file__).resolve().parents[1] / "sources.json"  # the committed pins of every real source
+
 
 def bench_root() -> Path:
     return cache_root() / "bench"
