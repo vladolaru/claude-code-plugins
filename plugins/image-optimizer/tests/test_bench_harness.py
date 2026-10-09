@@ -69,9 +69,12 @@ def test_run_writes_rows_prunes_to_picks_and_records_skips(factory, toolset, tmp
 def test_job_kinds_and_categories():
     kinds = {j.name: j.kind for j in harness.JOBS}
     assert kinds == {"recompress-high": "recompress", "recompress-medium": "recompress", "lossless": "recompress",
-                     "prepare-catalog": "prepare", "convert-webp": "convert", "convert-jpeg": "convert"}
+                     "prepare-catalog": "prepare", "convert-webp": "convert", "convert-jpeg": "convert",
+                     "edge-high": "recompress"}
     by_name = {j.name: j for j in harness.JOBS}
     assert "edge" not in by_name["recompress-high"].categories and "edge" in by_name["lossless"].categories
+    # the edge files also meet a lossy profile, in a job of their own so it can run after the main run
+    assert by_name["edge-high"].categories == ("edge",) and by_name["edge-high"].profile == "high"
     assert by_name["prepare-catalog"].resize == 1200 and by_name["convert-webp"].out_format == "webp"
 
 

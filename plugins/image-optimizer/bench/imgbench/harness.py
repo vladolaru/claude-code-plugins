@@ -65,6 +65,7 @@ JOBS = [
     Job("prepare-catalog", ("photo-camera", "phone-upload", "png-master"), "high", resize=1200),
     Job("convert-webp", ("photo-camera", "product-plain", "screenshot", "illustration"), "high", out_format="webp"),
     Job("convert-jpeg", ("png-master", "illustration"), "high", out_format="jpeg"),
+    Job("edge-high", ("edge",), "high"),  # its own job, so it can run apart from recompress-high (--only-job)
 ]
 
 
