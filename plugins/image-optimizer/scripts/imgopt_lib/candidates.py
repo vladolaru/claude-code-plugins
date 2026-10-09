@@ -48,6 +48,7 @@ SCHEMA = 1
 CACHE_VERSION = 5
 RUN_FILE = "run.json"  # the last `candidates` run in this --out: which inputs, which settings
 UNCALIBRATED = ("webp", "avif")
+NOT_SMALLER = "not smaller than the original, so not measured (an in-place pick must be smaller)"
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
 RASTER_VERDICT_TOOLS = frozenset({"pillow", *METRIC_TOOLS})
@@ -228,7 +229,7 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_meas
     if rung.kind == "lossless":
         rec["kind"] = "lossy"
     if size_limit is not None and rec["size"] >= size_limit:
-        rec["discarded"] = "not smaller than the original, so not measured (an in-place pick must be smaller)"
+        rec["discarded"] = NOT_SMALLER
         return rec
     if not can_measure:
         rec["discarded"] = "pixels differ and the metric tools are absent (lossless profile)"
@@ -310,6 +311,9 @@ def _no_pick_reason(cands: list[dict], opts: Options) -> str:
     why = "no candidate passed the gates"
     if cands and all(c.get("error") for c in cands):
         return why + "; every candidate errored"
+    live = [c for c in cands if not c.get("error")]
+    if live and all(c.get("discarded") == NOT_SMALLER for c in live):
+        return "no candidate is smaller than the original"
     measured = [c for c in cands if c.get("ssim") is not None and not c.get("error") and not c.get("discarded")]
     if measured:
         best = max(measured, key=lambda c: (c["ssim"], c["ss2"]))
@@ -541,14 +545,28 @@ def _process_or_skip(src: Path, opts: Options, tools: dict) -> tuple[dict | None
         return None, str(error)
 
 
-def _results(inputs: list[Path], opts: Options, tools: dict, jobs: int):
-    """``_process_or_skip`` for each input, in input order, in ``jobs`` worker processes when it pays."""
+def _results(inputs: list[Path], opts: Options, tools: dict, jobs: int, log):
+    """``_process_or_skip`` for each input, in input order, in ``jobs`` worker processes when it pays.
+
+    A sandbox can deny what a pool needs (semaphores, new processes): creating it or submitting the work then
+    raises, and the files are processed one at a time instead. Errors from ``_process`` itself surface later,
+    while the results are read, and are not caught here.
+    """
     if jobs > 1 and len(inputs) > 1:
-        with ProcessPoolExecutor(max_workers=min(jobs, len(inputs))) as pool:
-            yield from pool.map(_process_or_skip, inputs, [opts] * len(inputs), [tools] * len(inputs))
-    else:
-        for src in inputs:
-            yield _process_or_skip(src, opts, tools)
+        pool = None
+        try:
+            pool = ProcessPoolExecutor(max_workers=min(jobs, len(inputs)))
+            results = pool.map(_process_or_skip, inputs, [opts] * len(inputs), [tools] * len(inputs))
+        except (OSError, NotImplementedError) as error:
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
+            log(f"parallel runs unavailable here ({error}); measuring one file at a time")
+        else:
+            with pool:
+                yield from results
+            return
+    for src in inputs:
+        yield _process_or_skip(src, opts, tools)
 
 
 def check_inputs(inputs: list[Path], opts: Options) -> list[tuple[Path, str]]:
@@ -585,7 +603,7 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     mark(opts.out)
     write_run(opts.out, inputs, opts)
     records = []
-    for src, (record, error) in zip(inputs, _results(inputs, opts, tools, jobs)):
+    for src, (record, error) in zip(inputs, _results(inputs, opts, tools, jobs, log)):
         if record is None:
             log(f"\n== {src}: skipped: {error}")
             continue

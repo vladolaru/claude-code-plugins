@@ -1007,3 +1007,53 @@ def test_jobs_give_the_same_records_as_one_process(factory, toolset, tmp_path):
     two = C.run(inputs, opts(tmp_path / "b"), tools, log=quiet, jobs=2)
     strip = lambda rs: [(r["source"]["path"], r["pick"], r["verdict"]) for r in rs]
     assert strip(one) == strip(two)
+
+
+def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png", "jpeg"})
+    inputs = [factory.logo().resolve(), factory.photo().resolve()]
+    one = C.run(inputs, opts(tmp_path / "a"), tools, log=quiet, jobs=1)
+
+    def denied(*args, **kwargs):
+        raise PermissionError("semaphores are denied here")
+
+    monkeypatch.setattr(C, "ProcessPoolExecutor", denied)
+    lines = []
+    two = C.run(inputs, opts(tmp_path / "b"), tools, log=lines.append, jobs=2)
+    assert [l for l in lines if "parallel runs unavailable" in l] == [
+        "parallel runs unavailable here (semaphores are denied here); measuring one file at a time"]
+    strip = lambda rs: [(r["source"]["path"], r["pick"], r["verdict"]) for r in rs]
+    assert strip(one) == strip(two)
+
+
+def test_an_error_inside_a_worker_is_not_mistaken_for_a_pool_that_cannot_start(tmp_path, monkeypatch):
+    class Pool:
+        def __init__(self, **kwargs):
+            pass
+
+        def map(self, *args):
+            def results():
+                raise PermissionError("the file itself was denied")
+                yield
+            return results()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(C, "ProcessPoolExecutor", Pool)
+    lines = []
+    with pytest.raises(PermissionError, match="the file itself"):
+        list(C._results([Path("a"), Path("b")], opts(tmp_path), {}, 2, lines.append))
+    assert lines == []
+
+
+def test_nothing_smaller_than_the_original_is_named_as_such_when_no_pick_remains(tmp_path):
+    unmeasured = {"label": "pngquant-q80-95", "size": 955, "discarded": C.NOT_SMALLER}
+    errored = {"label": "pngquant-c16", "error": "pngquant could not reach this quality range"}
+    assert C._no_pick_reason([unmeasured, errored], opts(tmp_path, "high")) == \
+        "no candidate is smaller than the original"
+    failed = {"label": "x", "size": 100, "ssim": 0.9, "ss2": 50.0, "reason": "SSIM 0.9000 < 0.98"}
+    assert "no candidate passed the gates" in C._no_pick_reason([unmeasured, failed], opts(tmp_path, "high"))

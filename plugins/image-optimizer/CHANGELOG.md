@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Encoders are called directly (mozjpeg, jpegli, oxipng, pngquant, guetzli, gifsicle, svgo) instead of through the x86-only `imageoptim` CLI, and work stops until missing tools are installed or explicitly waived.
 - Homebrew's tools are preferred to the copies bundled with ImageOptim.app (except jpegoptim, whose bundled build is the one linked to mozjpeg), and `imgopt.py doctor` suggests the Homebrew install when only an older bundled copy is found.
 - Runtime requirements: `python3` with Pillow for everything, plus ffmpeg and ssimulacra2 (from jpeg-xl) for the `high` and `medium` profiles; `imgopt.py doctor` lists the rest per job.
-- `candidates` is faster: it measures two files at a time (`--jobs`), skips measuring in-place candidates that are not smaller than the original, and runs butteraugli on the pick only; guetzli is skipped above 6 megapixels.
+- `candidates` is faster: it measures two files at a time (`--jobs`, one at a time where a sandbox denies worker processes), skips measuring in-place candidates that are not smaller than the original, and runs butteraugli on the pick only; guetzli is skipped above 6 megapixels.
 
 ### Added
 
