@@ -19,6 +19,8 @@ export default {
         overrides: {
           // Ids are targets of aria-labelledby, CSS and scripts, none of which svgo can see.
           cleanupIds: false,
+          // Classes on an inline SVG are hooks for page CSS and scripts svgo cannot see.
+          inlineStyles: false,
           // role="img" plus aria-* give an inline SVG its accessible name.
           removeUnknownsAndDefaults: { keepRoleAttr: true, keepAriaAttrs: true },
         },

@@ -140,6 +140,25 @@ def test_svgo_keeps_ids_and_role(factory, toolset, tmp_path):
     assert 'role="img"' in text and 'id="t"' in text and 'id="cart-body"' in text
 
 
+def test_svgo_keeps_classes_of_a_style_block(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"svg"})
+    src = factory.styled_svg()
+    [r] = C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    [cand] = r["candidates"]
+    assert "discarded" not in cand, cand.get("discarded")
+    folder = C.load_records(tmp_path / "out")[0][0]
+    text = (folder / cand["file"]).read_text()
+    assert 'class="a"' in text and 'class="b"' in text
+
+
+def test_svg_pick_that_loses_semantics_is_discarded_with_the_reason(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"svg"})
+    monkeypatch.setattr(C.metrics, "svg_semantics_lost", lambda a, b: "removed id='t'")
+    [r] = C.run([factory.accessible_svg().resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    [cand] = r["candidates"]
+    assert "removed id='t'" in cand["discarded"]
+
+
 def test_cache_regenerates_a_candidate_whose_file_was_deleted(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo().resolve()

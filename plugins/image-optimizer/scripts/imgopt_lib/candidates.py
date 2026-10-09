@@ -33,7 +33,7 @@ from .imaging import READ_FAILURES, ImagingError, display_pixels, flatten, read_
 from .tools import describe
 
 SCHEMA = 1
-CACHE_VERSION = 2  # 2: a rung's kind follows its input, so records cached under 1 carry wrong kinds
+CACHE_VERSION = 3  # 3: svgo keeps ids, roles and classes; 2: a rung's kind follows its input
 UNCALIBRATED = ("webp", "avif")
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.

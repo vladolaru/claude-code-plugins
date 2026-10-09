@@ -152,6 +152,15 @@ class Factory:
             '<circle id="wheel-left" cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/></svg>')
         return path
 
+    def styled_svg(self, name="styled.svg") -> Path:
+        """An SVG whose fills come from a <style> block and two classes svgo would inline away."""
+        path = self.root / name
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+            '<style>.a{fill:#c00}.b{fill:#06c}</style>'
+            '<rect class="a" x="2" y="2" width="9" height="20"/><rect class="b" x="13" y="2" width="9" height="20"/></svg>')
+        return path
+
     def logo(self, name="logo.png", size=(120, 120)) -> Path:
         big = Image.new("RGBA", (size[0] * 4, size[1] * 4), (0, 0, 0, 0))
         ImageDraw.Draw(big).ellipse((16, 16, big.width - 16, big.height - 16), fill=(200, 40, 90, 255))
