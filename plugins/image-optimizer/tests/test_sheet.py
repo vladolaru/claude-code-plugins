@@ -322,4 +322,31 @@ def test_totals_count_an_untouched_file_at_its_original_size(tmp_path, factory):
     path.write_text(json.dumps(record))
     _, page = S.build(out)
     size = f"{record['source']['size'] / 1024:.1f} KB"
-    assert _page_data(page)["totals"] == f"1 file(s), {size} -> {size} (-0.0%) overall; nothing to apply"
+    assert _page_data(page)["totals"] == f"1 file(s), {size} -> {size} (+0.0%) overall; nothing to apply"
+
+
+def test_totals_sign_growth_and_shrinkage(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    size = record["source"]["size"]
+    for pick_size, sign in ((size // 2, "-"), (size * 2, "+")):
+        record["candidates"][0]["size"] = pick_size
+        path.write_text(json.dumps(record))
+        _, page = S.build(out)
+        assert re.search(rf"\({re.escape(sign)}\d+\.\d%\) overall", _page_data(page)["totals"])
+
+
+def test_a_path_with_a_comma_is_not_approvable_and_says_why(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    record["source"]["path"] = "/shop/a,b/photo.png"
+    path.write_text(json.dumps(record))
+    tiles, page = S.build(out)
+    [card] = _page_data(page)["files"]
+    assert tiles and card["tiles"]  # still tiled and viewable
+    assert card["approvable"] is False and "comma" in card["approve_note"]
+    plain = fake_out(tmp_path / "plain", factory)
+    [ok] = _page_data(S.build(plain)[1])["files"]
+    assert ok["approvable"] is True and ok["approve_note"] == ""

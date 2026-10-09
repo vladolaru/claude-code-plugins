@@ -25,10 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Folder inputs skip git-ignored files, vendored folders and imgopt working folders, and say what they skipped; a file the job cannot serve (a GIF in a resize) is skipped with its own line instead of stopping the batch.
 - `sheet` and `apply` act only on the last `candidates` run in a working folder and name the records they ignore, an interrupted run resumes from the last finished candidate, and `apply --approve a.jpg,b.png` writes only the lossy picks named.
 
-### Removed
-
-- `sheet --browser` and the Chrome dependency: the page now carries the 1:1 crops, which are what to judge from.
-
 ### Fixed
 
 - Animated PNGs keep every frame (they get lossless candidates only), and lossless PNG picks keep the gAMA, cHRM and sBIT chunks browsers use to render them.
@@ -38,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `scripts/optimize-images.sh` and the `imageoptim-cli` dependency.
+- `sheet --browser` and the Chrome dependency: the page now carries the 1:1 crops, which are what to judge from.
 
 ## [1.2.0] - 2026-07-23
 

@@ -119,6 +119,11 @@ def _tiles_for(folder: Path, record: dict, tiles_dir: Path) -> list[Tile]:
     return out
 
 
+# `apply --approve` splits its value on commas, and a name it cannot match falls back to the basename,
+# so a path with a comma could approve a different file; the page withholds the tick instead.
+COMMA_NOTE = "The path contains a comma, which the apply command cannot carry: rename the file, then run candidates again."
+
+
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Image comparison</title>
@@ -185,6 +190,9 @@ function render(){
         w.append(l,i); t.append(w);
       }
       card.append(t);
+    }
+    if(f.approve_note){
+      const n=document.createElement('div'); n.className='banner'; n.textContent=f.approve_note; card.append(n);
     }
     if(f.approvable){
       const a=document.createElement('label'); a.className='approve';
@@ -294,10 +302,12 @@ def build(out: Path, *, alt: str | None = None, problems: list[str] | None = Non
                 if problems is not None:
                     problems.append(f"{folder.name}: no tiles: {error}")
         tiles += record_tiles
-        files.append({"name": record["source"]["path"], "meta": _meta(record, chosen), "panes": panes,
+        source_path = record["source"]["path"]
+        files.append({"name": source_path, "meta": _meta(record, chosen), "panes": panes,
                       "verdict": record["verdict"], "pick_kind": chosen["kind"] if chosen else None,
                       "before": record["source"]["size"], "saved": saved,
-                      "approvable": needs_tiles(record) and bool(record_tiles),
+                      "approvable": needs_tiles(record) and bool(record_tiles) and "," not in source_path,
+                      "approve_note": COMMA_NOTE if needs_tiles(record) and "," in source_path else "",
                       "tiles": [{"label": t.window, "src": quote(f"tiles/{t.path.name}"), "required": t.required}
                                 for t in sorted(record_tiles, key=lambda t: not t.required)]})
         if record["uncalibrated"]:
@@ -308,7 +318,7 @@ def build(out: Path, *, alt: str | None = None, problems: list[str] | None = Non
     if alt and not alt_found and problems is not None:
         problems.append(f"--alt {alt!r} matches no candidate in any record")
     overall = (f"{len(files)} file(s), {kb(total_before)} -> {kb(total_after)}"
-               + (f" (-{(total_before - total_after) / total_before:.1%}) overall" if total_before else " overall"))
+               + (f" ({(total_after - total_before) / total_before:+.1%}) overall" if total_before else " overall"))
     totals = overall + (f"; {applied} to apply: {kb(before)} -> {kb(after)}" if applied else "; nothing to apply")
     apply_prefix = f"python3 {shlex.quote(str(script or Path('imgopt.py')))} apply {shlex.quote(str(out))}"
     data = {"files": files, "totals": totals, "banners": sorted(set(banners)), "apply_prefix": apply_prefix}
