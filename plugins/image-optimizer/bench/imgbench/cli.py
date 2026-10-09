@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+from imgopt_lib.ladder import UsageError
 from imgopt_lib.tools import ToolingError
 
-from . import build, harness, manifest, paths, report, sources
+from . import build, harness, manifest, paths, report, review, sources
 
 SOURCES_FILE = paths.SOURCES_FILE
 
@@ -149,10 +152,55 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_review(args) -> int:
+    """Build one comparison page per job from the lossy picks closest to a floor, for a human to judge."""
+    run_dir = Path(args.run_dir)
+    if not (run_dir / harness.ROWS).is_file():
+        print(f"{run_dir}: no {harness.ROWS}; give a run folder that `run` made")
+        return 2
+    review_dir = paths.bench_root() / "review" / run_dir.resolve().name
+    try:
+        built, problems = review.assemble_run(run_dir, review_dir, per_category=args.per_category, seed=args.seed)
+    except UsageError as error:
+        print(error)
+        return 2
+    if not built:
+        print("no lossy pick to review in this run")
+        return 0
+    for job, dest in built.items():
+        print(f"{job}: {len(json.loads((dest / review.SAMPLE).read_text()))} picks: {review.page_of(dest)}")
+    for problem in problems:
+        print(f"  problem: {problem}", file=sys.stderr)
+    print("Tick every pick that looks acceptable at 1:1, then paste the page's command here. "
+          "Do not run it: apply would write the picks over the corpus files.")
+    return 1 if problems else 0
+
+
+def _approval_text(value: str) -> str:
+    return sys.stdin.read() if value == "-" else value
+
+
+def cmd_review_record(args) -> int:
+    """Write verdicts.json for a review folder from the picks the human ticked."""
+    dest = Path(args.dest)
+    if not (dest / review.SAMPLE).is_file():
+        print(f"{dest}: no {review.SAMPLE}; give a review folder that `review` made")
+        return 2
+    try:
+        out = review.record(dest, review.approved_from(_approval_text(args.approve)))
+    except (UsageError, ValueError) as error:  # ValueError: a command with an unclosed quote
+        print(error)
+        return 2
+    verdicts = json.loads(out.read_text())
+    print(f"{out}: {sum(v['acceptable'] for v in verdicts)} of {len(verdicts)} acceptable")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgbench",
-        description="Build the benchmark corpus and run imgopt on it: select, fetch, build, run, report, review.")
+        description="Build the benchmark corpus and run imgopt on it: select, fetch, build, run, report, review, "
+                    "review-record.")
     commands = parser.add_subparsers(dest="command", required=True)
     select = commands.add_parser("select", help="choose the real images and pin them in sources.json")
     select.add_argument("--only", choices=["gpl-asset"], help="re-pick only this category, merging into sources.json")
@@ -173,6 +221,17 @@ def build_parser() -> argparse.ArgumentParser:
     summary = commands.add_parser("report", help="summarize a run into per-category Markdown tables")
     summary.add_argument("run_dir", help="a run folder made by `run`")
     summary.set_defaults(func=cmd_report)
+    pages = commands.add_parser("review", help="build the 1:1 review pages (one per job) for a human to judge")
+    pages.add_argument("run_dir", help="a run folder made by `run`")
+    pages.add_argument("--per-category", type=int, default=3, metavar="N",
+                       help="picks closest to a floor per job and category (default 3), plus one random pick")
+    pages.add_argument("--seed", type=int, default=1, help="seed of the random pick (default 1)")
+    pages.set_defaults(func=cmd_review)
+    record = commands.add_parser("review-record", help="record the picks a human ticked as verdicts.json")
+    record.add_argument("dest", help="a review folder made by `review` (one per job)")
+    record.add_argument("--approve", required=True, metavar="LIST|COMMAND|-",
+                        help="the comma list of approved paths, the page's whole pasted command, or - for stdin")
+    record.set_defaults(func=cmd_review_record)
     return parser
 
 
