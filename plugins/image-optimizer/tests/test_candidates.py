@@ -209,6 +209,17 @@ def test_svgo_keeps_classes_of_a_style_block(factory, toolset, tmp_path):
     assert 'class="a"' in text and 'class="b"' in text
 
 
+def test_a_sketch_export_keeps_its_desc_and_empty_group_and_gets_a_pick(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"svg"})
+    src = factory.sketch_svg()
+    [r] = C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)
+    [cand] = r["candidates"]
+    assert "discarded" not in cand, cand.get("discarded")
+    assert C.pick_of(r) is cand and cand["size"] < src.stat().st_size
+    text = (C.load_records(tmp_path / "out")[0][0] / cand["file"]).read_text()
+    assert "<desc>Created with Sketch.</desc>" in text and 'id="empty"' in text
+
+
 def test_svg_pick_that_loses_semantics_is_discarded_with_the_reason(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"svg"})
     monkeypatch.setattr(C.metrics, "svg_semantics_lost", lambda a, b: "removed id='t'")

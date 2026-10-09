@@ -23,6 +23,10 @@ export default {
           inlineStyles: false,
           // role="img" plus aria-* give an inline SVG its accessible name.
           removeUnknownsAndDefaults: { keepRoleAttr: true, keepAriaAttrs: true },
+          // A <desc> is part of an SVG's accessible description, even an editor's "Created with Sketch.".
+          removeDesc: false,
+          // An empty <g id> can be a script's or a stylesheet's target, like any other id.
+          removeEmptyContainers: false,
         },
       },
     },

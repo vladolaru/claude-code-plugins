@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Lossless PNG picks keep the gAMA, cHRM and sBIT chunks browsers use to render them, and animated PNGs keep every frame; animated PNGs and PNGs whose gAMA or cHRM decides their rendering get lossless candidates only.
-- SVG optimization uses svgo 4 or newer with a bundled config that keeps ids, classes, `role` and `aria-*` attributes; a pick that loses one, or changes the rendering, is discarded, and an older svgo is refused.
+- SVG optimization uses svgo 4 or newer with a bundled config that keeps ids, classes, `role` and `aria-*` attributes, and `<desc>` text; a pick that loses one, or changes the rendering, is discarded, and an older svgo is refused.
 
 ### Removed
 

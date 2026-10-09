@@ -161,6 +161,21 @@ class Factory:
             '<rect class="a" x="2" y="2" width="9" height="20"/><rect class="b" x="13" y="2" width="9" height="20"/></svg>')
         return path
 
+    def sketch_svg(self, name="sketch.svg") -> Path:
+        """An SVG as Sketch exports it: an editor <desc>, a generator comment and an empty layer group."""
+        path = self.root / name
+        path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<svg width="24px" height="24px" viewBox="0 0 24 24" version="1.1" xmlns="http://www.w3.org/2000/svg" '
+            'xmlns:xlink="http://www.w3.org/1999/xlink">\n'
+            '    <!-- Generator: Sketch 52.6 (67491) - http://www.bohemiancoding.com/sketch -->\n'
+            '    <title>icon/check</title>\n    <desc>Created with Sketch.</desc>\n'
+            '    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">\n'
+            '        <g id="icon/check" fill="#222222">\n'
+            '            <path d="M9,16.2 L4.8,12 L3.4,13.4 L9,19 L21,7 L19.6,5.6 L9,16.2 Z" id="Shape"></path>\n'
+            '        </g>\n        <g id="empty"></g>\n    </g>\n</svg>\n')
+        return path
+
     def logo(self, name="logo.png", size=(120, 120)) -> Path:
         big = Image.new("RGBA", (size[0] * 4, size[1] * 4), (0, 0, 0, 0))
         ImageDraw.Draw(big).ellipse((16, 16, big.width - 16, big.height - 16), fill=(200, 40, 90, 255))

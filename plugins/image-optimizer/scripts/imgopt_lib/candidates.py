@@ -43,9 +43,10 @@ from .tools import OPTIONAL_ENCODERS, describe
 from .workdirs import folder_size, mark, written_hashes
 
 SCHEMA = 1
-# Bump when a cached record would be wrong or lack a key. 5: every raster rung records metadata_removed;
-# 3: svgo keeps ids, roles and classes; 2: a rung's kind follows its input.
-CACHE_VERSION = 5
+# Bump when a cached record would be wrong or lack a key. 6: svgo keeps <desc> and empty groups;
+# 5: every raster rung records metadata_removed; 3: svgo keeps ids, roles and classes; 2: a rung's kind
+# follows its input.
+CACHE_VERSION = 6
 RUN_FILE = "run.json"  # the last `candidates` run in this --out: which inputs, which settings
 UNCALIBRATED = ("webp", "avif")
 NOT_SMALLER = "not smaller than the original, so not measured (an in-place pick must be smaller)"
