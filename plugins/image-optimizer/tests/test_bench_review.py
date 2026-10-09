@@ -8,6 +8,7 @@ BENCH = Path(__file__).resolve().parents[1] / "bench"
 sys.path.insert(0, str(BENCH))
 
 from imgbench import cli, harness, manifest, paths  # noqa: E402
+from imgbench import report as R  # noqa: E402
 from imgbench import review as RV  # noqa: E402
 from imgopt_lib import candidates as C  # noqa: E402
 from imgopt_lib.ladder import UsageError  # noqa: E402
@@ -132,3 +133,12 @@ def test_a_real_run_is_sampled_assembled_reviewed_and_recorded(factory, toolset,
 def test_review_record_needs_a_review_folder(tmp_path, capsys):
     assert cli.main(["review-record", str(tmp_path), "--approve", "x"]) == 2
     assert cli.main(["review", str(tmp_path)]) == 2
+
+
+def test_sample_ranks_by_the_report_floor_margin_evidence_ssim_included():
+    near = make_row(9, pick_scores={"ssim": 0.99, "ss2": 95, "ssim_evidence": 0.9801})  # gate SSIM far, Evidence near
+    rows = [make_row(i) for i in range(5, 9)] + [near]
+    picked = RV.sample(rows, per_category=1)
+    assert picked[0]["file"] == "f9"
+    sampled = RV._slim(picked[0])
+    assert sampled["distance"] == pytest.approx(R.floor_margin(near))

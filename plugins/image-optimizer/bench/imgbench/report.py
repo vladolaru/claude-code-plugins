@@ -26,8 +26,8 @@ ABLATION_COLUMNS = (("jpegli", {"cjpegli"}), ("guetzli", {"guetzli"}),
                     ("jpegoptim", {"jpegoptim", "lossless-jpegoptim"}), ("zopfli", {"oxipng-zopfli"}),
                     ("pngquant", {"pngquant"}))
 PALETTE_FAMILIES = {"pngquant"}  # the picks whose banding is gated; the others' banding is only reported
-FLOOR_SSIM = 0.002
-FLOOR_SS2 = 2.0
+SS2_PER_SSIM = 1000  # ss2 points per SSIM unit when the two margins are compared: 2 ss2 points = 0.002 SSIM
+AT_FLOOR = 0.002  # a pick within this `floor_margin` of a floor is "at the floor"
 
 
 def load(run_dir: Path) -> list[dict]:
@@ -127,6 +127,22 @@ def _ablation(group: list[dict]) -> list[str]:
     return _table(["Category", "All", *(f"−{name}" for name, _ in columns)], body)
 
 
+def floor_margin(row: dict) -> float:
+    """How far the pick sits above the nearest floor it was gated on, in SSIM units: the smaller of its SSIM
+    margin and its ss2 margin divided by ``SS2_PER_SSIM``. The SSIM margin uses the lower of the gate SSIM and
+    the Evidence SSIM, because `gates.evaluate` holds both to the SSIM floor (ffmpeg and Pillow decode JPEG up
+    to about 1e-3 apart). Rows without an Evidence SSIM use the gate SSIM; a missing score or floor is left
+    out, and a pick with no gated score at all is infinitely far (`inf`)."""
+    scores, gates = row.get("pick_scores") or {}, row.get("gates") or {}
+    margins = []
+    measured = [s for s in (scores.get("ssim"), scores.get("ssim_evidence")) if s is not None]
+    if measured and gates.get("ssim") is not None:
+        margins.append(min(measured) - gates["ssim"])
+    if scores.get("ss2") is not None and gates.get("ss2") is not None:
+        margins.append((scores["ss2"] - gates["ss2"]) / SS2_PER_SSIM)
+    return min(margins) if margins else math.inf
+
+
 def _floor(group: list[dict]) -> list[str]:
     body = []
     for category, rows in _by(group, "category").items():
@@ -134,13 +150,7 @@ def _floor(group: list[dict]) -> list[str]:
                  if r.get("pick") and _lossy(r) and (r.get("gates") or {}).get("ssim") is not None]
         if not picks:
             continue
-        at_floor = 0
-        for r in picks:
-            ssim, ss2 = _scores(r).get("ssim"), _scores(r).get("ss2")
-            gates = r["gates"]
-            near_ssim = ssim is not None and ssim - gates["ssim"] <= FLOOR_SSIM
-            near_ss2 = ss2 is not None and gates.get("ss2") is not None and ss2 - gates["ss2"] <= FLOOR_SS2
-            at_floor += near_ssim or near_ss2
+        at_floor = sum(floor_margin(r) <= AT_FLOOR for r in picks)
         body.append([category, str(len(picks)), str(at_floor), _pct(at_floor / len(picks))])
     return _table(["Category", "Lossy picks", "At the floor", "Share"], body) if body else []
 
@@ -191,7 +201,8 @@ def markdown(rows: list[dict]) -> str:
             ["Category", "Files", "Skipped", "No pick", "Saved", "Pick families", "Median s/file", "Disk/file"],
             _summary(g))),
         ("Encoder ablations (saving with that encoder removed)", _ablation),
-        ("Picks at the floor (lossy picks within 0.002 SSIM or 2 ss2 points of a floor)", _floor),
+        ("Picks at the floor (lossy picks within 0.002 SSIM, gate or Evidence, or 2 ss2 points of a floor)",
+         _floor),
         ("Evidence vs gate SSIM (|Evidence SSIM − gate SSIM| of the picks)", _evidence),
         ("Banding on lossy non-palette picks (the input for calibrating JPEG/WebP/AVIF thresholds)", _banding),
     ]

@@ -83,3 +83,23 @@ def test_picks_at_the_floor_and_banding_use_the_pick_scores():
     assert "| photo-camera | 3 | 1 | 33.3% |" in md  # one of three lossy picks sits within 0.002 of the SSIM floor
     assert "| photo-camera | 1 | 0.0010 | 0.0010 |" in md  # |Evidence SSIM - gate SSIM| of the one pick that has both
     assert "| photo-camera | 3 | 1.00 | 2.00 | 2.00 |" in md  # banding median, p90, max
+
+
+@pytest.mark.parametrize("scores, margin", [
+    ({"ssim": 0.99, "ss2": 95.0}, 0.01),  # SSIM margin 0.01, ss2 margin 15 points = 0.015
+    ({"ssim": 0.99, "ss2": 95.0, "ssim_evidence": 0.981}, 0.001),  # the Evidence SSIM is gated against the floor too
+    ({"ssim": 0.99, "ss2": 95.0, "ssim_evidence": None}, 0.01),  # no Evidence SSIM (ffmpeg could not reproduce)
+    ({"ssim": 0.999, "ss2": 81.0}, 0.001),  # ss2 margin 1 point, scaled by 1/1000
+    ({}, float("inf")),
+])
+def test_floor_margin_is_the_smallest_gated_margin(scores, margin):
+    r = {"pick_scores": scores, "gates": {"ssim": 0.98, "ss2": 80.0, "band": 3.0, "lossless_only": False}}
+    assert R.floor_margin(r) == pytest.approx(margin)
+
+
+def test_a_pick_whose_evidence_ssim_sits_at_the_floor_counts_at_the_floor():
+    r = row("photo-camera", 1000, [("cjpegli", 500, True)])
+    r.update(verdict="apply", pick="cjpegli-q50", pick_family="cjpegli", pick_size=500, pick_kind="lossy",
+             gates={"ssim": 0.98, "ss2": 80.0, "band": 3.0, "lossless_only": False},
+             pick_scores={"ssim": 0.99, "ss2": 95.0, "band": 1.0, "ssim_evidence": 0.9805})
+    assert "| photo-camera | 1 | 1 | 100.0% |" in R.markdown([r])

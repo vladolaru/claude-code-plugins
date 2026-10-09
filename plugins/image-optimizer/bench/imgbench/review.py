@@ -14,6 +14,7 @@ The page's `apply` command must never be run: apply would write the picks over t
 from __future__ import annotations
 
 import json
+import math
 import random
 import shlex
 import shutil
@@ -40,28 +41,16 @@ def is_reviewable(row: dict) -> bool:
     return row.get("verdict") == "apply" and bool(row.get("pick")) and row.get("pick_kind", "lossy") == "lossy"
 
 
-def distance_to_floor(row: dict) -> float:
-    """How far the pick is above the nearest floor: the smaller of its SSIM margin and its ss2 margin, the
-    latter divided by 1000 so the two scales are comparable. A missing score or floor is left out."""
-    scores, gates = row.get("pick_scores") or {}, row.get("gates") or {}
-    margins = []
-    if scores.get("ssim") is not None and gates.get("ssim") is not None:
-        margins.append(scores["ssim"] - gates["ssim"])
-    if scores.get("ss2") is not None and gates.get("ss2") is not None:
-        margins.append((scores["ss2"] - gates["ss2"]) / 1000)
-    return min(margins) if margins else float("inf")
-
-
 def sample(rows: list[dict], per_category: int = 3, seed: int = 1) -> list[dict]:
-    """Per (job, category): the ``per_category`` reviewable rows closest to a floor (smallest distance first, ties
-    by file name), then one more chosen at random from the rest. Deterministic for a given ``seed``."""
+    """Per (job, category): the ``per_category`` reviewable rows closest to a floor (smallest `report.floor_margin`
+    first, ties by file name), then one more chosen at random from the rest. Deterministic for a given ``seed``."""
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for row in rows:
         if is_reviewable(row):
             groups[(row.get("job"), row["category"])].append(row)
     chosen: list[dict] = []
     for (job, category), group in sorted(groups.items(), key=lambda kv: tuple(map(str, kv[0]))):
-        ranked = sorted(group, key=lambda r: (distance_to_floor(r), r["file"]))
+        ranked = sorted(group, key=lambda r: (report.floor_margin(r), r["file"]))
         chosen += ranked[:per_category]
         rest = ranked[per_category:]
         if rest:
@@ -71,10 +60,10 @@ def sample(rows: list[dict], per_category: int = 3, seed: int = 1) -> list[dict]
 
 def _slim(row: dict) -> dict:
     """What `sample.json` keeps of a row: enough to find it again and to judge a verdict against its gates."""
-    distance = distance_to_floor(row)
+    distance = report.floor_margin(row)
     return {"job": row.get("job"), "category": row["category"], "file": row["file"], "pick": row["pick"],
             "pick_family": row.get("pick_family"), "pick_scores": row.get("pick_scores"), "gates": row.get("gates"),
-            "distance": None if distance == float("inf") else distance}
+            "distance": None if distance == math.inf else distance}
 
 
 def page_of(dest: Path) -> Path:
