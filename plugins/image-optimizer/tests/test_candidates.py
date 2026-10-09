@@ -907,6 +907,24 @@ def test_a_file_written_by_a_lossy_pick_is_not_measured_again_without_a_baseline
     assert any(l.startswith("Against the baselines: ") and "for 1 file(s)" in l for l in lines)
 
 
+@pytest.mark.parametrize("jobs", [1, 2])
+def test_a_file_skipped_in_a_rerun_leaves_the_last_run(factory, toolset, tmp_path, jobs):
+    tools = toolset("recompress", "high", {"jpeg"})
+    a = factory.photo(name="a.jpg", size=(200, 150), quality=95).resolve()
+    b = factory.photo(name="b.jpg", size=(180, 140), quality=95).resolve()
+    out = tmp_path / "out"
+    first = C.run([a, b], opts(out, "high"), tools, log=quiet, jobs=jobs)
+    assert [S.needs_tiles(r) for r in first] == [True, True]  # both lossy picks wait for approval
+    assert AP.apply(out, tools=tools, approve=(str(a),), log=quiet) == 0  # a is rewritten and ledgered
+    second = C.run([a, b], opts(out, "high"), tools, log=quiet, jobs=jobs)
+    assert [r["source"]["path"] for r in second] == [str(b)]
+    assert [r["source"]["path"] for _, r in C.load_records(out)] == [str(b)]
+    assert any("a.jpg" in s and "an earlier imgopt lossy pick wrote this file" in s for s in C.stale_records(out))
+    lines = []
+    assert AP.apply(out, tools=tools, approve=(str(b),), log=lines.append) == 0
+    assert not any("a.jpg" in line for line in lines), lines
+
+
 def test_a_lossless_job_may_run_on_a_file_a_lossy_pick_wrote(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo()

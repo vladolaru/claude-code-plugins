@@ -15,11 +15,12 @@ other folder out. Schema: see SCHEMA.
 
 A source that cannot be read or whose colour profile cannot be converted
 (imaging.READ_FAILURES: also 16-bit files, content that does not match its
-extension, and a --resize that would upscale or keep the width)
-is skipped by run(): it logs the reason, writes nothing for that file and
-carries on, so callers compare len(records) with len(inputs) to learn that
-files were skipped. A record whose every candidate errored (all_errored) is a
-problem too.
+extension, a --resize that would upscale or keep the width, and a file an
+earlier lossy pick wrote) is skipped by run(): it logs the reason, replaces
+any earlier record of that file with one that names the skip (``skipped``),
+and carries on, so callers compare len(records) with len(inputs) to learn
+that files were skipped. A record whose every candidate errored
+(all_errored) is a problem too.
 """
 
 from __future__ import annotations
@@ -107,7 +108,9 @@ def _scan(out: Path) -> tuple[list[tuple[Path, dict]], list[str]]:
     for path in sorted(Path(out).glob("*/metrics.json")):
         record = json.loads(path.read_text())
         name = path.parent.name
-        if not record.get("complete", True):
+        if "skipped" in record:
+            stale.append(f"{name}: skipped: {record['skipped']}")
+        elif not record.get("complete", True):
             stale.append(f"{name}: interrupted before its last candidate")
         elif run is None:  # a folder written by hand (tests) has no manifest: every complete record counts
             current.append((path.parent, record))
@@ -127,7 +130,7 @@ def load_records(out: Path) -> list[tuple[Path, dict]]:
 
 
 def stale_records(out: Path) -> list[str]:
-    """Record folders ``load_records`` leaves out, with why: other inputs, other settings, or interrupted."""
+    """Record folders ``load_records`` leaves out, with why: other inputs or settings, interrupted, or skipped."""
     return _scan(out)[1]
 
 
@@ -135,6 +138,14 @@ def _write_record(folder: Path, record: dict) -> None:
     tmp = folder / "metrics.json.tmp"
     tmp.write_text(json.dumps(record, indent=1))
     tmp.replace(folder / "metrics.json")
+
+
+def _record_skip(folder: Path, why: str) -> None:
+    """Replace the record of an input this run skipped. Its run.json entry was written before the file was
+    reached, so an earlier record left in place would pass for this run's in `sheet` and `apply`. Its cached
+    candidates are for content that is gone or unreadable, so nothing worth keeping is lost."""
+    if folder.is_dir():
+        _write_record(folder, {"schema": SCHEMA, "complete": False, "skipped": why, "candidates": []})
 
 
 def _previous(path: Path) -> dict:
@@ -607,6 +618,7 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     for src, (record, error) in zip(inputs, _results(inputs, opts, tools, jobs, log)):
         if record is None:
             log(f"\n== {src}: skipped: {error}")
+            _record_skip(opts.out / subdir_name(src), error)
             continue
         print_record(record, log)
         if all_errored(record):
