@@ -141,6 +141,8 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             notes.append(f"{why}: lossless rungs only, so it renders as before")
         lossy = False
     pixel = reshaped or (lossy and f.device_profile)
+    # What the encoders get: a resize scales both sides, so the encode-time caps count the encoded pixels.
+    encoded_pixels = f.width * f.height * (resize / f.display_width) ** 2 if resize else f.width * f.height
     rungs: list[Rung] = []
     if target == "jpeg":
         if f.has_alpha and f.format != "jpeg":
@@ -160,7 +162,7 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             jl_in = "pixels_gray" if gray else "pixels_flat"  # cjpegli writes as many channels as it reads
             rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", jl_in, ".jpg", ("-q", str(q)))
                       for q in JPEGLI_LEVELS]
-            if f.width * f.height <= GUETZLI_MAX_PIXELS:
+            if encoded_pixels <= GUETZLI_MAX_PIXELS:
                 g_in = "source" if (not pixel and f.orientation == 1 and not gray) else "pixels_flat"
                 rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),
                                post_jpegtran=GUETZLI_PROGRESSIVE) for q in GUETZLI_LEVELS]
@@ -174,7 +176,7 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
         strip = ("--keep", PNG_KEEP_WITH_EXIF if keep_orientation else PNG_KEEP)
         png_in = "pixels" if reshaped else "source"
         rungs.append(Rung("oxipng", "oxipng", "lossless", png_in, ".png", ("-o", "max", *strip)))
-        if f.width * f.height <= ZOPFLI_MAX_PIXELS:
+        if encoded_pixels <= ZOPFLI_MAX_PIXELS:
             rungs.append(Rung("oxipng-zopfli", "oxipng", "lossless", png_in, ".png",
                               ("-o", "max", "--fast", "--zopfli", *strip)))
         if lossy:

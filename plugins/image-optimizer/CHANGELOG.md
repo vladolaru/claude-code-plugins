@@ -23,13 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sheet` and `apply` act only on the files the last `candidates` run in a working folder measured, so a file that run skipped is not offered again, and they name the records they ignore; an interrupted run resumes from its last finished candidate.
 - The `candidates` summary and the page lead with whole-batch totals, signed, beside the files that will change, and printed commands quote their paths.
 - Lossy JPEG jobs also try jpegli when it is installed; it is optional because no package manager ships it and its gain (about 2 points on 31 WooCommerce photos) is unmeasured elsewhere, and `imgopt.py doctor` prints a build that keeps working after Homebrew upgrades.
-- PNGs up to 2 megapixels also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because it took minutes on screenshots for 0.4% or less.
+- PNGs up to 2 megapixels (after any resize) also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because it took minutes on screenshots for 0.4% or less.
 - Under `high` and `medium`, a lossy pick's Evidence SSIM (a luma SSIM, so ssimulacra2 goes in the evidence table too; what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
 - Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.
 - `--ref-rev <rev>` measures a whole batch against each file's content at an earlier commit, with each baseline's size beside the file's, and a file an earlier lossy pick wrote is not measured again under a lossy profile without a baseline from before that pick, so lossy passes never stack.
 - Folder inputs skip git-ignored files, vendored folders and imgopt working folders, and say what they skipped; a file the job cannot serve (a GIF in a resize) or a Git LFS pointer gets its own line instead of stopping the batch.
 - Tools that print no version are identified by a hash of their binary, encoder refusals are not retried on every run, and `apply` stops with a clear reason when ffmpeg or ssimulacra2 changed since the picks were measured.
-- `candidates` measures two files at a time (`--jobs`, one at a time where a sandbox denies worker processes), skips measuring in-place candidates that are not smaller than the original, runs butteraugli on the pick only, and writes pixel files only when a candidate reads them; guetzli is skipped above 6 megapixels.
+- `candidates` measures two files at a time (`--jobs`, one at a time where a sandbox denies worker processes), skips measuring in-place candidates that are not smaller than the original, runs butteraugli on the pick only, and writes pixel files only when a candidate reads them; guetzli is skipped above 6 megapixels, counted after any resize.
 
 ### Fixed
 

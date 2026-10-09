@@ -47,6 +47,15 @@ def test_guetzli_is_skipped_above_its_pixel_cap():
     assert any(r.tool == "guetzli" for r in L.plan(facts(width=2000, height=3000), profile="high").rungs)
 
 
+def test_the_pixel_caps_count_the_resized_image():
+    big = facts(width=6000, height=4000)
+    resized = L.plan(big, profile="high", resize=1200)  # 1200x800: about 1 MP reaches the encoders
+    assert any(r.tool == "guetzli" for r in resized.rungs)
+    assert not any("guetzli skipped" in n for n in resized.notes)
+    assert "oxipng-zopfli" in labels(L.plan(replace(big, format="png"), profile="high", resize=1200))
+    assert "oxipng-zopfli" not in labels(L.plan(replace(big, format="png"), profile="high", resize=4000))
+
+
 def test_gray_jpeg_feeds_guetzli_rgb_pixels():
     p = L.plan(facts(mode="L"), profile="high")
     assert all(r.input == "pixels_flat" for r in p.rungs if r.tool == "guetzli")
