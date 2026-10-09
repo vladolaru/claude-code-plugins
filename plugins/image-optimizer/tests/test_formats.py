@@ -60,7 +60,7 @@ def test_folder_inputs_skip_vendored_ignored_and_working_folders(tmp_path):
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"x")
-    (root / "work" / "run.json").write_text("{}")
+    (root / "work" / WORKDIR_MARKER).write_text("")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / ".gitignore").write_text("build/\n")
     skipped: list[str] = []
@@ -77,6 +77,16 @@ def test_folder_inputs_skip_a_folder_carrying_the_workdir_marker(tmp_path):
     skipped: list[str] = []
     assert expand_inputs([tmp_path], skipped=skipped) == []
     assert any("imgopt working folder" in s for s in skipped)
+
+
+def test_a_project_folder_holding_run_or_metrics_json_is_walked(tmp_path):
+    for rel in ("data/run.json", "data/a.png", "stats/sub/b.png", "stats/metrics.json"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    skipped: list[str] = []
+    assert [p.name for p in expand_inputs([tmp_path], skipped=skipped)] == ["a.png", "b.png"]
+    assert skipped == []
 
 
 def test_an_explicit_file_is_never_skipped(tmp_path):

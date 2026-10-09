@@ -13,11 +13,11 @@ EXT_BY_FORMAT = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "svg": ".svg",
 INPUT_FORMATS = ("jpeg", "png", "gif", "svg")
 OUTPUT_FORMATS = ("keep", "jpeg", "png", "webp", "avif")
 VENDORED = frozenset({"node_modules", "vendor", "bower_components"})
-# `candidates` puts this file in every --out folder; `clean` deletes only folders that carry it. It lives here, not in
-# workdirs, because workdirs imports ladder, which imports imaging, which imports this module.
+# `candidates` puts this file in every --out folder; `clean` deletes only folders that carry it, and folder inputs
+# skip them. It is the only sign of a working folder: names like run.json and metrics.json are common in projects.
+# It lives here, not in workdirs, because workdirs imports ladder, which imports imaging, which imports this module.
 WORKDIR_MARKER = ".imgopt-workdir"
 WORKDIR_MARKER_TEXT = "Made by `imgopt candidates`: a working folder that `imgopt clean` may delete.\n"
-WORK_MARKERS = (WORKDIR_MARKER, "run.json", "metrics.json")  # an imgopt --out folder (or one input's folder in it)
 
 
 def format_of(path: Path) -> str | None:
@@ -49,7 +49,7 @@ def _walk(folder: Path, skipped: list[str]) -> list[Path]:
         if vendored:
             skipped.append(f"{f}: under {vendored}/")
             continue
-        if any((folder / Path(*rel.parts[:i]) / m).is_file() for i in range(1, len(rel.parts)) for m in WORK_MARKERS):
+        if any((folder / Path(*rel.parts[:i]) / WORKDIR_MARKER).is_file() for i in range(1, len(rel.parts))):
             skipped.append(f"{f}: inside an imgopt working folder")
             continue
         found.append(f)
@@ -60,7 +60,8 @@ def _walk(folder: Path, skipped: list[str]) -> list[Path]:
 
 def expand_inputs(paths, skipped: list[str] | None = None) -> list[Path]:
     """Files as given (never skipped); folders walked recursively, leaving out hidden parts, vendored folders
-    (``VENDORED``), imgopt working folders and git-ignored files, each appended to ``skipped`` with why."""
+    (``VENDORED``), imgopt working folders (``WORKDIR_MARKER``) and git-ignored files, each appended to ``skipped``
+    with why."""
     skipped = [] if skipped is None else skipped
     found: list[Path] = []
     for raw in paths:
