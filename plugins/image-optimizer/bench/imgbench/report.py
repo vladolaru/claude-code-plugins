@@ -51,7 +51,7 @@ def _backfill(row: dict, run_dir: Path) -> dict:
 
 
 def timing(run_dir: Path) -> dict:
-    """The run's timing.json (tool versions, commit, per-category wall time), or {} when the run has none."""
+    """The run's timing.json (see the harness docstring for its fields), or {} when the run has none."""
     path = Path(run_dir) / harness.TIMING
     return json.loads(path.read_text()) if path.is_file() else {}
 
@@ -129,14 +129,15 @@ def identical(row: dict) -> bool:
 
 
 def band_gated(row: dict) -> bool:
-    """The pick's banding was gated (palette output), not only reported. Unknown on a row that lacks it."""
+    """The pick's banding was gated (palette output), not only reported. False on an older row whose record
+    folder is gone, the one case where it is unknown."""
     return bool(_scores(row).get("band_gated"))
 
 
 def changes_pixels(row: dict) -> bool:
     """A lossy pick that is not pixel-identical: the picks the floor and banding tables describe and the review
     shows a human. imgopt files every rung that reads prepared pixels as kind "lossy", oxipng on resized pixels
-    and cwebp-lossless included, though those keep every pixel."""
+    and cwebp-lossless included, even when its output matches the reference pixel for pixel."""
     return bool(row.get("pick")) and row.get("pick_kind") == "lossy" and not identical(row)
 
 
@@ -305,7 +306,8 @@ def _missing_optional(meta: dict) -> str:
 
 
 def render(run_dir: Path) -> str:
-    """The full report: a header naming the run, commit, corpus version and tool versions, then ``markdown``."""
+    """The full report: a header naming the run, commit, corpus version and checksum, tool versions, the optional
+    tools each job ran without and the machine-dependent ledger skips, then ``markdown``."""
     run_dir = Path(run_dir)
     meta = timing(run_dir)
     header = [f"# imgbench run {run_dir.name}", ""]
