@@ -1,4 +1,4 @@
-"""`imgopt apply`: write approved picks, then prove what was written.
+"""`imgopt apply`: write approved picks, then re-measure what was written.
 
 Lossy picks are refused unless --approved is passed, which the skill allows
 only after the human approved on the comparison page. A source that changed
@@ -190,7 +190,7 @@ def apply(out: Path, *, tools: dict, only=(), approved: bool = False, dest: Path
         written += 1
         before += record["source"]["size"]
         after += target.stat().st_size
-        log(f"  verified {target}  {kb(record['source']['size'])} -> {kb(target.stat().st_size)}  "
+        log(f"  re-measured {target}  {kb(record['source']['size'])} -> {kb(target.stat().st_size)}  "
             f"({chosen['label']})")
     log(f"\nWrote {written} of {len(rows)} file(s): {kb(before)} -> {kb(after)}."
         + (f" {failures} problem(s): investigate before committing." if failures else ""))

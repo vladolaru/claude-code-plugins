@@ -189,8 +189,9 @@ def _meta(record: dict, chosen: dict | None) -> str:
                    f"({'gated' if chosen.get('band_gated') else 'reported'})")
     else:
         quality = "not measured"
+    removes = f" · removes {', '.join(chosen['metadata_removed'])}" if chosen.get("metadata_removed") else ""
     return (f"{dims}{s['format']} -> {record['format']} · {kb(s['size'])} -> {kb(chosen['size'])} · "
-            f"{chosen['label']} · {quality} · {record['verdict']} ({record['verdict_reason']})")
+            f"{chosen['label']} · {quality}{removes} · {record['verdict']} ({record['verdict_reason']})")
 
 
 def build(out: Path, *, alt: str | None = None,

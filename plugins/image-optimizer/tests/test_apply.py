@@ -56,7 +56,7 @@ def _measured(folder, tools):
     return {"ssim": s.ssim, "ss2": s.ss2, "band": s.band}
 
 
-def test_lossless_pick_is_copied_and_verified(factory, toolset, tmp_path):
+def test_lossless_pick_is_copied_and_remeasured(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo(size=(300, 300))
     [r] = run_candidates(src, tmp_path / "out", tools)
@@ -65,7 +65,7 @@ def test_lossless_pick_is_copied_and_verified(factory, toolset, tmp_path):
     logs = []
     assert AP.apply(tmp_path / "out", tools=tools, log=logs.append) == 0
     assert src.stat().st_size == C.pick_of(r)["size"]
-    assert any("verified" in line for line in logs)
+    assert any("re-measured" in line for line in logs)
     assert staged_files(src.parent) == []
 
 
@@ -113,7 +113,7 @@ def test_a_matching_lossy_pick_replaces_the_target(factory, toolset, tmp_path):
     logs = []
     assert AP.apply(out, tools=tools, approved=True, log=logs.append) == 0
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
-    assert any("verified" in line for line in logs)
+    assert any("re-measured" in line for line in logs)
     assert staged_files(src.parent) == []
 
 
@@ -380,7 +380,7 @@ def test_cli_prints_the_tools_line_and_applies(factory, toolset, tmp_path):
     assert refused.returncode == 1 and "--approved" in refused.stdout
     proc = run_cli(out, "--approved")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "ffmpeg" in proc.stdout and "verified" in proc.stdout
+    assert "ffmpeg" in proc.stdout and "re-measured" in proc.stdout
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
 
 

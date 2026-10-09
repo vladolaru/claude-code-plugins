@@ -29,11 +29,12 @@ from . import compare as CP
 from . import gates as G
 from . import ladder, metrics
 from .formats import EXT_BY_FORMAT, format_of, subdir_name
-from .imaging import READ_FAILURES, ImagingError, display_pixels, flatten, read_facts, srgb_shift
+from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
+                      srgb_shift)
 from .tools import describe
 
 SCHEMA = 1
-CACHE_VERSION = 3  # 3: svgo keeps ids, roles and classes; 2: a rung's kind follows its input
+CACHE_VERSION = 4  # 4: source rungs record metadata_removed; 3: svgo keeps ids, roles and classes; 2: a rung's kind follows its input
 UNCALIBRATED = ("webp", "avif")
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
@@ -142,6 +143,10 @@ def _judge(rec, rung, out, inputs, facts, ref_img, tools, can_measure, folder) -
     """Read the encoded file and fill in its metadata verdict and scores."""
     ofacts = read_facts(out)
     rec["progressive"] = ofacts.progressive
+    # Pixel rungs never carry the source's metadata, which a lossy pick already says; only source rungs list it.
+    removed = sorted(metadata_kinds(inputs["source"]) - metadata_kinds(out)) if rung.input == "source" else []
+    if removed:
+        rec["metadata_removed"] = removed
     if rung.kind == "lossless":  # made from the source file, so its metadata must survive
         ok, why = metrics.metadata_preserved(facts, ofacts)
         if not ok:
@@ -379,6 +384,9 @@ def print_record(record: dict, log=print) -> None:
     chosen = pick_of(record)
     pick_text = f"{chosen['label']} ({kb(chosen['size'])})" if chosen else "none"
     log(f"   pick: {pick_text}   verdict: {record['verdict']} ({record['verdict_reason']})")
+    if chosen and chosen.get("metadata_removed"):
+        log(f"   pick removes metadata: {', '.join(chosen['metadata_removed'])} "
+            "(say so to the human: copyright and credit live there)")
     if chosen and "ssim_evidence" in chosen:
         evidence = (f"{chosen['ssim_evidence']:.6f}" if chosen["ssim_evidence"] is not None
                     else f"not reproducible with ffmpeg alone ({chosen['evidence_note']})")

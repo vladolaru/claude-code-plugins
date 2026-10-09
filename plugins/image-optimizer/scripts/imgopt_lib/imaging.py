@@ -140,6 +140,42 @@ def read_facts(path: Path, *, check_name: bool = True) -> Facts:
 _NATIVE_MODES = ("L", "CMYK", "RGB")
 
 
+_PNG_METADATA = {"eXIf": "exif", "tEXt": "text", "iTXt": "text", "zTXt": "text", "tIME": "time", "iCCP": "icc"}
+
+
+def metadata_kinds(path: Path) -> frozenset[str]:
+    """Which metadata a JPEG or PNG carries: what a lossless pick may strip (copyright and credit live in
+    EXIF, XMP, IPTC and PNG text). Reads segment and chunk headers only; other formats return empty."""
+    data = Path(path).read_bytes()
+    found: set[str] = set()
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i + 4 <= len(data) and data[i] == 0xFF:
+            marker, length = data[i + 1], int.from_bytes(data[i + 2:i + 4], "big")
+            body = data[i + 4:i + 2 + length]
+            if marker == 0xDA:  # start of scan: no metadata segments after it
+                break
+            if marker == 0xE1 and body.startswith(b"Exif\0"):
+                found.add("exif")
+            elif marker == 0xE1 and body.startswith(b"http://ns.adobe.com/xap/1.0/"):
+                found.add("xmp")
+            elif marker == 0xED:
+                found.add("iptc")
+            elif marker == 0xFE:
+                found.add("comment")
+            elif marker == 0xE2 and body.startswith(b"ICC_PROFILE"):
+                found.add("icc")
+            i += 2 + length
+    elif data[:8] == b"\x89PNG\r\n\x1a\n":
+        i = 8
+        while i + 8 <= len(data):
+            length, tag = int.from_bytes(data[i:i + 4], "big"), data[i + 4:i + 8].decode("latin-1")
+            if tag in _PNG_METADATA:
+                found.add(_PNG_METADATA[tag])
+            i += 12 + length
+    return frozenset(found)
+
+
 def _convert(im: Image.Image, icc: bytes, label: str) -> Image.Image:
     """Convert ``im`` from its embedded profile to sRGB, returned as RGBA.
 

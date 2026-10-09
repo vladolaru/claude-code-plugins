@@ -157,3 +157,18 @@ def test_png_colour_chunks_are_facts(factory):
 
 def test_apng_frames_are_counted(factory):
     assert I.read_facts(factory.apng(frames=3)).frames == 3
+
+
+def test_metadata_kinds_reads_jpeg_segments(factory, tmp_path):
+    src = factory.photo(orientation=6)
+    with Image.open(src) as im:
+        im.save(tmp_path / "c.jpg", "JPEG", exif=im.getexif().tobytes(), comment=b"(c) Someone")
+    assert {"exif", "comment"} <= I.metadata_kinds(tmp_path / "c.jpg")
+
+
+def test_metadata_kinds_reads_png_text(factory, tmp_path):
+    from PIL import PngImagePlugin
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Copyright", "Someone")
+    Image.open(factory.logo()).save(tmp_path / "t.png", pnginfo=info)
+    assert "text" in I.metadata_kinds(tmp_path / "t.png")

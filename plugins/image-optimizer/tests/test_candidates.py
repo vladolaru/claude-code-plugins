@@ -633,3 +633,15 @@ def test_a_lossless_pick_keeps_the_gamma_chunk(factory, toolset, tmp_path):
         if c.get("file"):
             folder = C.load_records(tmp_path / "out")[0][0]
             assert I.read_facts(folder / c["file"]).colour_chunks == I.read_facts(src).colour_chunks
+
+
+def test_a_lossless_jpeg_pick_lists_removed_metadata(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"jpeg"})
+    src = factory.root / "c.jpg"
+    Image.open(factory.photo(size=(400, 300), quality=95)).save(src, "JPEG", quality=95, comment=b"(c) Someone")
+    lines = []
+    [r] = C.run([src.resolve()], opts(tmp_path / "out"), tools, log=lines.append)
+    stripped = [c for c in r["candidates"] if c.get("metadata_removed")]
+    assert stripped and all("comment" in c["metadata_removed"] for c in stripped)
+    if C.pick_of(r) and C.pick_of(r).get("metadata_removed"):
+        assert any("removes metadata: " in line for line in lines)
