@@ -134,13 +134,14 @@ def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3, seed
 def approved_from(text: str) -> list[str]:
     """The paths approved in ``text``: a bare comma list, or the whole `apply ... --approve '<list>'` command the
     page prints (the value of its `--approve`)."""
-    tokens = shlex.split(text)
     value = text.strip()
-    for i, token in enumerate(tokens):
-        if token == "--approve" and i + 1 < len(tokens):
-            value = tokens[i + 1]
-        elif token.startswith("--approve="):
-            value = token.split("=", 1)[1]
+    if "--approve" in text:  # a pasted command is shell-quoted; a bare list is taken as it is (names may hold ')
+        tokens = shlex.split(text)
+        for i, token in enumerate(tokens):
+            if token == "--approve" and i + 1 < len(tokens):
+                value = tokens[i + 1]
+            elif token.startswith("--approve="):
+                value = token.split("=", 1)[1]
     return [p.strip() for p in value.split(",") if p.strip()]
 
 

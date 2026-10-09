@@ -63,6 +63,7 @@ def test_record_refuses_a_path_outside_the_sample(tmp_path):
 def test_approved_from_takes_a_bare_list_or_the_pages_whole_command():
     assert RV.approved_from("/a/x.jpg,/a/y.jpg") == ["/a/x.jpg", "/a/y.jpg"]
     assert RV.approved_from("") == []
+    assert RV.approved_from("/a/it's here/x.jpg,/a/y.jpg") == ["/a/it's here/x.jpg", "/a/y.jpg"]
     command = "python3 '/p/my scripts/imgopt.py' apply /r/out --approve '/a/it'\\''s here/x.jpg,/a/y.jpg'"
     assert RV.approved_from(command) == ["/a/it's here/x.jpg", "/a/y.jpg"]
     assert RV.approved_from("python3 imgopt.py apply /r/out --approve=/a/x.jpg") == ["/a/x.jpg"]

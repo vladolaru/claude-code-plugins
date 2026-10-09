@@ -2,7 +2,7 @@
 
 Dev tooling for the image-optimizer plugin, not shipped behavior: it builds a benchmark corpus of real and deterministic synthetic images, runs `imgopt` over it, and reports what the ladder, floors and encoders actually do, so changes to them can be judged on evidence. It imports `imgopt_lib` from `../scripts/` and needs only Python 3 and Pillow.
 
-The eight commands, in the order you use them:
+The seven commands, in the order you use them:
 
 - `select`: pick candidate images from the allowed sources (Wikimedia Commons, the Kodak set, WooCommerce, Gutenberg and Jetpack assets) and write them to `sources.json` with their license, author and checksum.
 - `fetch`: download the originals listed in `sources.json`, verify their checksums and keep them in the shared downloads folder.
