@@ -97,3 +97,12 @@ def test_report_command_prints_and_writes_report_md(tmp_path, capsys):
     text = capsys.readouterr().out
     assert "| icon |" in text and "oxipng 10" in text
     assert (run_dir / "report.md").read_text() == text
+
+
+@pytest.mark.parametrize("target, resize, in_place", [
+    ("/c/a.png", None, True), ("/c/a.webp", None, False), ("/c/a.png", 1200, False)])
+def test_row_takes_in_place_from_the_record(target, resize, in_place):
+    record = {"source": {"path": "/c/a.png", "size": 1000}, "target": target, "resize": resize,
+              "verdict": "untouched", "verdict_reason": "", "gates": {}, "notes": [], "candidates": [], "pick": None}
+    job = harness.Job("recompress-high", ("icon",), "high")  # a same-format job without resize: in place by the job
+    assert harness._row(job, "icon", "icon/a.png", record, 1.0, 0)["in_place"] is in_place

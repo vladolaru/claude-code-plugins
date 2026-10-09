@@ -52,6 +52,7 @@ class Job:
 
     @property
     def in_place(self) -> bool:
+        """What the job asks for, for skipped rows only: a row with a record takes imgopt's own decision."""
         return self.resize is None and self.out_format == "keep"
 
 
@@ -94,7 +95,8 @@ def _row(job: Job, category: str, rel: str, record: dict, seconds: float, disk: 
     chosen = C.pick_of(record) or {}
     return {
         "job": job.name, "category": category, "profile": job.profile, "file": record["source"]["path"], "rel": rel,
-        "source_size": record["source"]["size"], "in_place": job.in_place,
+        "source_size": record["source"]["size"],
+        "in_place": record["target"] == record["source"]["path"] and not record["resize"],  # as candidates._process
         "verdict": record["verdict"], "reason": record["verdict_reason"],
         "pick": chosen.get("label"), "pick_family": family_of(chosen.get("label")), "pick_size": chosen.get("size"),
         "pick_kind": chosen.get("kind"),
