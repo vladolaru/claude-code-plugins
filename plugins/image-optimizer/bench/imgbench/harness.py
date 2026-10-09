@@ -126,13 +126,25 @@ def _files(entries: list[manifest.Entry], corpus: Path, job: Job) -> dict[str, l
     return {c: files for c, files in found.items() if files}
 
 
-def _check_tools(plan: dict[Job, dict[str, list]]) -> dict:
+def _check_tools(plan: dict[Job, dict[str, list]], allow_missing) -> dict:
     """Resolve and check the tools of every job before anything is written; a blocked job raises ToolingError
-    with the doctor report. Returns each job's `tools.Check`."""
+    with the doctor report. Returns each job's `tools.Check`.
+
+    imgopt never blocks on a missing optional encoder (cjpegli): it skips its rungs and notes it. A benchmark
+    that did the same would silently measure a smaller ladder than users with the encoder run, so a missing
+    optional encoder also raises ToolingError here unless ``allow_missing`` names it."""
     resolved: dict = {}
     for job, by_category in plan.items():
         formats = {format_of(path) for files in by_category.values() for path, _ in files}
         resolved[job] = T.ensure(job.kind, job.profile, formats, job.out_format)
+    refused = {job.name: sorted(n for n in chk.missing_optional if n in T.OPTIONAL_ENCODERS and n not in allow_missing)
+               for job, chk in resolved.items()}
+    refused = {name: tools for name, tools in refused.items() if tools}
+    if refused:
+        names = sorted({n for tools in refused.values() for n in tools})
+        raise T.ToolingError("; ".join(f"{job}: {', '.join(tools)}" for job, tools in refused.items())
+                             + " not installed: imgopt would skip their rungs and the run would measure a smaller "
+                             f"ladder. Put them on PATH, or pass --allow-missing {','.join(names)} to run without.")
     return resolved
 
 
@@ -173,16 +185,18 @@ def _run_category(job: Job, category: str, files: list[tuple[Path, str]], chk, o
 
 
 def run(corpus: Path, run_dir: Path, jobs: list[Job], *, jobs_parallel: int = 1, say=print,
-        meta: dict | None = None) -> Path:
+        meta: dict | None = None, allow_missing=()) -> Path:
     """Run ``jobs`` over the corpus into ``run_dir`` and return it. Raises ``tools.ToolingError`` before writing
-    anything when a job's tools are missing."""
+    anything when a job's tools are missing, an optional encoder included unless ``allow_missing`` names it."""
     corpus, run_dir = Path(corpus).resolve(), Path(run_dir)
     entries = manifest.read(corpus)
     plan = {job: _files(entries, corpus, job) for job in jobs}
-    checks = _check_tools(plan)
+    checks = _check_tools(plan, set(allow_missing))
     tools = {name: tool for chk in checks.values() for name, tool in chk.tools.items()}
     timing = {**(meta or {}), "corpus_version": CORPUS_VERSION, "jobs_parallel": jobs_parallel,
-              "tools": T.describe(tools), "categories": {}}
+              "tools": T.describe(tools),
+              "jobs": {job.name: {"missing_optional": list(checks[job].missing_optional)} for job in plan},
+              "categories": {}}
     run_dir.mkdir(parents=True, exist_ok=True)
     for job, by_category in plan.items():
         for category, files in by_category.items():

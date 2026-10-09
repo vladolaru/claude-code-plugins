@@ -11,6 +11,7 @@ from imgbench import cli, harness, manifest, paths  # noqa: E402
 from imgbench import report as R  # noqa: E402
 from imgbench import review as RV  # noqa: E402
 from imgopt_lib import candidates as C  # noqa: E402
+from imgopt_lib import tools as T  # noqa: E402
 from imgopt_lib.ladder import UsageError  # noqa: E402
 
 
@@ -85,7 +86,7 @@ def tiny_run(factory, toolset, tmp_path):
                                           license="CC0"))
     manifest.write(entries, corpus)
     job = harness.Job("recompress-high", ("photo-small",), "high")
-    return harness.run(corpus, tmp_path / "run", [job], say=lambda _: None)
+    return harness.run(corpus, tmp_path / "run", [job], say=lambda _: None, allow_missing=T.OPTIONAL_ENCODERS)
 
 
 def assemble_and_check(run_dir, tmp_path):

@@ -296,6 +296,14 @@ def markdown(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+def _missing_optional(meta: dict) -> str:
+    if "jobs" not in meta:
+        return "not recorded (the run predates the record; the tools line lists what was found)"
+    missing = [f"{job}: {', '.join(j['missing_optional'])}" for job, j in meta["jobs"].items()
+               if j.get("missing_optional")]
+    return "; ".join(missing) or "none"
+
+
 def render(run_dir: Path) -> str:
     """The full report: a header naming the run, commit, corpus version and tool versions, then ``markdown``."""
     run_dir = Path(run_dir)
@@ -307,4 +315,5 @@ def render(run_dir: Path) -> str:
             header.append(f"- {label}: {meta[key]}")
     if meta.get("tools"):
         header.append(f"- {meta['tools']}")
+    header.append(f"- Optional tools missing: {_missing_optional(meta)}")
     return "\n".join(header + ["", markdown(load(run_dir))]).rstrip("\n") + "\n"

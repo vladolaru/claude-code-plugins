@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -7,7 +8,8 @@ import pytest
 BENCH = Path(__file__).resolve().parents[1] / "bench"
 sys.path.insert(0, str(BENCH))
 
-from imgbench import cli, harness, manifest  # noqa: E402
+from imgbench import cli, harness, manifest, report  # noqa: E402
+from imgopt_lib import tools as T  # noqa: E402
 
 FIELDS = {"job", "category", "profile", "file", "source_size", "in_place", "verdict", "pick", "pick_family",
           "pick_scores", "gates", "notes", "candidates", "seconds", "disk"}
@@ -106,3 +108,38 @@ def test_row_takes_in_place_from_the_record(target, resize, in_place):
               "verdict": "untouched", "verdict_reason": "", "gates": {}, "notes": [], "candidates": [], "pick": None}
     job = harness.Job("recompress-high", ("icon",), "high")  # a same-format job without resize: in place by the job
     assert harness._row(job, "icon", "icon/a.png", record, 1.0, 0)["in_place"] is in_place
+
+
+def missing_cjpegli(monkeypatch):
+    """Make every job's tool check report cjpegli missing, whatever this machine has."""
+    real = harness.T.ensure
+    monkeypatch.setattr(harness.T, "ensure", lambda *a, **k: dataclasses.replace(
+        real(*a, **k), missing_optional=("cjpegli",)))
+
+
+def test_run_refuses_a_missing_optional_encoder_unless_allowed(factory, toolset, tmp_path, monkeypatch):
+    toolset("recompress", "lossless", {"jpeg", "png"})
+    corpus = tiny_corpus(factory, tmp_path)
+    job = harness.Job("lossless", ("photo-small",), "lossless")
+    missing_cjpegli(monkeypatch)
+    with pytest.raises(T.ToolingError, match=r"lossless: cjpegli .*--allow-missing cjpegli"):
+        harness.run(corpus, tmp_path / "refused", [job], say=lambda _: None)
+    assert not (tmp_path / "refused").exists()
+    run_dir = harness.run(corpus, tmp_path / "run", [job], say=lambda _: None, allow_missing={"cjpegli"})
+    assert json.loads((run_dir / "timing.json").read_text())["jobs"]["lossless"]["missing_optional"] == ["cjpegli"]
+
+
+def test_run_refuses_to_allow_a_tool_that_is_not_an_optional_encoder(capsys):
+    assert cli.main(["run", "--allow-missing", "oxipng"]) == 2
+    assert "cjpegli" in capsys.readouterr().out
+
+
+def test_report_header_names_the_missing_optional_tools(tmp_path):
+    (tmp_path / "rows.jsonl").write_text("")
+    (tmp_path / "timing.json").write_text(json.dumps({"jobs": {
+        "recompress-high": {"missing_optional": ["cjpegli"]}, "lossless": {"missing_optional": []}}}))
+    assert "- Optional tools missing: recompress-high: cjpegli" in report.render(tmp_path)
+    (tmp_path / "timing.json").write_text(json.dumps({"jobs": {"lossless": {"missing_optional": []}}}))
+    assert "- Optional tools missing: none" in report.render(tmp_path)
+    (tmp_path / "timing.json").write_text("{}")
+    assert "- Optional tools missing: not recorded" in report.render(tmp_path)
