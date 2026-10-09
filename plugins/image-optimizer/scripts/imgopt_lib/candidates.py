@@ -35,7 +35,7 @@ from pathlib import Path
 from . import compare as CP
 from . import gates as G
 from . import ladder, metrics
-from .formats import EXT_BY_FORMAT, format_of, subdir_name
+from .formats import EXT_BY_FORMAT, WORKDIR_MARKER, WORKDIR_MARKER_TEXT, format_of, subdir_name
 from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
                       srgb_shift)
 from .tools import OPTIONAL_ENCODERS, describe
@@ -537,6 +537,7 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     ignore = opts.out / ".gitignore"
     if not ignore.exists():
         ignore.write_text("*\n")  # a working folder never belongs in a commit
+    (opts.out / WORKDIR_MARKER).write_text(WORKDIR_MARKER_TEXT)
     write_run(opts.out, inputs, opts)
     records = []
     for src in inputs:

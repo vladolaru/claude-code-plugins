@@ -4,6 +4,7 @@ import pytest
 
 from imgopt_lib import cli
 from imgopt_lib import workdirs as W
+from imgopt_lib.formats import WORKDIR_MARKER
 from imgopt_lib.ladder import UsageError
 
 
@@ -38,12 +39,20 @@ def test_workdir_falls_back_to_tmpdir_when_the_cache_is_not_writable(monkeypatch
         ro.chmod(0o700)
 
 
-def test_clean_refuses_a_folder_that_is_not_a_working_folder(tmp_path):
-    (tmp_path / "x").mkdir()
-    (tmp_path / "x" / "keep.txt").write_text("mine")
-    with pytest.raises(UsageError, match="not an imgopt working folder"):
-        W.clean(tmp_path / "x", keep_picks=False)
-    assert (tmp_path / "x" / "keep.txt").exists()
+@pytest.mark.parametrize("keep_picks", [False, True])
+@pytest.mark.parametrize("files", [
+    ["keep.txt"],
+    ["run.json", "app.py"],  # a project folder that happens to hold a run.json
+    ["x/metrics.json", "x/notes.txt", "README.md"],  # and one with an experiments/metrics.json
+])
+def test_clean_refuses_a_folder_without_the_marker_and_leaves_it_intact(tmp_path, files, keep_picks):
+    folder = tmp_path / "project"
+    for rel in files:
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text("{}")
+    with pytest.raises(UsageError, match="not an imgopt working folder.*nothing deleted"):
+        W.clean(folder, keep_picks=keep_picks)
+    assert sorted(str(p.relative_to(folder)) for p in folder.rglob("*") if p.is_file()) == sorted(files)
 
 
 def test_clean_keep_picks_leaves_records_sources_and_picks(tmp_path):
@@ -51,16 +60,31 @@ def test_clean_keep_picks_leaves_records_sources_and_picks(tmp_path):
     f = out / "a--1"
     f.mkdir(parents=True)
     (out / "run.json").write_text("{}")
+    (out / WORKDIR_MARKER).write_text("")
     (out / ".gitignore").write_text("*\n")
     for name in ("source.png", "reference.png", "pixels.png", "oxipng.png", "pngquant-q80-95.png"):
         (f / name).write_bytes(b"x" * 100)
     (f / "metrics.json").write_text(json.dumps({"pick": "oxipng.png", "candidates": []}))
     freed = W.clean(out, keep_picks=True)
     assert sorted(p.name for p in f.iterdir()) == ["metrics.json", "oxipng.png", "reference.png", "source.png"]
-    assert sorted(p.name for p in out.iterdir()) == [".gitignore", "a--1", "run.json"]
+    assert sorted(p.name for p in out.iterdir()) == sorted([WORKDIR_MARKER, ".gitignore", "a--1", "run.json"])
     assert freed == 200
     W.clean(out, keep_picks=False)
     assert not out.exists()
+
+
+def test_clean_keep_picks_skips_a_record_that_does_not_parse(tmp_path):
+    out = tmp_path / "out"
+    done, broken = out / "a--1", out / "b--2"
+    done.mkdir(parents=True)
+    broken.mkdir()
+    (out / WORKDIR_MARKER).write_text("")
+    for folder in (done, broken):
+        (folder / "pixels.png").write_bytes(b"x" * 100)
+    (done / "metrics.json").write_text(json.dumps({"pick": None, "candidates": []}))
+    (broken / "metrics.json").write_text('{"pick": "oxi')
+    assert W.clean(out, keep_picks=True) == 100
+    assert not (done / "pixels.png").exists() and (broken / "pixels.png").exists()
 
 
 def test_the_cli_prints_the_workdir_and_cleans_it(monkeypatch, tmp_path, capsys):
@@ -68,6 +92,6 @@ def test_the_cli_prints_the_workdir_and_cleans_it(monkeypatch, tmp_path, capsys)
     assert cli.main(["workdir", "icons"]) == 0
     folder = tmp_path / "c" / "work" / "icons"
     assert capsys.readouterr().out.strip() == str(folder)
-    (folder / "run.json").write_text("{}")
+    (folder / WORKDIR_MARKER).write_text("")
     assert cli.main(["clean", str(folder)]) == 0
     assert "Freed" in capsys.readouterr().out and not folder.exists()

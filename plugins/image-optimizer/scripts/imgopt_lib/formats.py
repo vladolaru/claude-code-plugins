@@ -13,7 +13,11 @@ EXT_BY_FORMAT = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "svg": ".svg",
 INPUT_FORMATS = ("jpeg", "png", "gif", "svg")
 OUTPUT_FORMATS = ("keep", "jpeg", "png", "webp", "avif")
 VENDORED = frozenset({"node_modules", "vendor", "bower_components"})
-WORK_MARKERS = ("run.json", "metrics.json")  # an imgopt --out folder (or one input's folder inside it)
+# `candidates` puts this file in every --out folder; `clean` deletes only folders that carry it. It lives here, not in
+# workdirs, because workdirs imports ladder, which imports imaging, which imports this module.
+WORKDIR_MARKER = ".imgopt-workdir"
+WORKDIR_MARKER_TEXT = "Made by `imgopt candidates`: a working folder that `imgopt clean` may delete.\n"
+WORK_MARKERS = (WORKDIR_MARKER, "run.json", "metrics.json")  # an imgopt --out folder (or one input's folder in it)
 
 
 def format_of(path: Path) -> str | None:

@@ -15,6 +15,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from .formats import WORKDIR_MARKER
 from .ladder import UsageError
 
 
@@ -61,23 +62,25 @@ def folder_size(path: Path) -> int:
     return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
 
 
-def _is_workdir(out: Path) -> bool:
-    return (out / "run.json").is_file() or any(out.glob("*/metrics.json"))
-
-
 def clean(out: Path, *, keep_picks: bool) -> int:
     """Delete a working folder or, with ``keep_picks``, every file in its record folders except what `sheet`
     and `apply` read (the record, the reference, the source copy and the pick); returns the bytes freed.
-    run.json and .gitignore stay, so the folder still names its last run."""
+    The marker, run.json and .gitignore stay, so the folder still names its last run. Only a folder carrying
+    the marker `candidates` writes is touched: file names like run.json or metrics.json are common elsewhere."""
     out = Path(out)
-    if not out.is_dir() or not _is_workdir(out):
-        raise UsageError(f"{out}: not an imgopt working folder (no run.json or */metrics.json); nothing deleted")
+    if not (out / WORKDIR_MARKER).is_file():
+        raise UsageError(f"{out}: not an imgopt working folder (`candidates` makes one and marks it with "
+                         f"{WORKDIR_MARKER}); nothing deleted")
     before = folder_size(out)
     if not keep_picks:
         shutil.rmtree(out)
         return before
     for meta in out.glob("*/metrics.json"):
-        keep = {"metrics.json", "reference.png", json.loads(meta.read_text()).get("pick") or ""}
+        try:
+            pick = json.loads(meta.read_text()).get("pick") or ""
+        except json.JSONDecodeError:  # an interrupted run: leave this folder as it is
+            continue
+        keep = {"metrics.json", "reference.png", pick}
         for p in meta.parent.iterdir():
             if p.is_file() and p.name not in keep and not p.name.startswith("source."):
                 p.unlink()

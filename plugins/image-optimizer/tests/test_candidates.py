@@ -12,6 +12,8 @@ from imgopt_lib import gates as G
 from imgopt_lib import imaging as I
 from imgopt_lib import ladder
 from imgopt_lib import sheet as S
+from imgopt_lib import workdirs as W
+from imgopt_lib.formats import WORKDIR_MARKER
 from imgopt_lib.tools import Tool
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
@@ -48,6 +50,14 @@ def test_a_resize_writes_the_pixel_files_its_rungs_read(factory, toolset, tmp_pa
     assert any(c["kind"] == "lossy" and "file" in c for c in record["candidates"])
     assert (folder / "pixels.ppm").exists() and (folder / "pixels_flat.png").exists()
     assert not (folder / "pixels.png").exists()
+
+
+def test_candidates_marks_its_out_folder_so_clean_accepts_it(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"jpeg"})
+    out = tmp_path / "out"
+    C.run([factory.photo().resolve()], opts(out), tools, log=quiet)
+    assert (out / WORKDIR_MARKER).read_text().startswith("Made by `imgopt candidates`")
+    assert W.clean(out, keep_picks=True) >= 0 and W.clean(out, keep_picks=False) > 0 and not out.exists()
 
 
 def test_the_summary_names_the_working_folder_and_how_to_remove_it(factory, toolset, tmp_path):

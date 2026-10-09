@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from imgopt_lib.formats import expand_inputs, format_of, subdir_name
+from imgopt_lib.formats import WORKDIR_MARKER, expand_inputs, format_of, subdir_name
 
 
 def test_format_of_maps_extensions_case_insensitively():
@@ -67,6 +67,15 @@ def test_folder_inputs_skip_vendored_ignored_and_working_folders(tmp_path):
     found = expand_inputs([root], skipped=skipped)
     assert [p.name for p in found] == ["a.png"]
     assert any("node_modules" in s for s in skipped) and any("git-ignored" in s for s in skipped)
+    assert any("imgopt working folder" in s for s in skipped)
+
+
+def test_folder_inputs_skip_a_folder_carrying_the_workdir_marker(tmp_path):
+    (tmp_path / "work" / "x--1").mkdir(parents=True)
+    (tmp_path / "work" / "x--1" / "e.png").write_bytes(b"x")
+    (tmp_path / "work" / WORKDIR_MARKER).write_text("")
+    skipped: list[str] = []
+    assert expand_inputs([tmp_path], skipped=skipped) == []
     assert any("imgopt working folder" in s for s in skipped)
 
 
