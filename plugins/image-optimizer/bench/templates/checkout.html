@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkout</title>
+<script>if (location.search.indexOf("dark=1") > -1) document.documentElement.classList.add("dark");</script>
+<style>
+:root { --bg: #f0f0f1; --panel: #ffffff; --text: #1d2327; --muted: #646970; --line: #dcdcde; --accent: #2271b1; --accent-text: #ffffff; --side: #1d2327; --side-text: #c3c4c7; --ok: #d6f0dc; --ok-text: #0a5c2b; --warn: #fcf0c2; --warn-text: #6b4a00; --bad: #fbdada; --bad-text: #8a1c1c; --info: #dde9f7; --info-text: #174a7c; }
+html.dark { --bg: #101317; --panel: #1a1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2e353e; --accent: #5aa2e6; --accent-text: #0b1118; --side: #0a0d10; --side-text: #9aa3ad; --ok: #14361f; --ok-text: #8fdca8; --warn: #3b2f0c; --warn-text: #f0cf72; --bad: #3d1818; --bad-text: #f2a0a0; --info: #14304d; --info-text: #9cc7f0; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.page { max-width: 1180px; margin: 0 auto; padding: 28px 32px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; }
+h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 22px 0 10px; }
+.brand { color: var(--muted); margin-bottom: 18px; }
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.f { margin-bottom: 12px; } .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+input, select { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+.line { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.line small { display: block; color: var(--muted); }
+.total { font-size: 18px; font-weight: 700; border-bottom: 0; }
+.coupon { display: flex; gap: 8px; margin: 14px 0; } .coupon button { flex: none; background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+button { padding: 10px 16px; font: inherit; border-radius: 6px; cursor: pointer; }
+.primary { width: 100%; margin-top: 14px; padding: 14px; background: var(--accent); color: var(--accent-text); border: 0; font-weight: 700; font-size: 16px; }
+.secure { color: var(--muted); font-size: 12px; text-align: center; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="page"><section>
+<div class="brand">Brindle &amp; Finch Outfitters</div><h1>Checkout</h1>
+<h2>Contact</h2>
+<div class="f"><label>Email address</label><input value="odalys.brenning@example.test"></div>
+<h2>Shipping address</h2>
+<div class="row"><div class="f"><label>First name</label><input value="Odalys"></div><div class="f"><label>Last name</label><input value="Brenning"></div></div>
+<div class="f"><label>Street address</label><input value="14 Lantern Row"></div>
+<div class="row"><div class="f"><label>City</label><input value="Ashgrove"></div><div class="f"><label>Postcode</label><input value="AG4 7QL"></div></div>
+<div class="f"><label>Country</label><select><option>United Kingdom</option></select></div>
+<h2>Payment</h2>
+<div class="f"><label>Card number</label><input value="4242 4242 4242 4242"></div>
+<div class="row"><div class="f"><label>Expiry</label><input value="08 / 29"></div><div class="f"><label>Security code</label><input value="123"></div></div>
+</section>
+<aside class="card"><h2 style="margin-top:0">Order summary</h2>
+<div class="line"><span>Waxed field jacket<small>Moss, size M &times; 1</small></span><span>$148.00</span></div>
+<div class="line"><span>Merino beanie<small>Charcoal &times; 2</small></span><span>$52.00</span></div>
+<div class="line"><span>Trail socks, 3 pack<small>Assorted &times; 1</small></span><span>$24.00</span></div>
+<div class="coupon"><input placeholder="Coupon code" value="AUTUMN10"><button>Apply</button></div>
+<div class="line"><span>Subtotal</span><span>$224.00</span></div>
+<div class="line"><span>Discount (AUTUMN10)</span><span>-$22.40</span></div>
+<div class="line"><span>Shipping</span><span>$6.50</span></div>
+<div class="line total"><span>Total</span><span>$208.10</span></div>
+<button class="primary">Place order</button>
+<div class="secure">Payments are encrypted. You will not be charged until you confirm.</div>
+</aside></div>
+</body>
+</html>

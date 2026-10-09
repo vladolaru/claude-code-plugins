@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Article</title>
+<script>if (location.search.indexOf("dark=1") > -1) document.documentElement.classList.add("dark");</script>
+<style>
+:root { --bg: #f0f0f1; --panel: #ffffff; --text: #1d2327; --muted: #646970; --line: #dcdcde; --accent: #2271b1; --accent-text: #ffffff; --side: #1d2327; --side-text: #c3c4c7; --ok: #d6f0dc; --ok-text: #0a5c2b; --warn: #fcf0c2; --warn-text: #6b4a00; --bad: #fbdada; --bad-text: #8a1c1c; --info: #dde9f7; --info-text: #174a7c; }
+html.dark { --bg: #101317; --panel: #1a1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2e353e; --accent: #5aa2e6; --accent-text: #0b1118; --side: #0a0d10; --side-text: #9aa3ad; --ok: #14361f; --ok-text: #8fdca8; --warn: #3b2f0c; --warn-text: #f0cf72; --bad: #3d1818; --bad-text: #f2a0a0; --info: #14304d; --info-text: #9cc7f0; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.hero { height: 300px; background: linear-gradient(135deg, #1e3a8a 0%, #7c3aed 45%, #f97316 100%); position: relative; }
+.hero::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 78% 30%, rgba(255,255,255,.55), rgba(255,255,255,0) 38%); }
+.cap { max-width: 720px; margin: 8px auto 0; padding: 0 24px; color: var(--muted); font-size: 12px; font-style: italic; }
+article { max-width: 720px; margin: 0 auto; padding: 18px 24px 48px; font-family: Georgia, "Times New Roman", serif; font-size: 18px; line-height: 1.65; }
+article h1 { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 38px; line-height: 1.15; margin: 14px 0 6px; } .by { color: var(--muted); font: 13px -apple-system, "Segoe UI", sans-serif; margin-bottom: 22px; }
+h2 { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 24px; margin: 30px 0 4px; }
+blockquote { margin: 24px 0; padding: 4px 0 4px 20px; border-left: 4px solid var(--accent); font-size: 22px; font-style: italic; }
+pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; overflow: hidden; font: 13px/1.5 Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div class="hero"></div><div class="cap">Dusk over the Ferrin estuary. Illustration for this article.</div>
+<article><h1>What a slow site teaches you about patience</h1><div class="by">By Imke Haldorsen &middot; 9 October 2026 &middot; 8 min read</div>
+<p>The first time the shop's homepage took eleven seconds to appear, nobody on the team said anything. We assumed it was the train wifi. By the third time, we had run out of excuses, and somebody finally opened the network panel.</p>
+<p>What we found was not exotic. A single hero photograph, saved straight from a camera, weighed more than the rest of the page combined. Nobody had done anything wrong; the file had simply never been asked to be smaller.</p>
+<h2>Measuring before changing</h2>
+<p>It is tempting to start by deleting things. We resisted, and wrote down three numbers instead: the weight of each image, the time to the largest visible paint, and how many requests the page made before a shopper could read a price.</p>
+<blockquote>Every optimisation you cannot measure is a guess with good manners.</blockquote>
+<p>With the numbers on a whiteboard, the work sorted itself. Two images accounted for most of the weight, and one of them was not even visible on a phone. The fix there was a different crop rather than a different codec.</p>
+<h2>A small script to keep us honest</h2>
+<p>To stop the problem returning, we added a check that fails a build when any image under the uploads folder grows past a budget. It is about as simple as a script can be.</p>
+<pre>for f in uploads/*.jpg; do
+  size=$(stat -f%z "$f")
+  [ "$size" -gt 300000 ] &amp;&amp; echo "too heavy: $f ($size bytes)"
+done</pre>
+<p>The first run flagged nineteen files. Eighteen were forgotten leftovers from a campaign two summers ago, and the nineteenth was the hero photograph that started it all.</p>
+<h2>What stayed with us</h2>
+<p>Patience, it turns out, is mostly a matter of knowing where the time goes. Once you can see it, waiting stops being a mood and becomes a list, and lists can be worked through one line at a time.</p></article>
+</body>
+</html>

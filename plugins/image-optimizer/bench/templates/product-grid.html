@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shop</title>
+<script>if (location.search.indexOf("dark=1") > -1) document.documentElement.classList.add("dark");</script>
+<style>
+:root { --bg: #f0f0f1; --panel: #ffffff; --text: #1d2327; --muted: #646970; --line: #dcdcde; --accent: #2271b1; --accent-text: #ffffff; --side: #1d2327; --side-text: #c3c4c7; --ok: #d6f0dc; --ok-text: #0a5c2b; --warn: #fcf0c2; --warn-text: #6b4a00; --bad: #fbdada; --bad-text: #8a1c1c; --info: #dde9f7; --info-text: #174a7c; }
+html.dark { --bg: #101317; --panel: #1a1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2e353e; --accent: #5aa2e6; --accent-text: #0b1118; --side: #0a0d10; --side-text: #9aa3ad; --ok: #14361f; --ok-text: #8fdca8; --warn: #3b2f0c; --warn-text: #f0cf72; --bad: #3d1818; --bad-text: #f2a0a0; --info: #14304d; --info-text: #9cc7f0; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.page { max-width: 1280px; margin: 0 auto; padding: 28px 32px; } h1 { font-size: 26px; margin: 0 0 4px; } .sub { color: var(--muted); margin-bottom: 20px; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+.p { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.img { height: 190px; border-radius: 8px; display: flex; align-items: center; justify-content: center; } .img svg { width: 60%; filter: drop-shadow(0 6px 8px rgba(0,0,0,.25)); }
+.n { font-weight: 600; margin-top: 10px; } .r { color: #e0a800; font-size: 12px; } .r span { color: var(--muted); margin-left: 6px; } .pr { font-size: 16px; font-weight: 700; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="page"><h1>Autumn collection</h1><div class="sub">Eight things for a slower season. Free delivery over $50.</div><div class="grid">
+<div class="p"><div class="img" style="background:linear-gradient(120deg,#f2c94c,#eb5757)"><svg viewBox="0 0 120 96"><circle cx="60" cy="48" r="26" fill="#ffffffaa"/></svg></div><div class="n">Alder desk lamp</div><div class="r">&#9733;&#9733;&#9733;<span>4.2 (20)</span></div><div class="pr">$64.00</div></div>
+<div class="p"><div class="img" style="background:linear-gradient(140deg,#56ccf2,#2f80ed)"><svg viewBox="0 0 120 96"><rect x="34" y="26" width="52" height="44" rx="10" fill="#ffffffaa"/></svg></div><div class="n">Cobalt ceramic mug</div><div class="r">&#9733;&#9733;&#9733;&#9733;<span>4.5 (33)</span></div><div class="pr">$18.00</div></div>
+<div class="p"><div class="img" style="background:linear-gradient(160deg,#6fcf97,#219653)"><svg viewBox="0 0 120 96"><path d="M60 18 80 70 40 70Z" fill="#ffffffaa"/></svg></div><div class="n">Fern planter, large</div><div class="r">&#9733;&#9733;&#9733;&#9733;&#9733;<span>4.8 (46)</span></div><div class="pr">$32.00</div></div>
+<div class="p"><div class="img" style="background:linear-gradient(180deg,#bb6bd9,#9b51e0)"><svg viewBox="0 0 120 96"><ellipse cx="60" cy="48" rx="34" ry="20" fill="#ffffffaa"/></svg></div><div class="n">Plum linen cushion</div><div class="r">&#9733;&#9733;&#9733;<span>4.1 (59)</span></div><div class="pr">$27.00</div></div>
+<div class="p"><div class="img" style="background:linear-gradient(200deg,#f2994a,#e0572b)"><svg viewBox="0 0 120 96"><circle cx="60" cy="48" r="26" fill="#ffffffaa"/></svg></div><div class="n">Ember candle trio</div><div class="r">&#9733;&#9733;&#9733;&#9733;<span>4.4 (72)</span></div><div class="pr">$39.00</div></div>
+<div class="p"><div class="img" style="background:linear-gradient(220deg,#a5b4fc,#4f46e5)"><svg viewBox="0 0 120 96"><rect x="34" y="26" width="52" height="44" rx="10" fill="#ffffffaa"/></svg></div><div class="n">Indigo wool throw</div><div class="r">&#9733;&#9733;&#9733;&#9733;&#9733;<span>4.7 (85)</span></div><div class="pr">$85.00</div></div>
+<div class="p"><div class="img" style="background:linear-gradient(240deg,#fda4af,#e11d48)"><svg viewBox="0 0 120 96"><path d="M60 18 80 70 40 70Z" fill="#ffffffaa"/></svg></div><div class="n">Rosewater soap bar</div><div class="r">&#9733;&#9733;&#9733;<span>4.0 (98)</span></div><div class="pr">$9.00</div></div>
+<div class="p"><div class="img" style="background:linear-gradient(260deg,#99f6e4,#0d9488)"><svg viewBox="0 0 120 96"><ellipse cx="60" cy="48" rx="34" ry="20" fill="#ffffffaa"/></svg></div><div class="n">Teal enamel kettle</div><div class="r">&#9733;&#9733;&#9733;&#9733;<span>4.3 (111)</span></div><div class="pr">$58.00</div></div>
+</div></div>
+</body>
+</html>

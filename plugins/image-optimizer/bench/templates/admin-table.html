@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orders</title>
+<script>if (location.search.indexOf("dark=1") > -1) document.documentElement.classList.add("dark");</script>
+<style>
+:root { --bg: #f0f0f1; --panel: #ffffff; --text: #1d2327; --muted: #646970; --line: #dcdcde; --accent: #2271b1; --accent-text: #ffffff; --side: #1d2327; --side-text: #c3c4c7; --ok: #d6f0dc; --ok-text: #0a5c2b; --warn: #fcf0c2; --warn-text: #6b4a00; --bad: #fbdada; --bad-text: #8a1c1c; --info: #dde9f7; --info-text: #174a7c; }
+html.dark { --bg: #101317; --panel: #1a1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2e353e; --accent: #5aa2e6; --accent-text: #0b1118; --side: #0a0d10; --side-text: #9aa3ad; --ok: #14361f; --ok-text: #8fdca8; --warn: #3b2f0c; --warn-text: #f0cf72; --bad: #3d1818; --bad-text: #f2a0a0; --info: #14304d; --info-text: #9cc7f0; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.wrap { display: flex; min-height: 100vh; }
+.side { width: 190px; background: var(--side); color: var(--side-text); padding: 12px 0; flex: none; }
+.side div { padding: 8px 16px; }
+.side .on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.main { flex: 1; padding: 20px 24px; }
+h1 { font-size: 23px; font-weight: 400; margin: 0 0 14px; }
+.tools { display: flex; gap: 8px; margin-bottom: 10px; color: var(--muted); }
+.tools span { border: 1px solid var(--line); background: var(--panel); padding: 3px 10px; border-radius: 3px; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); }
+th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+tr:nth-child(even) td { background: color-mix(in srgb, var(--bg) 45%, var(--panel)); }
+a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; padding: 1px 10px; border-radius: 12px; font-size: 12px; }
+.pill.ok { background: var(--ok); color: var(--ok-text); } .pill.info { background: var(--info); color: var(--info-text); }
+.pill.warn { background: var(--warn); color: var(--warn-text); } .pill.bad { background: var(--bad); color: var(--bad-text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="side"><div>Dashboard</div><div>Posts</div><div>Media</div><div>Pages</div><div class="on">Orders</div><div>Products</div><div>Customers</div><div>Reports</div><div>Marketing</div><div>Appearance</div><div>Plugins</div><div>Settings</div></nav>
+<main class="main">
+<h1>Orders</h1>
+<div class="tools"><span>All (212)</span><span>Processing (9)</span><span>On hold (3)</span><span>Completed (188)</span><span>Refunded (4)</span></div>
+<table><thead><tr><th></th><th>Order</th><th>Date</th><th>Status</th><th>Items</th><th class="num">Total</th></tr></thead><tbody>
+<tr><td><input type="checkbox"></td><td><a href="#">#10412</a> Odalys Brenning</td><td>14 Oct 2026</td><td><span class="pill warn">On hold</span></td><td>1 item</td><td class="num">$18.50</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10411</a> Tamsin Okafor-Reyes</td><td>13 Oct 2026</td><td><span class="pill bad">Cancelled</span></td><td>4 items</td><td class="num">$55.75</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10410</a> Corwin Valdez</td><td>12 Oct 2026</td><td><span class="pill bad">Refunded</span></td><td>1 item</td><td class="num">$93.00</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10409</a> Imke Haldorsen</td><td>11 Oct 2026</td><td><span class="pill info">Processing</span></td><td>4 items</td><td class="num">$130.25</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10408</a> Peregrine Soto</td><td>10 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>1 item</td><td class="num">$167.50</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10407</a> Lucía Marchetti</td><td>9 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>4 items</td><td class="num">$204.75</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10406</a> Anselm Duarte</td><td>8 Oct 2026</td><td><span class="pill warn">Pending payment</span></td><td>1 item</td><td class="num">$242.00</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10405</a> Wren Castellanos</td><td>7 Oct 2026</td><td><span class="pill info">Processing</span></td><td>4 items</td><td class="num">$39.25</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10404</a> Ottoline Park</td><td>6 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>1 item</td><td class="num">$76.50</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10403</a> Basil Nakamura</td><td>14 Oct 2026</td><td><span class="pill warn">On hold</span></td><td>4 items</td><td class="num">$113.75</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10402</a> Marisol Quint</td><td>13 Oct 2026</td><td><span class="pill bad">Cancelled</span></td><td>1 item</td><td class="num">$151.00</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10401</a> Fenwick Adeyemi</td><td>12 Oct 2026</td><td><span class="pill bad">Refunded</span></td><td>4 items</td><td class="num">$188.25</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10400</a> Isolde Varga</td><td>11 Oct 2026</td><td><span class="pill info">Processing</span></td><td>1 item</td><td class="num">$225.50</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10399</a> Thaddeus Moreau</td><td>10 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>4 items</td><td class="num">$22.75</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10398</a> Calliope Strand</td><td>9 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>1 item</td><td class="num">$60.00</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10397</a> Evander Lindqvist</td><td>8 Oct 2026</td><td><span class="pill warn">Pending payment</span></td><td>4 items</td><td class="num">$97.25</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10396</a> Sunniva Ortega</td><td>7 Oct 2026</td><td><span class="pill info">Processing</span></td><td>1 item</td><td class="num">$134.50</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10395</a> Leopold Achterberg</td><td>6 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>4 items</td><td class="num">$171.75</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10394</a> Maren Kowalczyk</td><td>14 Oct 2026</td><td><span class="pill warn">On hold</span></td><td>1 item</td><td class="num">$209.00</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10393</a> Dashiell Okonkwo</td><td>13 Oct 2026</td><td><span class="pill bad">Cancelled</span></td><td>4 items</td><td class="num">$246.25</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10392</a> Perpetua Hale</td><td>12 Oct 2026</td><td><span class="pill bad">Refunded</span></td><td>1 item</td><td class="num">$43.50</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10391</a> Casimir Beaumont</td><td>11 Oct 2026</td><td><span class="pill info">Processing</span></td><td>4 items</td><td class="num">$80.75</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10390</a> Nerys Abernathy</td><td>10 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>1 item</td><td class="num">$118.00</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10389</a> Jovan Ferreira</td><td>9 Oct 2026</td><td><span class="pill ok">Completed</span></td><td>4 items</td><td class="num">$155.25</td></tr>
+<tr><td><input type="checkbox"></td><td><a href="#">#10388</a> Rosalind Tsukada</td><td>8 Oct 2026</td><td><span class="pill warn">Pending payment</span></td><td>1 item</td><td class="num">$192.50</td></tr>
+</tbody></table>
+</main></div>
+</body>
+</html>
