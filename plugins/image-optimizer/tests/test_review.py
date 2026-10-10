@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import pytest
 
@@ -134,3 +135,27 @@ def test_text_around_the_block_is_ignored_and_a_cut_block_is_named():
     with pytest.raises(UsageError, match="not complete JSON"):
         RV.parse_block("Here you go:\n" + RV.BLOCK_HEADER + '\n{"fingerprint": "ab", "files": {')
     assert RV.parse_block("x\n" + block("ab", {}) + "\nthanks")["fingerprint"] == "ab"
+
+
+def test_a_bad_keep_midway_changes_nothing_and_the_block_stays_valid(tmp_path):
+    folder, record = fake_record(tmp_path)
+    folder2, record2 = fake_record(tmp_path, name="b.png", folder_name="b--1")
+    fp = RV.fingerprint(RV.rows_of([folder.parent]))
+    files = {record["source"]["path"]: {"verdict": "keep", "variant": "v15000"},
+             record2["source"]["path"]: {"verdict": "keep", "variant": "v99999"}}
+    with pytest.raises(UsageError, match="not a measured variant"):
+        RV.record_verdicts([folder.parent], block(fp, files))
+    assert C.choice_of(record)["label"] == "v12000"
+    assert "choice" not in json.loads((folder / "metrics.json").read_text())
+    assert not (folder.parent / RV.VERDICTS_FILE).exists()
+    files[record2["source"]["path"]]["variant"] = "v18000"
+    assert RV.record_verdicts([folder.parent], block(fp, files)) == {"keep": 2}
+
+
+def test_the_same_source_in_two_working_folders_is_refused(tmp_path):
+    folder, record = fake_record(tmp_path)
+    other = tmp_path / "out2"
+    shutil.copytree(folder, other / folder.name)
+    with pytest.raises(UsageError, match="separate pages") as error:
+        RV.rows_of([folder.parent, other])
+    assert record["source"]["path"] in str(error.value) and str(other) in str(error.value)

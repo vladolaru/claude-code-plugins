@@ -103,12 +103,20 @@ def variant_lines(folder: Path, record: dict) -> list[str]:
 
 
 def rows_of(dirs) -> list[tuple[Path, dict]]:
-    """Every record of the last run in each working folder, in folder order."""
+    """Every record of the last run in each working folder, in folder order. A source path in two folders is
+    refused: the page, the verdict block and verdicts.json all key files by source path."""
     rows = []
+    seen: dict[str, Path] = {}
     for d in dirs:
         found = load_records(Path(d))
         if not found:
             raise UsageError(f"{d}: no candidates results here (expected <folder>/metrics.json); check the path")
+        for folder, record in found:
+            path = record["source"]["path"]
+            if path in seen:
+                raise UsageError(f"{path} has results in both {seen[path]} and {folder}; review those working "
+                                 "folders on separate pages")
+            seen[path] = folder
         rows += found
     return rows
 
@@ -159,13 +167,25 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
     unknown = sorted(set(data["files"]) - set(by_path))
     if unknown:
         raise UsageError(f"not on this page: {', '.join(unknown)}")
-    stored: dict[Path, dict] = {}
+    changes = []
     for path, entry in data["files"].items():
         folder, record = by_path[path]
         variant = entry.get("variant")
         current = choice_of(record)
         if entry["verdict"] == "keep" and variant and (current is None or variant != current["label"]):
-            choose(folder, record, variant)
+            # Validate every change before applying any: a failed `choose` midway would leave the page
+            # half-applied, and the block unrecoverable (the fingerprint has moved).
+            cand = next((c for c in live_variants(record) if c["label"] == variant), None)
+            if cand is None:
+                raise UsageError(f"{path}: {variant!r} is not a measured variant; choose one of: "
+                                 f"{', '.join(c['label'] for c in live_variants(record))}")
+            _ensure_file(folder, cand)
+            changes.append((folder, record, variant))
+    for folder, record, variant in changes:
+        choose(folder, record, variant)
+    stored: dict[Path, dict] = {}
+    for path, entry in data["files"].items():
+        folder, record = by_path[path]
         chosen = choice_of(record)
         out = folder.parent
         book = stored.setdefault(out, _load(out))
