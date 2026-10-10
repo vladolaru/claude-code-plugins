@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An interrupted `candidates` run resumes from its last finished candidate, and its partial results are never applied.
 - The `candidates` summary and the page lead with whole-batch totals, signed, beside the files that will change, and printed commands quote their paths.
 - Lossy JPEG jobs also try jpegli when it is installed; it is optional because no package manager ships it and its gain (about 2 points on 31 WooCommerce photos) is unmeasured elsewhere, and `imgopt.py doctor` prints a build that keeps working after Homebrew upgrades.
-- PNGs up to 2 megapixels (after any resize) also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because it took minutes on screenshots for 0.4% or less.
+- PNGs up to 2 megapixels (after any resize) also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because on 5 MP screenshots it took one to three minutes per file for 0.4 to 3%.
 - Under `high` and `medium`, a lossy pick's Evidence SSIM (a luma SSIM, so ssimulacra2 goes in the evidence table too; what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
 - Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.
 - `--ref-rev <rev>` measures a whole batch against each file's content at an earlier commit, with each baseline's size beside the file's.

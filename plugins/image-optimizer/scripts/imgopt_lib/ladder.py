@@ -41,7 +41,9 @@ GUETZLI_PROGRESSIVE = True                      # jpegtran -progressive shrank g
 # jpegoptim won every one of those, so stopping at q25 cost nothing there.
 JPEGLI_LEVELS = tuple(range(90, 20, -5))        # 90 .. 25
 # oxipng's zopfli mode saved 1.8% more on 13 small PNGs (oxipng 10) but took 25-45x longer on 5-7
-# megapixel screenshots for 0.4% or less, so it runs only up to this size.
+# megapixel screenshots for 0.4% or less, so it runs only up to this size. The benchmark corpus agreed
+# (oxipng 10.2.1): under the cap it took at most about 35 s per file and saved 1-5% on graphics; above it,
+# synthetic 5 MP screenshots took 80-115 s for 0.9-3.3%, and photo PNGs gained about 1% at best.
 ZOPFLI_MAX_PIXELS = 2_000_000
 # guetzli needs about 300 MB per megapixel and minutes per encode; above this it is skipped (R5 in the audit).
 GUETZLI_MAX_PIXELS = 6_000_000
