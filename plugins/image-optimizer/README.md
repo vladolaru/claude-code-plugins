@@ -26,7 +26,7 @@ The candidates, crops and page live in a working folder outside the repository (
 | `high` | SSIM ≥ 0.98, ssimulacra2 ≥ 80, banding ≤ 3 | images a product or page shows |
 | `medium` | SSIM ≥ 0.96, ssimulacra2 ≥ 60, banding ≤ 3 | files kept only so old URLs keep working |
 
-The floors were calibrated in one WooCommerce asset session in October 2026 (SSIM floors set by a human reviewer, ssimulacra2 floors confirmed by eye); the benchmark corpus will test them on more kinds of images. Banding is gated on palette PNG output; WebP and AVIF output is labelled uncalibrated. [`docs/design.md`](docs/design.md) records where each floor and rule came from, the acceptance evidence and the known gaps; read it before changing a floor, the pick rules or the tooling policy.
+The floors were set in one WooCommerce asset session in October 2026 (SSIM floors by a human reviewer, ssimulacra2 floors confirmed by eye), then tested on a 386-file benchmark corpus of photos, screenshots, illustrations, icons and odd inputs, where a reviewer accepted 94 of 97 picks sampled closest to the floors. Banding is gated on palette PNG output only: on the corpus no threshold separated rejected JPEG or WebP picks from accepted ones. WebP and AVIF output is labelled uncalibrated. [`docs/design.md`](docs/design.md) records where each floor and rule came from, the acceptance evidence and the known gaps; read it before changing a floor, the pick rules or the tooling policy.
 
 ## Installation
 

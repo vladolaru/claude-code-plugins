@@ -34,7 +34,7 @@ Every command is `python3 "$SKILL_DIR/../../scripts/imgopt.py" <command>`; call 
 | `high` | SSIM ≥ 0.98, ssimulacra2 ≥ 80, banding ≤ 3 | images the product or page shows |
 | `medium` | SSIM ≥ 0.96, ssimulacra2 ≥ 60, banding ≤ 3 | files kept only so old URLs keep working, rarely seen |
 
-These floors were calibrated in one WooCommerce session (four photos, thirteen PNGs); treat them as a starting point, and say so if a reviewer asks. Banding is gated only on palette PNG output; for other lossy output it is reported and you must view the smooth-area tile. Override a single floor with `--ssim`, `--ss2` or `--band` only when the human asks.
+Banding is gated only on palette PNG output; for other lossy output it is reported and you must view the smooth-area tile. Override a single floor with `--ssim`, `--ss2` or `--band` only when the human asks.
 
 ## Method
 
