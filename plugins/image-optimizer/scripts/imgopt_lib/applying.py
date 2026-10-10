@@ -22,7 +22,7 @@ from PIL import Image
 
 from . import ladder, metrics
 from . import selection as SEL
-from .candidates import kb, load_records, pick_of, sha256
+from .candidates import choice_of, kb, load_records, sha256
 from .imaging import READ_FAILURES, display_pixels, read_facts
 from .ladder import UsageError
 from .sheet import needs_tiles
@@ -176,7 +176,7 @@ def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = No
     if lossy and not approve:
         log("REFUSED: these picks are lossy and need the human's approval on the comparison page first:")
         for r in lossy:
-            log(f"  {r['source']['path']}  ({pick_of(r)['label']})")
+            log(f"  {r['source']['path']}  ({choice_of(r)['label']})")
         log("Show the page (imgopt sheet); it gives the apply command with --approve for the files the human ticks.")
         return 1
     approved_ids = {id(r) for _, r in approved_rows}
@@ -194,7 +194,7 @@ def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = No
     failures = len(unmatched) + len(unknown)
     written = before = after = 0
     for folder, record in rows:
-        chosen = pick_of(record)
+        chosen = choice_of(record)
         target = target_of(record, dest)
         try:
             problem = (needs_tiles(record) and _tools_changed(record, tools)) or ""

@@ -75,6 +75,18 @@ def test_clean_keep_picks_leaves_records_sources_and_picks(tmp_path):
     assert not out.exists()
 
 
+def test_clean_keep_picks_keeps_the_choice_too(tmp_path):
+    out = tmp_path / "out"
+    f = out / "a--1"
+    f.mkdir(parents=True)
+    (out / WORKDIR_MARKER).write_text("")
+    for name in ("source.png", "reference.png", "b.png", "c.png", "d.png"):
+        (f / name).write_bytes(b"x" * 100)
+    (f / "metrics.json").write_text(json.dumps({"pick": "b.png", "choice": "c.png", "candidates": []}))
+    W.clean(out, keep_picks=True)
+    assert sorted(p.name for p in f.iterdir()) == ["b.png", "c.png", "metrics.json", "reference.png", "source.png"]
+
+
 def test_clean_keep_picks_skips_a_record_that_does_not_parse(tmp_path):
     out = tmp_path / "out"
     done, broken = out / "a--1", out / "b--2"

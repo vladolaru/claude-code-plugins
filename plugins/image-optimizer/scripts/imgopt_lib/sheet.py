@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from .candidates import kb, load_records, pick_of
+from .candidates import choice_of, kb, load_records
 from .imaging import READ_FAILURES, display_pixels, flatten
 from .ladder import UsageError
 from .metrics import diff_max, smooth_mask
@@ -70,7 +70,7 @@ def _compose(ref: Image.Image, new: Image.Image, box, scale: int) -> Image.Image
     w, h = a.size
     canvas = Image.new("RGB", (3 * w + 2 * GAP, h + LABEL_H), (255, 255, 255))
     draw = ImageDraw.Draw(canvas)
-    for i, (img, label) in enumerate(((a, "reference"), (b, "pick"), (diff, f"difference x{AMPLIFY}"))):
+    for i, (img, label) in enumerate(((a, "reference"), (b, "choice"), (diff, f"difference x{AMPLIFY}"))):
         x = i * (w + GAP)
         draw.text((x + 2, 2), label, fill=(0, 0, 0))
         canvas.paste(img, (x, LABEL_H))
@@ -87,12 +87,12 @@ def every_tile_required(record: dict) -> bool:
 
 def needs_tiles(record: dict) -> bool:
     """A lossy pick that will be applied is the only thing a human must approve, so the only thing tiled."""
-    chosen = pick_of(record)
+    chosen = choice_of(record)
     return bool(chosen) and chosen["kind"] == "lossy" and record["verdict"] == "apply"
 
 
 def _tiles_for(folder: Path, record: dict, tiles_dir: Path) -> list[Tile]:
-    chosen = pick_of(record)
+    chosen = choice_of(record)
     ref_rgba = Image.open(folder / "reference.png").convert("RGBA")
     new_rgba = display_pixels(folder / chosen["file"])
     ref_w, new_w = flatten(ref_rgba, "white"), flatten(new_rgba, "white")
@@ -273,7 +273,7 @@ def build(out: Path, *, alt: str | None = None, problems: list[str] | None = Non
     banners: list[str] = []
     alt_found = False
     for folder, record in records:
-        chosen = pick_of(record)
+        chosen = choice_of(record)
 
         def url(name: str) -> str:
             return quote(f"../{folder.name}/{name}")

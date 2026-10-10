@@ -89,6 +89,14 @@ def pick_of(record: dict) -> dict | None:
     return next((c for c in record["candidates"] if c.get("file") == record.get("pick")), None)
 
 
+def choice_of(record: dict) -> dict | None:
+    """The candidate this file will be written as: the one `choose` set (``choice``), else the gates' pick."""
+    name = record.get("choice") or record.get("pick")
+    if not name:
+        return None
+    return next((c for c in record["candidates"] if c.get("file") == name), None)
+
+
 def write_run(out: Path, inputs: list[Path], opts: Options) -> None:
     """Record which inputs and settings this run has; `load_records` keeps only what matches it."""
     run = {"schema": SCHEMA, "inputs": sorted(str(Path(p).resolve()) for p in inputs), "profile": opts.profile,
@@ -131,7 +139,7 @@ def stale_records(out: Path) -> list[str]:
     return _scan(out)[1]
 
 
-def _write_record(folder: Path, record: dict) -> None:
+def write_record(folder: Path, record: dict) -> None:
     tmp = folder / "metrics.json.tmp"
     tmp.write_text(json.dumps(record, indent=1))
     tmp.replace(folder / "metrics.json")
@@ -142,7 +150,7 @@ def _record_skip(folder: Path, why: str) -> None:
     reached, so an earlier record left in place would pass for this run's in `sheet` and `apply`. Its cached
     candidates are for content that is gone or unreadable, so nothing worth keeping is lost."""
     if folder.is_dir():
-        _write_record(folder, {"schema": SCHEMA, "complete": False, "skipped": why, "candidates": []})
+        write_record(folder, {"schema": SCHEMA, "complete": False, "skipped": why, "candidates": []})
 
 
 def _previous(path: Path) -> dict:
@@ -438,7 +446,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
                                 size if in_place else None, Path(measure_dir), ref_cache)
             rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
             cands.append(rec)
-            _write_record(folder, {"schema": SCHEMA, "complete": False, "candidates": cands})
+            write_record(folder, {"schema": SCHEMA, "complete": False, "candidates": cands})
         if fmt == "svg":
             chosen = G.pick(cands)
         else:
@@ -465,7 +473,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "candidates": cands, "pick": chosen["file"] if chosen else None,
         "verdict": verdict, "verdict_reason": why, "complete": True,
     }
-    _write_record(folder, record)
+    write_record(folder, record)
     if opts.use_store:
         for cand in cands:
             ST.put(cand, folder)
@@ -513,8 +521,8 @@ def print_record(record: dict, log=print) -> None:
 def savings_lines(records: list[dict]) -> list[str]:
     """What a human needs to decide what is worth doing: the applied picks ranked by bytes saved with the
     cumulative share, how many save little, and the folders that hold the most saving."""
-    saved = sorted(((max(0, r["source"]["size"] - pick_of(r)["size"]), r) for r in records
-                    if r["verdict"] == "apply" and pick_of(r)), key=lambda t: -t[0])
+    saved = sorted(((max(0, r["source"]["size"] - choice_of(r)["size"]), r) for r in records
+                    if r["verdict"] == "apply" and choice_of(r)), key=lambda t: -t[0])
     total = sum(s for s, _ in saved)
     if not saved or total <= 0:
         return []
@@ -540,9 +548,9 @@ def savings_lines(records: list[dict]) -> list[str]:
 def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=print) -> None:
     applied = [r for r in records if r["verdict"] == "apply"]
     before = sum(r["source"]["size"] for r in applied)
-    after = sum(pick_of(r)["size"] for r in applied)
+    after = sum(choice_of(r)["size"] for r in applied)
     total_before = sum(r["source"]["size"] for r in records)
-    total_after = sum(pick_of(r)["size"] if r in applied else r["source"]["size"] for r in records)
+    total_after = sum(choice_of(r)["size"] if r in applied else r["source"]["size"] for r in records)
     # Signed like the comparison page's totals: a resized or converted pick can be larger than its original.
     change = f" ({(total_after - total_before) / total_before:+.1%})" if total_before else ""
     log(f"\n{len(records)} file(s), {kb(total_before)} -> {kb(total_after)}{change} overall; "
@@ -552,13 +560,13 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     based = [r for r in records if r["ref"]["path"] != r["source"]["path"]]
     if based:
         based_before = sum(r["ref"]["size"] for r in based)
-        based_after = sum(pick_of(r)["size"] if r in applied else r["source"]["size"] for r in based)
+        based_after = sum(choice_of(r)["size"] if r in applied else r["source"]["size"] for r in based)
         log(f"Against the baselines: {kb(based_before)} -> {kb(based_after)} for {len(based)} file(s).")
     log(describe(tools))
     if any(r["uncalibrated"] for r in records):
         log("UNCALIBRATED FORMAT: WebP/AVIF output was never calibrated against these gates; "
             "every sheet tile is required viewing.")
-    larger = [r for r in applied if pick_of(r)["size"] > r["source"]["size"]]
+    larger = [r for r in applied if choice_of(r)["size"] > r["source"]["size"]]
     if larger:
         log(f"LARGER: {len(larger)} pick(s) are larger than their original (a resize or format change was "
             "asked for, so they still apply); "
@@ -567,7 +575,7 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     if waived:
         log("WAIVED TOOLS (fewer candidates were tried, so picks may be larger than with them; state this in "
             "any report): " + ", ".join(waived))
-    lossy = [r for r in applied if pick_of(r)["kind"] == "lossy"]
+    lossy = [r for r in applied if choice_of(r)["kind"] == "lossy"]
     q = shlex.quote
     command = f"python3 {q(str(script))}"
     log(f"Working folder: {q(str(out))} ({folder_size(out) / 1e6:.1f} MB); remove it with: "

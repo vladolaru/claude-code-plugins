@@ -17,6 +17,7 @@ from . import candidates as C
 from . import compare as CP
 from . import gates as G
 from . import metrics as M
+from . import review as RV
 from . import selection as SEL
 from . import sheet as S
 from . import store as ST
@@ -249,10 +250,46 @@ def cmd_clean(args) -> int:
     return 0
 
 
+def _one(dirs, name):
+    """The one ``(folder, record)`` that ``name`` selects among the records of the working folders ``dirs``."""
+    rows = [row for d in dirs for row in C.load_records(Path(d).resolve())]
+    if not rows:
+        raise UsageError(f"no candidates results were found in {', '.join(str(d) for d in dirs)}")
+    picked, problems = SEL.resolve([name], rows)
+    if problems:
+        raise UsageError(problems[0])
+    return picked[0]
+
+
+def cmd_variants(args) -> int:
+    folder, record = _one(args.out, args.file)
+    for line in RV.variant_lines(folder, record):
+        print(line)
+    return 0
+
+
+def cmd_choose(args) -> int:
+    how = args.label or ("milder" if args.milder else "stronger" if args.stronger
+                         else "default" if args.default else "")
+    if not how:
+        raise UsageError("name a variant with --label, or pass --milder, --stronger or --default")
+    folder, record = _one(args.out, args.file)
+    chosen = RV.choose(folder, record, how)
+    if chosen is None:
+        print(f"{record['source']['path']}: no variant (nothing passed the gates)")
+    else:
+        gate = "passes the gates" if chosen.get("pass") else f"FAILS the gates ({chosen.get('reason', '')})"
+        print(f"{record['source']['path']}: now {chosen['label']} ({C.kb(chosen['size'])}), {gate}; "
+              f"verdict: {record['verdict']} ({record['verdict_reason']})")
+    print(f"Next: rebuild the page: python3 {shlex.quote(str(SCRIPT))} sheet {shlex.quote(str(folder.parent))}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
-        description="Measured image optimization: doctor, inspect, workdir, candidates, sheet, apply, compare, clean.")
+        description="Measured image optimization: doctor, inspect, workdir, candidates, variants, choose, sheet, "
+                    "apply, compare, clean.")
     sub = parser.add_subparsers(dest="command", required=True)
     d = sub.add_parser("doctor", help="check the tools a job needs and print install lines")
     d.add_argument("--job", choices=T.JOBS, required=True)
@@ -289,6 +326,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("out")
     s.add_argument("--alt", help="candidate label to show as a third pane, for example jpegoptim-m70")
     s.set_defaults(func=cmd_sheet)
+    v = sub.add_parser("variants", help="list every measured variant of one file")
+    v.add_argument("out", nargs="+", help="working folder(s)")
+    v.add_argument("--file", required=True, help="the file: path, relative path, or unique name")
+    v.set_defaults(func=cmd_variants)
+    ch = sub.add_parser("choose", help="set one file's variant: --label L, --milder, --stronger or --default")
+    ch.add_argument("out", nargs="+", help="working folder(s)")
+    ch.add_argument("--file", required=True, help="the file: path, relative path, or unique name")
+    ch.add_argument("--label", help="a variant label from `imgopt variants`")
+    how = ch.add_mutually_exclusive_group()
+    how.add_argument("--milder", action="store_true")
+    how.add_argument("--stronger", action="store_true")
+    how.add_argument("--default", action="store_true")
+    ch.set_defaults(func=cmd_choose)
     a = sub.add_parser("apply", help="write approved picks and re-verify them")
     a.add_argument("out")
     a.add_argument("--only", help="comma list of file names or paths")
