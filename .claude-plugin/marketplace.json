@@ -111,8 +111,8 @@
     {
       "name": "image-optimizer",
       "source": "./plugins/image-optimizer",
-      "description": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
-      "version": "1.2.0",
+      "description": "Measured image optimization (PNG, JPEG, GIF, SVG, WebP, AVIF) with quality profiles, banding checks and a 1:1 review.",
+      "version": "2.0.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -120,13 +120,19 @@
       "license": "MIT",
       "keywords": [
         "image-optimization",
-        "imageoptim",
+        "mozjpeg",
+        "oxipng",
+        "pngquant",
+        "jpegli",
         "svgo",
-        "compression",
-        "lossless"
+        "ssim",
+        "compression"
       ],
       "category": "productivity",
       "strict": true,
+      "skills": [
+        "./skills/image-optimization"
+      ],
       "commands": [
         "./commands/optimize-images.md"
       ]

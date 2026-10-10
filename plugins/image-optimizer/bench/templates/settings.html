@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<script>if (location.search.indexOf("dark=1") > -1) document.documentElement.classList.add("dark");</script>
+<style>
+:root { --bg: #f0f0f1; --panel: #ffffff; --text: #1d2327; --muted: #646970; --line: #dcdcde; --accent: #2271b1; --accent-text: #ffffff; --side: #1d2327; --side-text: #c3c4c7; --ok: #d6f0dc; --ok-text: #0a5c2b; --warn: #fcf0c2; --warn-text: #6b4a00; --bad: #fbdada; --bad-text: #8a1c1c; --info: #dde9f7; --info-text: #174a7c; }
+html.dark { --bg: #101317; --panel: #1a1f26; --text: #e6e8eb; --muted: #9aa3ad; --line: #2e353e; --accent: #5aa2e6; --accent-text: #0b1118; --side: #0a0d10; --side-text: #9aa3ad; --ok: #14361f; --ok-text: #8fdca8; --warn: #3b2f0c; --warn-text: #f0cf72; --bad: #3d1818; --bad-text: #f2a0a0; --info: #14304d; --info-text: #9cc7f0; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.page { max-width: 980px; margin: 0 auto; padding: 24px 32px; } h1 { font-size: 23px; font-weight: 400; margin: 0 0 12px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; } .tabs span { padding: 6px 0; color: var(--muted); } .tabs .on { color: var(--text); border-bottom: 2px solid var(--accent); font-weight: 600; }
+.notice { background: var(--info); color: var(--info-text); border-left: 4px solid var(--accent); padding: 10px 14px; margin-bottom: 18px; border-radius: 0 4px 4px 0; }
+h2 { font-size: 16px; margin: 22px 0 4px; } .lead { color: var(--muted); margin: 0 0 8px; }
+table { width: 100%; border-collapse: collapse; } th { width: 240px; text-align: left; vertical-align: top; padding: 14px 10px 14px 0; font-weight: 600; } td { padding: 12px 0; border-bottom: 1px solid var(--line); } tr { border-bottom: 1px solid var(--line); }
+.h { color: var(--muted); font-size: 13px; margin: 6px 0 0; max-width: 560px; }
+.tg { display: inline-block; width: 38px; height: 20px; border-radius: 10px; background: var(--line); position: relative; vertical-align: middle; }
+.tg::after { content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--panel); } .tg.on { background: var(--accent); } .tg.on::after { left: 20px; }
+select, input { padding: 6px 10px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; min-width: 220px; }
+button { margin-top: 18px; padding: 8px 18px; background: var(--accent); color: var(--accent-text); border: 0; border-radius: 4px; font: inherit; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page"><h1>Settings</h1>
+<div class="tabs"><span>General</span><span>Products</span><span class="on">Tax &amp; checkout</span><span>Shipping</span><span>Emails</span><span>Advanced</span></div>
+<div class="notice">Changes are saved to the live store as soon as you press Save. Tax rates apply to new orders only.</div>
+<h2>Checkout behaviour</h2><p class="lead">Decide how shoppers move from cart to payment, and what happens to the stock they have reserved.</p>
+<table>
+<tr><th>Enable tax calculation</th><td><span class="tg on"></span><p class="h">Calculate tax from the customer address at checkout. Rates are set under the Tax tab.</p></td></tr>
+<tr><th>Prices entered with tax</th><td><span class="tg"></span><p class="h">Whether the prices you enter in the catalog already include tax.</p></td></tr>
+<tr><th>Guest checkout</th><td><span class="tg on"></span><p class="h">Let shoppers place an order without creating an account.</p></td></tr>
+<tr><th>Reserve stock</th><td><span class="tg on"></span><p class="h">Hold stock for unpaid orders for the number of minutes below before releasing it.</p></td></tr>
+<tr><th>Email order receipts</th><td><span class="tg"></span><p class="h">Send a receipt to the customer when an order is marked as completed.</p></td></tr>
+<tr><th>Default country</th><td><select><option>United Kingdom</option></select><p class="h">Used for tax and shipping estimates before a shopper enters an address.</p></td></tr>
+<tr><th>Stock hold (minutes)</th><td><input value="60"><p class="h">Orders with no payment after this time are cancelled and their stock returns to the shelf.</p></td></tr>
+<tr><th>Currency position</th><td><select><option>Left ($99.99)</option></select><p class="h">Where the currency symbol sits relative to the amount.</p></td></tr>
+</table>
+<h2>Rounding</h2><p class="lead">Rounding is applied per line by default, which matches most accounting packages.</p>
+<table><tr><th>Round at subtotal</th><td><span class="tg"></span><p class="h">Round tax at the subtotal instead of per line. Turn this on only if your accountant asks for it.</p></td></tr></table>
+<button>Save changes</button></div>
+</body>
+</html>

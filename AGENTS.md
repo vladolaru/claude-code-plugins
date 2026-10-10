@@ -62,7 +62,7 @@ Shared skills, scripts, hooks, and agent definitions are used directly by both h
 | `yoloing-safe` | PreToolUse hook that blocks destructive commands in YOLO mode, dual-host | `plugins/yoloing-safe/AGENTS.md` |
 | `dex` | Knowledge capture into agent-first docs; enforces a 550-line budget on host instruction files | `plugins/dex/README.md` |
 | `prompt-engineer` | Evidence-grounded prompt optimization with human gates | `plugins/prompt-engineer/README.md` |
-| `image-optimizer` | Lossless image optimization; needs `imageoptim-cli` or `svgo` | `plugins/image-optimizer/README.md` |
+| `image-optimizer` | Measured image optimization with quality profiles and a 1:1 review | `plugins/image-optimizer/README.md` |
 | `caffeinate-claude` | Keeps macOS awake during sessions via hooks | `plugins/caffeinate-claude/README.md` |
 
 ## Creating or Extending a Plugin

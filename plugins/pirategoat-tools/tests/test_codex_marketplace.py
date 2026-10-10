@@ -277,3 +277,36 @@ def test_gitignored_dotfiles_are_not_surfaced_skill_assets():
             junk.write_bytes(original)
     assert result.returncode == 0, result.stdout + result.stderr
     assert ".DS_Store" not in result.stdout
+
+
+def test_skill_and_command_sharing_a_name_fail_generation(tmp_path):
+    """A shared skill and a command with the same name both generate
+    codex-skills/<name>/SKILL.md; the second silently overwrote the first
+    and `--check` could never pass (critic finding, 2026-10-08)."""
+    import pytest
+
+    gen = _load_generator()
+    root = tmp_path / "plugin"
+    (root / "commands").mkdir(parents=True)
+    (root / "commands" / "same.md").write_text(
+        "---\ndescription: d\n---\nUse the same skill.\n"
+    )
+    (root / "skills" / "same").mkdir(parents=True)
+    (root / "skills" / "same" / "SKILL.md").write_text(
+        "---\nname: same\ndescription: d\n---\nBody\n"
+    )
+    canonical = {
+        "name": "m",
+        "plugins": [
+            {
+                "name": "p",
+                "source": str(root),
+                "description": "d",
+                "version": "1.0.0",
+                "commands": ["./commands/same.md"],
+                "skills": ["./skills/same"],
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="same file"):
+        gen.expected_files(canonical)

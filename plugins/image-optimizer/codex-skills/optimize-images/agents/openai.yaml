@@ -2,7 +2,7 @@
 # Source: ./commands/optimize-images.md
 interface:
   display_name: "Optimize Images"
-  short_description: "Losslessly optimize images (PNG, JPEG, GIF, SVG) with review and confirmation."
+  short_description: "Optimize images with measured quality profiles - lossless by default, per-file."
   default_prompt: "Use $image-optimizer:optimize-images."
 policy:
   allow_implicit_invocation: false

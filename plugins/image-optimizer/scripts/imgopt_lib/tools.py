@@ -1,0 +1,398 @@
+"""Tool discovery for imgopt: one fixed source per tool, versions, and the
+strict missing-tool policy.
+
+Each tool resolves through ``resolve()`` in a fixed order (``ORDER``, else
+``DEFAULT_ORDER``). ``jpegtran`` and ``cjpeg`` must be mozjpeg builds: a
+libjpeg-turbo copy on PATH is rejected because its output was 1.5-4% larger
+in the 2026-10-07 WooCommerce session; svgo older than 4 and oxipng older than 10 are rejected
+(``MIN_MAJOR``): the bundled config relies on svgo 4's preset-default, and oxipng 9's zopfli mode is too slow. ``requirements()`` maps a job, a
+profile and the formats present to required, quality-affecting and optional
+tools; the encoders come from ``ladder.tools_for``, so a job asks for exactly
+what its ladder runs (a convert job for the target format's encoders). ``check()`` applies the policy: required tools always block,
+quality-affecting ones block unless waived, optional ones never block. ``REQUIRED_ENCODERS`` are ladder
+encoders that are required whenever the ladder runs them, so they cannot be waived either.
+Linux package names in ``APT`` are best effort and unverified.
+"""
+
+from __future__ import annotations
+
+import functools
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+BUNDLE_DIR = Path("/Applications/ImageOptim.app/Contents/Frameworks/"
+                  "ImageOptimGPL.framework/Versions/A/Resources")
+KEG_DIRS = (Path("/opt/homebrew/opt/mozjpeg/bin"), Path("/usr/local/opt/mozjpeg/bin"),
+            Path("/home/linuxbrew/.linuxbrew/opt/mozjpeg/bin"))
+
+JOBS = ("audit", "recompress", "prepare", "convert", "compare")
+
+VERSION_ARGS: dict[str, list[str] | None] = {
+    "jpegoptim": ["--version"], "jpegtran": ["-version"], "cjpeg": ["-version"],
+    "oxipng": ["--version"], "pngquant": ["--version"], "cjpegli": None,
+    "gifsicle": ["--version"], "svgo": ["--version"], "rsvg-convert": ["--version"],
+    "ffmpeg": ["-version"], "ssimulacra2": None, "butteraugli_main": None,
+    "cwebp": ["-version"], "avifenc": ["--version"],
+}
+
+ADDS = {
+    "pillow": "decoding, colour conversion, flattening, banding and tiles; nothing runs without it",
+    "jpegoptim": "lossless JPEG optimization and the jpegoptim -m quality ladder",
+    "jpegtran": "mozjpeg lossless JPEG optimization (progressive, optimized Huffman)",
+    "cjpeg": "mozjpeg encoder for JPEG made from pixels (resize, colour conversion, PNG master)",
+    "oxipng": "lossless PNG optimization",
+    "pngquant": "palette PNG candidates, usually the largest PNG savings",
+    "cjpegli": "jpegli JPEG encoder: the most-picked lossy JPEG encoder; without it the high ladder saved 4.6-15 "
+               "points less on photos (benchmark corpus)",
+    "gifsicle": "lossless GIF optimization",
+    "svgo": "SVG optimization",
+    "rsvg-convert": "renders SVG before and after so a changed drawing is rejected",
+    "ffmpeg": "SSIM, the gate every lossy candidate must pass",
+    "ssimulacra2": "perceptual score that catches what SSIM misses on flat backgrounds",
+    "butteraugli_main": "worst-spot perceptual score, reported next to the gates",
+    "cwebp": "WebP encoder",
+    "avifenc": "AVIF encoder",
+}
+
+BREW = {"jpegoptim": "jpegoptim", "jpegtran": "mozjpeg", "cjpeg": "mozjpeg", "oxipng": "oxipng",
+        "pngquant": "pngquant", "gifsicle": "gifsicle", "rsvg-convert": "librsvg", "ffmpeg": "ffmpeg",
+        "ssimulacra2": "jpeg-xl",
+        "butteraugli_main": "jpeg-xl", "cwebp": "webp", "avifenc": "libavif"}
+APT = {"jpegoptim": "jpegoptim", "pngquant": "pngquant", "gifsicle": "gifsicle",
+       "rsvg-convert": "librsvg2-bin", "ffmpeg": "ffmpeg", "ssimulacra2": "libjxl-tools",
+       "butteraugli_main": "libjxl-tools", "cwebp": "webp", "avifenc": "libavif-bin"}
+OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install -g svgo",
+         "jpegtran": "build mozjpeg: https://github.com/mozilla/mozjpeg",
+         "cjpeg": "build mozjpeg: https://github.com/mozilla/mozjpeg",
+         # Self-contained: jpegli static, libpng bundled, OpenEXR/GIF/JPEG readers off (imgopt feeds it PNG
+         # only), so the binary loads nothing but system libraries and survives deleting the build folder or
+         # upgrading Homebrew libraries.
+         "cjpegli": "build jpegli (not packaged by Homebrew or apt; needs git, "
+                    "cmake and a C++ compiler): "
+                    "git clone --recursive https://github.com/google/jpegli && cd jpegli && "
+                    "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF "
+                    "-DJPEGLI_ENABLE_OPENEXR=OFF -DJPEGLI_BUNDLE_LIBPNG=ON -DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON "
+                    "-DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON && cmake --build build --target cjpegli --parallel, "
+                    "then put build/tools/cjpegli on PATH",
+         "oxipng": "cargo install oxipng"}
+
+# Encoders required whenever the ladder runs them, with no waiver: removing jpegli cost 4.6-15 points under
+# `high` on the benchmark corpus's photo categories (phone uploads 30.9% -> 15.9%) and 3.4-8.7 under `medium`,
+# more than any waivable tool. It has no package, so the first JPEG job asks for a cmake build.
+REQUIRED_ENCODERS = frozenset({"cjpegli"})
+
+# The ImageOptim bundle comes first only for jpegoptim: it is the one build linked against mozjpeg (Homebrew's
+# links libjpeg-turbo). Everything else prefers what the package manager keeps current; the bundle is a
+# fallback that updates only with ImageOptim releases.
+ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("keg", "bundle", "path"),
+         "cjpeg": ("keg", "path")}
+DEFAULT_ORDER = ("path", "bundle")
+MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
+# Tools ImageOptim 1.9.3 bundles older than Homebrew ships them (pngquant 3.0.2, gifsicle 1.88). doctor
+# suggests the Homebrew install when one of these resolves to the bundle; it never blocks. The bundled
+# oxipng 9.0.0 is refused (MIN_MAJOR).
+FRESHER_ON_BREW = frozenset({"pngquant", "gifsicle"})
+# svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
+# oxipng 9 (the ImageOptim bundle's) ran the zopfli rung about 10x slower than oxipng 10 on 1.6 MP
+# illustrations (79 s against 8.5 s per file) and saved 0.2 points there against 1.1 (benchmark corpus,
+# 2026-10-10); its plain `-o max` output is the same size, but the ladder runs both rungs.
+MIN_MAJOR = {"svgo": 4, "oxipng": 10}
+# Tools that print no version are run with these arguments at resolve time, so a binary that cannot start
+# is reported missing instead of failing every rung later. A cjpegli linked to shared libraries aborts
+# (exit -6, "Library not loaded") once its build folder is gone or an upgrade replaces a library it loads.
+RUN_CHECK = {"cjpegli": ["-h"]}
+
+TARGET_ENCODER = {"jpeg": "cjpeg", "webp": "cwebp", "avif": "avifenc", "png": "oxipng"}
+ALL_FORMATS = ("jpeg", "png", "gif", "svg")
+
+
+@functools.lru_cache(maxsize=64)
+def _binary_hash(path: str, size: int, mtime_ns: int) -> str:
+    """Short sha256 of a binary; size and mtime only key the memo, so a run hashes each tool once."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:12]
+
+
+@dataclass(frozen=True)
+class Env:
+    path: str
+    bundle: Path | None
+    kegs: tuple[Path, ...]
+
+    @classmethod
+    def current(cls) -> "Env":
+        return cls(os.environ.get("PATH", ""), BUNDLE_DIR if sys.platform == "darwin" else None, KEG_DIRS)
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    path: str | None
+    version: str = ""
+    source: str = "missing"
+    note: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.path is not None
+
+    @property
+    def cache_id(self) -> str:
+        """What the candidates cache keys on: the version line, or a short sha256 of the binary for tools
+        that print none (cjpegli, ssimulacra2, butteraugli_main): an upgrade changes it, a copy or
+        touch does not."""
+        if self.version and self.version != "unknown" and not self.version.startswith("unreadable"):
+            return self.version
+        try:
+            st = os.stat(self.path)
+            return f"sha256:{_binary_hash(self.path, st.st_size, st.st_mtime_ns)}"
+        except OSError:  # gone since it was resolved: its own run fails and says so, not the input file
+            return f"{self.version or 'unknown'}:missing"
+
+    @property
+    def label(self) -> str:
+        """How output names this tool's build: its version, or, for a binary that prints none, its hash."""
+        return self.version if self.cache_id == self.version else f"{self.version or 'unknown'} build {self.cache_id}"
+
+
+@dataclass(frozen=True)
+class Requirements:
+    required: tuple[str, ...]
+    quality: tuple[str, ...]
+    optional: tuple[str, ...]
+
+    @property
+    def all(self) -> tuple[str, ...]:
+        return self.required + self.quality + self.optional
+
+
+@dataclass(frozen=True)
+class Check:
+    requirements: Requirements
+    tools: dict
+    missing_required: tuple[str, ...]
+    missing_quality: tuple[str, ...]
+    missing_optional: tuple[str, ...]
+    waived: tuple[str, ...]
+    refused_waivers: tuple[str, ...]
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.missing_required or self.missing_quality)
+
+
+class ToolingError(RuntimeError):
+    """A required or unwaived quality-affecting tool is missing; the message is the report."""
+
+
+def _locations(name: str, env: Env, source: str) -> list[Path]:
+    if source == "bundle":
+        return [env.bundle / name] if env.bundle else []
+    if source == "keg":
+        return [k / name for k in env.kegs]
+    found = shutil.which(name, path=env.path)
+    return [Path(found)] if found else []
+
+
+def probe_version(path: Path, name: str) -> str:
+    args = VERSION_ARGS.get(name)
+    if args is None:
+        return "unknown"
+    try:
+        proc = subprocess.run([str(path), *args], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"unreadable ({error.__class__.__name__})"
+    for line in (proc.stdout + "\n" + proc.stderr).splitlines():
+        if line.strip():
+            return line.strip()
+    return "unknown"
+
+
+def resolve(name: str, env: Env | None = None) -> Tool:
+    if name == "pillow":
+        try:
+            import PIL
+        except ImportError:
+            return Tool("pillow", None, note="not importable by this python3")
+        return Tool("pillow", PIL.__file__, PIL.__version__, "python")
+    env = env or Env.current()
+    rejected = ""
+    for source in ORDER.get(name, DEFAULT_ORDER):
+        for loc in _locations(name, env, source):
+            if not (loc.is_file() and os.access(loc, os.X_OK)):
+                continue
+            version = probe_version(loc, name)
+            why = _unusable(name, version) or _does_not_run(loc, name)
+            if why:
+                rejected = f"{loc}: {why}"
+                continue
+            return Tool(name, str(loc), version, source)
+    return Tool(name, None, note=rejected)
+
+
+def _unusable(name: str, version: str) -> str:
+    """Why a found binary of ``name`` reporting ``version`` must not be used, or empty."""
+    if name in MOZJPEG_ONLY and "mozjpeg" not in version.lower():
+        return f"not mozjpeg ({version})"
+    if name in MIN_MAJOR:
+        major = re.match(r"\D*(\d+)\.", version)
+        if not major or int(major.group(1)) < MIN_MAJOR[name]:
+            return f"{name} {MIN_MAJOR[name]} or newer required ({version})"
+    return ""
+
+
+def _does_not_run(path: Path, name: str) -> str:
+    """Why a RUN_CHECK tool cannot be used, or empty when it starts and exits 0."""
+    args = RUN_CHECK.get(name)
+    if args is None:
+        return ""
+    try:
+        proc = subprocess.run([str(path), *args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"does not run ({error.__class__.__name__})"
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()
+        return f"does not run (exit {proc.returncode}{': ' + tail[0][:120] if tail else ''})"
+    return ""
+
+
+def _dedupe(seq) -> tuple[str, ...]:
+    out: list[str] = []
+    for item in seq:
+        if item not in out:
+            out.append(item)
+    return tuple(out)
+
+
+def requirements(job: str, profile: str = "lossless", formats=None, target: str = "keep") -> Requirements:
+    if job not in JOBS:
+        raise ValueError(f"unknown job {job!r}; expected one of {', '.join(JOBS)}")
+    if job == "compare":
+        return Requirements(("pillow", "ffmpeg", "ssimulacra2"), (), ("butteraugli_main",))
+    fmts = sorted(set(formats or ALL_FORMATS))
+    required = ["pillow"]
+    quality: list[str] = []
+    optional: list[str] = []
+    if job == "audit":
+        quality += [tool for fmt, tool in (("jpeg", "jpegtran"), ("png", "oxipng")) if fmt in fmts]
+        return Requirements(tuple(required), _dedupe(quality), ())
+    # Imported here: ladder needs Pillow, and this module must import without it (conftest, doctor's report).
+    from .ladder import tools_for
+
+    out_format = target if job == "convert" else "keep"
+    resize = 1 if job == "prepare" else None
+    for fmt in fmts:
+        ladder_tools = tools_for(fmt, profile=profile, out_format=out_format, resize=resize)
+        if fmt == "svg" and ladder_tools:
+            required.append("rsvg-convert")  # the render check that decides every SVG candidate
+        quality += sorted(ladder_tools)
+        required += sorted(ladder_tools & REQUIRED_ENCODERS)
+        if job in ("prepare", "convert") and fmt in ("jpeg", "png"):
+            encoder = TARGET_ENCODER.get(fmt if out_format == "keep" else out_format)
+            required += [encoder] if encoder in ladder_tools else []
+    if profile != "lossless":
+        required += ["ffmpeg", "ssimulacra2"]
+        optional += ["butteraugli_main"]
+    req = _dedupe(required)
+    return Requirements(req, tuple(q for q in _dedupe(quality) if q not in req),
+                        _dedupe(optional))
+
+
+def check(req: Requirements, env: Env | None = None, allow_missing=()) -> Check:
+    env = env or Env.current()
+    allow = set(allow_missing)
+    tools = {n: resolve(n, env) for n in req.all}
+    return Check(
+        requirements=req,
+        tools=tools,
+        missing_required=tuple(n for n in req.required if not tools[n].ok),
+        missing_quality=tuple(n for n in req.quality if not tools[n].ok and n not in allow),
+        missing_optional=tuple(n for n in req.optional if not tools[n].ok),
+        waived=tuple(n for n in req.quality if not tools[n].ok and n in allow),
+        refused_waivers=tuple(n for n in req.required if n in allow),
+    )
+
+
+def install_lines(names, platform: str | None = None) -> list[str]:
+    platform = platform or sys.platform
+    table = BREW if platform == "darwin" else APT
+    packages: list[str] = []
+    extra: list[str] = []
+    for name in names:
+        if name in table:
+            if table[name] not in packages:
+                packages.append(table[name])
+            continue
+        command = OTHER.get(name, f"install {name}")
+        if command not in extra:
+            extra.append(command)
+    lines = []
+    if packages:
+        lines.append(("brew install " if platform == "darwin" else "sudo apt install ") + " ".join(packages))
+    return lines + extra
+
+
+def report(chk: Check, *, job: str, profile: str, platform: str | None = None) -> str:
+    req = chk.requirements
+    lines = [f"imgopt doctor: job={job} profile={profile}"]
+    for group, names in (("required", req.required), ("quality", req.quality), ("optional", req.optional)):
+        for name in names:
+            tool = chk.tools[name]
+            if tool.ok:
+                status = "ok"
+            elif name in chk.waived:
+                status = "WAIVED"
+            elif group == "optional":
+                status = "absent"
+            else:
+                status = "MISSING"
+            lines.append(f"  {status:8} {group:9} {name:17} {(tool.version or '-')[:40]:40} "
+                         f"{tool.source:7} {tool.path or tool.note}")
+    stale = [n for n in req.all if chk.tools[n].ok and chk.tools[n].source == "bundle" and n in FRESHER_ON_BREW]
+    if stale:
+        lines.append("Older copies from the ImageOptim bundle (it updates only with ImageOptim): "
+                     + ", ".join(stale) + ". Suggest to the human; this does not block:")
+        lines += ["  " + line for line in install_lines(stale, platform)]
+    blockers = chk.missing_required + chk.missing_quality
+    for name in blockers:
+        lines.append(f"  - {name}: {ADDS[name]}")
+    if chk.refused_waivers:
+        lines.append("Cannot be waived (required for this job): " + ", ".join(chk.refused_waivers))
+    if chk.waived:
+        lines.append("Waived by --allow-missing (stamped on every output): " + "; ".join(
+            f"{n} (goes without: {ADDS[n]})" for n in chk.waived))
+    if chk.missing_optional:
+        lines.append("Optional, ask the human once: " + "; ".join(
+            f"{n} ({ADDS[n]})" for n in chk.missing_optional))
+        lines += ["  " + line for line in install_lines(chk.missing_optional, platform)]
+    if chk.blocked:
+        lines.append("BLOCKED. Ask the human to install the missing tools before any work:")
+        lines += ["  " + line for line in install_lines(blockers, platform)]
+    else:
+        lines.append("Ready.")
+    return "\n".join(lines)
+
+
+def ensure(job: str, profile: str, formats, target: str = "keep", allow_missing=(),
+           env: Env | None = None) -> Check:
+    chk = check(requirements(job, profile, formats, target), env, allow_missing)
+    if chk.blocked:
+        raise ToolingError(report(chk, job=job, profile=profile))
+    return chk
+
+
+def describe(tools: dict) -> str:
+    """One line naming each available tool's version and path, for every command's output."""
+    return "tools: " + "; ".join(f"{t.name} {t.label} ({t.path})"
+                                 for _, t in sorted(tools.items()) if t.ok)
