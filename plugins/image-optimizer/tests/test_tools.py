@@ -173,6 +173,18 @@ def test_svgo_4_is_accepted(tmp_path):
     assert T.resolve("svgo", env([tmp_path / "bin"])).version == "4.0.0"
 
 
+def test_the_bundled_oxipng_9_is_refused_and_blocks_until_oxipng_10_is_installed(tmp_path):
+    fake(tmp_path / "bundle", "oxipng", "oxipng 9.0.0")
+    req = T.Requirements(("pillow", "oxipng"), (), ())
+    chk = T.check(req, env(bundle=tmp_path / "bundle"))
+    assert list(chk.missing_required) == ["oxipng"]
+    assert "oxipng 10 or newer required (oxipng 9.0.0)" in chk.tools["oxipng"].note
+    assert "brew install oxipng" in T.report(chk, job="recompress", profile="lossless", platform="darwin")
+    fake(tmp_path / "bin", "oxipng", "oxipng 10.2.1")
+    tool = T.resolve("oxipng", env([tmp_path / "bin"], bundle=tmp_path / "bundle"))
+    assert tool.ok and tool.source == "path" and tool.version == "oxipng 10.2.1"
+
+
 def test_cache_id_is_the_version_when_the_binary_prints_one(tmp_path):
     exe = tmp_path / "oxipng"
     exe.write_text("")
@@ -222,14 +234,14 @@ def test_the_jpegli_build_line_makes_a_binary_that_loads_only_system_libraries()
 
 
 def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):
-    fake(tmp_path / "bundle", "oxipng", "oxipng 9.0.0")
+    fake(tmp_path / "bundle", "pngquant", "3.0.2")
     fake(tmp_path / "bundle", "jpegoptim", "jpegoptim v1.4.4")
-    req = T.Requirements(("pillow",), ("oxipng", "jpegoptim"), ())
+    req = T.Requirements(("pillow",), ("pngquant", "jpegoptim"), ())
     text = T.report(T.check(req, env(bundle=tmp_path / "bundle")), job="recompress", profile="lossless",
                     platform="darwin")
-    assert "Older copies from the ImageOptim bundle" in text and "brew install oxipng" in text
+    assert "Older copies from the ImageOptim bundle" in text and "brew install pngquant" in text
     assert "jpegoptim" not in text.split("Older copies")[1].splitlines()[0]  # bundle-first by design
-    fake(tmp_path / "bin", "oxipng", "oxipng 10.2.1")
+    fake(tmp_path / "bin", "pngquant", "3.0.3")
     text = T.report(T.check(req, env([tmp_path / "bin"], bundle=tmp_path / "bundle")), job="recompress",
                     profile="lossless", platform="darwin")
     assert "Older copies" not in text and "Ready." in text

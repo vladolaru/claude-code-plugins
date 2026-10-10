@@ -4,8 +4,8 @@ strict missing-tool policy.
 Each tool resolves through ``resolve()`` in a fixed order (``ORDER``, else
 ``DEFAULT_ORDER``). ``jpegtran`` and ``cjpeg`` must be mozjpeg builds: a
 libjpeg-turbo copy on PATH is rejected because its output was 1.5-4% larger
-in the 2026-10-07 WooCommerce session; svgo older than 4 is rejected
-(``MIN_MAJOR``), because the bundled config relies on svgo 4's preset-default. ``requirements()`` maps a job, a
+in the 2026-10-07 WooCommerce session; svgo older than 4 and oxipng older than 10 are rejected
+(``MIN_MAJOR``): the bundled config relies on svgo 4's preset-default, and oxipng 9's zopfli mode is too slow. ``requirements()`` maps a job, a
 profile and the formats present to required, quality-affecting and optional
 tools; the encoders come from ``ladder.tools_for``, so a job asks for exactly
 what its ladder runs (a convert job for the target format's encoders). ``check()`` applies the policy: required tools always block,
@@ -95,13 +95,15 @@ ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("keg", "bundle", "path"),
          "cjpeg": ("keg", "path")}
 DEFAULT_ORDER = ("path", "bundle")
 MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
-# Tools ImageOptim 1.9.3 bundles older than Homebrew ships them (oxipng 9.0.0 against 10.x, whose zopfli mode
-# ran 5x faster and saved more on the WooCommerce PNGs; pngquant 3.0.2; gifsicle). doctor suggests the
-# Homebrew install when one of these resolves to the bundle; it never blocks. guetzli is not listed: its
-# upstream is archived, so no newer build exists.
-FRESHER_ON_BREW = frozenset({"oxipng", "pngquant", "gifsicle"})
+# Tools ImageOptim 1.9.3 bundles older than Homebrew ships them (pngquant 3.0.2, gifsicle 1.88). doctor
+# suggests the Homebrew install when one of these resolves to the bundle; it never blocks. guetzli is not
+# listed: its upstream is archived, so no newer build exists. The bundled oxipng 9.0.0 is refused (MIN_MAJOR).
+FRESHER_ON_BREW = frozenset({"pngquant", "gifsicle"})
 # svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
-MIN_MAJOR = {"svgo": 4}
+# oxipng 9 (the ImageOptim bundle's) ran the zopfli rung about 10x slower than oxipng 10 on 1.6 MP
+# illustrations (79 s against 8.5 s per file) and saved 0.2 points there against 1.1 (benchmark corpus,
+# 2026-10-10); its plain `-o max` output is the same size, but the ladder runs both rungs.
+MIN_MAJOR = {"svgo": 4, "oxipng": 10}
 # Tools that print no version are run with these arguments at resolve time, so a binary that cannot start
 # is reported missing instead of failing every rung later. A cjpegli linked to shared libraries aborts
 # (exit -6, "Library not loaded") once its build folder is gone or an upgrade replaces a library it loads.
