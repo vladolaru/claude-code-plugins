@@ -32,21 +32,15 @@ FEW_COLOURS = 32
 # browsers render the file (a gamma 1.0 PNG rendered 73/255 lighter without its gAMA in Chrome, 2026-10-09).
 PNG_KEEP = "cICP,iCCP,sRGB,gAMA,cHRM,sBIT,pHYs,acTL,fcTL,fdAT"
 PNG_KEEP_WITH_EXIF = "eXIf," + PNG_KEEP
-GUETZLI_LEVELS = (84, 90)
 WEB_LEVELS = tuple(range(95, 45, -5))           # 95 .. 50
-GUETZLI_PROGRESSIVE = True                      # jpegtran -progressive shrank guetzli output 4-6% on all three samples
-# jpegli beside guetzli: on 31 WooCommerce photos under `high` it was the smallest passing encoder on 13,
-# and the ladder with both was 1.7 points smaller than with guetzli alone (docs/design.md). Its best
-# settings reached q40 under `high`; under `medium` they went lower, to q20 or below on 9 photos, but
-# jpegoptim won every one of those, so stopping at q25 cost nothing there.
+# jpegli's best settings on 31 WooCommerce photos reached q40 under `high`; under `medium` they went lower, to
+# q20 or below on 9 photos, but jpegoptim won every one of those, so stopping at q25 cost nothing there.
 JPEGLI_LEVELS = tuple(range(90, 20, -5))        # 90 .. 25
 # oxipng's zopfli mode saved 1.8% more on 13 small PNGs (oxipng 10) but took 25-45x longer on 5-7
 # megapixel screenshots for 0.4% or less, so it runs only up to this size. The benchmark corpus agreed
 # (oxipng 10.2.1): under the cap it took at most about 35 s per file and saved 1-5% on graphics; above it,
 # synthetic 5 MP screenshots took 80-115 s for 0.9-3.3%, and photo PNGs gained about 1% at best.
 ZOPFLI_MAX_PIXELS = 2_000_000
-# guetzli needs about 300 MB per megapixel and minutes per encode; above this it is skipped (R5 in the audit).
-GUETZLI_MAX_PIXELS = 6_000_000
 SVGO_CONFIG = Path(__file__).resolve().parents[1] / "svgo.config.mjs"
 
 
@@ -72,7 +66,6 @@ class Rung:
     args: tuple[str, ...]
     post_oxipng: bool = False
     palette: bool = False
-    post_jpegtran: bool = False
 
     @property
     def kind(self) -> str:
@@ -83,7 +76,7 @@ class Rung:
     @property
     def tools(self) -> set[str]:
         extra = {"oxipng"} if self.post_oxipng else set()
-        return {self.tool} | extra | ({"jpegtran"} if self.post_jpegtran else set())
+        return {self.tool} | extra
 
 
 @dataclass(frozen=True)
@@ -164,13 +157,6 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             jl_in = "pixels_gray" if gray else "pixels_flat"  # cjpegli writes as many channels as it reads
             rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", jl_in, ".jpg", ("-q", str(q)))
                       for q in JPEGLI_LEVELS]
-            if encoded_pixels <= GUETZLI_MAX_PIXELS:
-                g_in = "source" if (not pixel and f.orientation == 1 and not gray) else "pixels_flat"
-                rungs += [Rung(f"guetzli-q{q}", "guetzli", "lossy", g_in, ".jpg", ("--quality", str(q)),
-                               post_jpegtran=GUETZLI_PROGRESSIVE) for q in GUETZLI_LEVELS]
-            else:
-                notes.append(f"guetzli skipped above {GUETZLI_MAX_PIXELS // 1_000_000} MP "
-                             "(about 300 MB per megapixel)")
     elif target == "png":
         # --strip safe drops eXIf, the PNG orientation carrier; a source that has one keeps eXIf as well.
         # Baked pixels have no orientation.
@@ -240,7 +226,7 @@ def _run(argv: list[str], label: str, tool: str) -> subprocess.CompletedProcess:
 
 
 def _tail(proc: subprocess.CompletedProcess) -> str:
-    """The end of an encoder's output on one line: guetzli prints three, which the tables would split."""
+    """The end of an encoder's output on one line, which the tables would otherwise split."""
     return " ".join((proc.stderr or proc.stdout).split())[-300:]
 
 
@@ -253,25 +239,20 @@ def generate(rung: Rung, *, inputs: dict, out_dir: Path, tools: dict) -> Path | 
     exe = _exe(tools, rung.tool)
     src = Path(inputs[rung.input])
     out = Path(out_dir) / f"{rung.label}{rung.ext}"
-    scratch = out.with_suffix(".prog.jpg")
-    for leftover in (out, scratch):
-        leftover.unlink(missing_ok=True)
+    out.unlink(missing_ok=True)
     try:
-        return _encode(rung, exe, src, out, scratch, tools)
+        return _encode(rung, exe, src, out, tools)
     except BaseException:
-        for leftover in (out, scratch):
-            leftover.unlink(missing_ok=True)
+        out.unlink(missing_ok=True)
         raise
 
 
-def _encode(rung: Rung, exe: str, src: Path, out: Path, scratch: Path, tools: dict) -> Path | None:
+def _encode(rung: Rung, exe: str, src: Path, out: Path, tools: dict) -> Path | None:
     if rung.tool == "jpegoptim":
         shutil.copyfile(src, out)
         argv = [exe, "-q", *rung.args, str(out)]
     elif rung.tool in ("jpegtran", "cjpeg"):
         argv = [exe, *rung.args, "-outfile", str(out), str(src)]
-    elif rung.tool == "guetzli":
-        argv = [exe, *rung.args, str(src), str(out)]
     elif rung.tool == "cjpegli":
         argv = [exe, str(src), str(out), *rung.args]
     elif rung.tool == "oxipng":
@@ -301,11 +282,4 @@ def _encode(rung: Rung, exe: str, src: Path, out: Path, scratch: Path, tools: di
         proc = _run([post, "-o", "max", "--strip", "safe", "-q", str(out)], rung.label, "oxipng")
         if proc.returncode != 0:
             raise EncodeError(f"{rung.label}: post-pass {Path(post).name} exited {proc.returncode}: {_tail(proc)}")
-    if rung.post_jpegtran:
-        post = _exe(tools, "jpegtran")
-        proc = _run([post, "-optimize", "-progressive", "-copy", "none", "-outfile", str(scratch), str(out)],
-                    rung.label, "jpegtran")
-        if proc.returncode != 0 or not scratch.is_file():
-            raise EncodeError(f"{rung.label}: post-pass {Path(post).name} exited {proc.returncode}: {_tail(proc)}")
-        scratch.replace(out)
     return out

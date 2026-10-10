@@ -28,7 +28,7 @@ def fake_out(tmp_path, factory, *, uncalibrated=False, band_gated=False, size=(1
     record = {
         "schema": 1, "source": {"path": str(src), "size": src.stat().st_size, "format": "png",
                                 "width": size[0], "height": size[1], "colors": None},
-        "format": "webp" if uncalibrated else "png", "uncalibrated": uncalibrated, "waived": ["guetzli"],
+        "format": "webp" if uncalibrated else "png", "uncalibrated": uncalibrated, "waived": ["jpegoptim"],
         "notes": [], "candidates": [{"label": "pngquant-c8", "file": "pick.png", "kind": "lossy",
                                      "size": pick.stat().st_size, "band_gated": band_gated, "ssim": 0.95,
                                      "ssim_white": 0.95, "ss2": 70.0, "band": 5.0, "pass": True, "reason": ""}],
@@ -60,7 +60,7 @@ def test_uncalibrated_requires_every_tile_and_alpha_adds_an_edge_tile(tmp_path, 
     assert "edge" in {t.window for t in tiles}
     assert all(t.required for t in tiles)
     text = page.read_text()
-    assert "UNCALIBRATED" in text and "guetzli" in text
+    assert "UNCALIBRATED" in text and "jpegoptim" in text
 
 
 def test_gated_palette_pick_has_no_required_tiles(tmp_path, factory):

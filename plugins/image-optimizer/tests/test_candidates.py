@@ -433,10 +433,10 @@ def test_rotated_jpeg_under_high_bakes_the_orientation_into_pixel_rungs(factory,
     folder = C.load_records(tmp_path / "out")[0][0]
     reference = Image.open(folder / "reference.png")
     assert reference.size == (120, 160)
-    guetzli = [c for c in r["candidates"] if c["label"].startswith("guetzli-") and c.get("file")]
-    assert guetzli, "guetzli reads oriented pixels on a rotated source"
+    jpegli = [c for c in r["candidates"] if c["label"].startswith("cjpegli-") and c.get("file")]
+    assert jpegli, "cjpegli reads oriented pixels on a rotated source"
     upside_down = ImageOps.flip(ImageOps.mirror(reference.convert("RGB")))
-    for c in guetzli:
+    for c in jpegli:
         out = I.read_facts(folder / c["file"])
         assert (out.orientation, out.width, out.height) == (1, 120, 160), c["label"]
         assert c["kind"] == "lossy", c
@@ -485,16 +485,16 @@ def _without(tools, name):
 
 
 def test_the_waived_note_names_only_tools_the_human_waived(factory, toolset, tmp_path):
-    tools = _without(toolset("recompress", "high", {"jpeg"}), "guetzli")
+    tools = _without(toolset("recompress", "high", {"jpeg"}), "jpegoptim")
     src = factory.photo().resolve()
-    [r] = C.run([src], opts(tmp_path / "out", "high", waived=("guetzli",)), tools, log=quiet)
-    assert any("tools waived:" in n and "guetzli" in n for n in r["notes"])
-    assert not any(c["label"].startswith("guetzli") for c in r["candidates"])
+    [r] = C.run([src], opts(tmp_path / "out", "high", waived=("jpegoptim",)), tools, log=quiet)
+    assert any("tools waived:" in n and "jpegoptim" in n for n in r["notes"])
+    assert not any(c["label"].startswith("jpegoptim") for c in r["candidates"])
 
 
 def test_a_missing_tool_nobody_waived_is_a_bug_not_a_note(factory, toolset, tmp_path):
-    tools = _without(toolset("recompress", "high", {"jpeg"}), "guetzli")
-    with pytest.raises(RuntimeError, match="guetzli"):
+    tools = _without(toolset("recompress", "high", {"jpeg"}), "cjpegli")
+    with pytest.raises(RuntimeError, match="cjpegli"):
         C.run([factory.photo().resolve()], opts(tmp_path / "out", "high"), tools, log=quiet)
 
 

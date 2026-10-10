@@ -69,7 +69,7 @@ def test_lossless_recompress_needs_no_metric_tools():
 def test_lossy_recompress_requires_metrics_and_blocks_on_encoders():
     req = T.requirements("recompress", "high", {"jpeg"})
     assert {"ffmpeg", "ssimulacra2"} <= set(req.required)
-    assert {"guetzli", "cjpeg"} <= set(req.quality)
+    assert {"cjpeg", "jpegoptim"} <= set(req.quality)
     assert set(req.optional) == {"butteraugli_main"}
 
 
@@ -94,11 +94,11 @@ def test_compare_job_requires_metrics_only():
 
 
 def test_missing_quality_tool_blocks_until_waived(tmp_path):
-    req = T.Requirements(("pillow",), ("guetzli",), ())
+    req = T.Requirements(("pillow",), ("jpegoptim",), ())
     assert T.check(req, env()).blocked
-    chk = T.check(req, env(), allow_missing=["guetzli"])
+    chk = T.check(req, env(), allow_missing=["jpegoptim"])
     assert not chk.blocked
-    assert chk.waived == ("guetzli",)
+    assert chk.waived == ("jpegoptim",)
 
 
 def test_required_tools_cannot_be_waived():
@@ -109,10 +109,10 @@ def test_required_tools_cannot_be_waived():
 
 
 def test_report_names_what_each_missing_tool_adds_and_one_install_line():
-    req = T.Requirements(("pillow",), ("guetzli", "pngquant"), ())
+    req = T.Requirements(("pillow",), ("jpegoptim", "pngquant"), ())
     text = T.report(T.check(req, env()), job="recompress", profile="high", platform="darwin")
-    assert "perceptual JPEG encoder" in text
-    assert "brew install guetzli pngquant" in text
+    assert "jpegoptim -m quality ladder" in text
+    assert "brew install jpegoptim pngquant" in text
     assert "BLOCKED" in text
 
 
@@ -139,24 +139,24 @@ def test_doctor_cli_reports_and_exits_by_readiness(factory):
 def test_jpeg_to_png_requires_the_png_ladder():
     req = T.requirements("convert", "high", {"jpeg"}, "png")
     assert "pngquant" in req.quality and "oxipng" in req.required
-    assert not {"guetzli", "cjpeg", "jpegoptim"} & set(req.all)
+    assert not {"cjpegli", "cjpeg", "jpegoptim"} & set(req.all)
 
 
 def test_png_to_jpeg_requires_the_jpeg_encoders():
     req = T.requirements("convert", "high", {"png"}, "jpeg")
-    assert {"cjpeg", "cjpegli"} <= set(req.required) and "guetzli" in req.quality
+    assert {"cjpeg", "cjpegli"} <= set(req.required)
     assert not {"pngquant", "oxipng"} & set(req.all)
 
 
 def test_jpeg_to_webp_requires_only_what_the_ladder_runs():
     req = T.requirements("convert", "high", {"jpeg"}, "webp")
     assert "cwebp" in req.required
-    assert not {"guetzli", "cjpeg", "jpegoptim", "jpegtran"} & set(req.all)
+    assert not {"cjpegli", "cjpeg", "jpegoptim", "jpegtran"} & set(req.all)
 
 
 def test_prepare_requires_the_pixel_encoders_not_the_lossless_ones():
     req = T.requirements("prepare", "high", {"jpeg"})
-    assert {"cjpeg", "cjpegli"} <= set(req.required) and "guetzli" in req.quality
+    assert {"cjpeg", "cjpegli"} <= set(req.required)
     assert "jpegoptim" not in req.all
 
 
@@ -193,15 +193,15 @@ def test_cache_id_is_the_version_when_the_binary_prints_one(tmp_path):
 
 @pytest.mark.parametrize("version", ["unknown", "unreadable (TimeoutExpired)", ""])
 def test_cache_id_is_the_binary_hash_when_it_prints_no_version(tmp_path, version):
-    """guetzli, ssimulacra2 and butteraugli_main print no version, so an upgrade must still change the key."""
-    exe = tmp_path / "guetzli"
+    """cjpegli, ssimulacra2 and butteraugli_main print no version, so an upgrade must still change the key."""
+    exe = tmp_path / "cjpegli"
     exe.write_bytes(b"old build")
-    before = T.Tool("guetzli", str(exe), version, "path").cache_id
+    before = T.Tool("cjpegli", str(exe), version, "path").cache_id
     assert before.startswith("sha256:") and len(before) == len("sha256:") + 12
     os.utime(exe, (1, 1))
-    assert T.Tool("guetzli", str(exe), version, "path").cache_id == before  # mtime alone changes nothing
+    assert T.Tool("cjpegli", str(exe), version, "path").cache_id == before  # mtime alone changes nothing
     exe.write_bytes(b"a newer build")
-    assert T.Tool("guetzli", str(exe), version, "path").cache_id != before
+    assert T.Tool("cjpegli", str(exe), version, "path").cache_id != before
 
 
 def test_label_names_the_version_or_the_build(tmp_path):
@@ -266,4 +266,4 @@ def test_a_cjpegli_that_cannot_start_is_reported_missing(tmp_path):
 
 
 def test_cache_id_of_a_binary_gone_since_resolve_does_not_raise(tmp_path):
-    assert T.Tool("guetzli", str(tmp_path / "gone"), "unknown", "path").cache_id == "unknown:missing"
+    assert T.Tool("cjpegli", str(tmp_path / "gone"), "unknown", "path").cache_id == "unknown:missing"

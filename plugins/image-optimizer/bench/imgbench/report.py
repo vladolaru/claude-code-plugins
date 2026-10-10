@@ -25,6 +25,7 @@ from imgopt_lib import gates as G
 from . import harness
 
 # Ablation column -> the candidate families that encoder contributes. jpegoptim covers its lossless rung too.
+# guetzli left the ladder in 2.0; its column shows only for runs made before that, which recorded it.
 ABLATION_COLUMNS = (("jpegli", {"cjpegli"}), ("guetzli", {"guetzli"}),
                     ("jpegoptim", {"jpegoptim", "lossless-jpegoptim"}), ("zopfli", {"oxipng-zopfli"}),
                     ("pngquant", {"pngquant"}))
@@ -156,8 +157,8 @@ def _summary(group: list[dict]) -> list[list[str]]:
 
 
 def _tried(rows: list[dict], families: set[str]) -> int:
-    """How many of ``rows`` got at least one candidate of ``families``: an encoder capped out by size (guetzli
-    above 6 MP, zopfli above 2 MP) or skipped (pngquant on few colours) was never tried on the others."""
+    """How many of ``rows`` got at least one candidate of ``families``: an encoder capped out by size (zopfli
+    above 2 MP) or skipped (pngquant on few colours) was never tried on the others."""
     return sum(any(c["family"] in families for c in r["candidates"]) for r in rows)
 
 

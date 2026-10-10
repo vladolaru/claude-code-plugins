@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `/optimize-images` now follows the new `image-optimization` skill: it measures every candidate against a quality profile (`lossless` by default, `high` or `medium` on request) and picks per file instead of running one lossless pass.
-- Encoders are called directly (mozjpeg, jpegli, jpegoptim, oxipng, pngquant, guetzli, gifsicle and svgo) instead of through the x86-only `imageoptim` CLI, and work stops until missing required tools are installed or explicitly waived; optional tools never stop it.
+- Encoders are called directly (mozjpeg, jpegli, jpegoptim, oxipng, pngquant, gifsicle and svgo) instead of through the x86-only `imageoptim` CLI, and work stops until missing required tools are installed or explicitly waived; optional tools never stop it.
 - Homebrew's tools are preferred to the copies bundled with ImageOptim.app (except jpegoptim, whose bundled build is the one linked to mozjpeg), and `imgopt.py doctor` suggests the Homebrew install when only an older bundled copy is found.
 - oxipng 10 or newer is required, so ImageOptim's bundled oxipng 9 is refused and PNG work waits for `brew install oxipng`; oxipng 9's zopfli mode took about ten times as long for a fifth of the saving.
 - Runtime requirements: `python3` with Pillow for everything, plus ffmpeg and ssimulacra2 (from jpeg-xl) for the `high` and `medium` profiles; `imgopt.py doctor` lists the rest per job.
@@ -37,7 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A cached candidate is made again when any tool that made or measured it changes, including tools that print no version.
 - `apply` stops with a clear reason when ffmpeg or ssimulacra2 changed since the picks were measured.
 - `candidates` measures two files at a time by default (`--jobs`), or one at a time where a sandbox denies worker processes.
-- guetzli is skipped above 6 megapixels, counted after any resize, because it needs about 300 MB of memory per megapixel.
 
 ### Fixed
 

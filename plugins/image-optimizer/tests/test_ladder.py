@@ -31,34 +31,15 @@ def test_lossless_jpeg_keeps_the_profile_and_strips_exif_only_without_orientatio
     assert rotated.rungs[1].args[-2:] == ("-copy", "all")
 
 
-def test_lossy_jpeg_adds_the_jpegoptim_ladder_and_guetzli():
+def test_lossy_jpeg_adds_the_jpegoptim_ladder():
     p = L.plan(facts(), profile="high")
     assert "jpegoptim-m95" in labels(p) and "jpegoptim-m40" in labels(p)
-    guetzli = [r for r in p.rungs if r.tool == "guetzli"]
-    assert [r.label for r in guetzli] == ["guetzli-q84", "guetzli-q90"]
-    assert all(r.input == "source" for r in guetzli)
-    assert all(r.post_jpegtran for r in guetzli)
 
 
-def test_guetzli_is_skipped_above_its_pixel_cap():
-    p = L.plan(facts(width=4000, height=2000), profile="high")
-    assert not any(r.tool == "guetzli" for r in p.rungs)
-    assert any("guetzli skipped" in n for n in p.notes)
-    assert any(r.tool == "guetzli" for r in L.plan(facts(width=2000, height=3000), profile="high").rungs)
-
-
-def test_the_pixel_caps_count_the_resized_image():
+def test_the_zopfli_cap_counts_the_resized_image():
     big = facts(width=6000, height=4000)
-    resized = L.plan(big, profile="high", resize=1200)  # 1200x800: about 1 MP reaches the encoders
-    assert any(r.tool == "guetzli" for r in resized.rungs)
-    assert not any("guetzli skipped" in n for n in resized.notes)
     assert "oxipng-zopfli" in labels(L.plan(replace(big, format="png"), profile="high", resize=1200))
     assert "oxipng-zopfli" not in labels(L.plan(replace(big, format="png"), profile="high", resize=4000))
-
-
-def test_gray_jpeg_feeds_guetzli_rgb_pixels():
-    p = L.plan(facts(mode="L"), profile="high")
-    assert all(r.input == "pixels_flat" for r in p.rungs if r.tool == "guetzli")
 
 
 def test_resize_encodes_jpeg_from_pixels_with_mozjpeg():
@@ -164,14 +145,6 @@ def test_pngquant_unreachable_quality_returns_none(factory, toolset, tmp_path):
     assert L.generate(rung, inputs={"pixels": src}, out_dir=tmp_path, tools=tools) is None
 
 
-def test_guetzli_rung_ends_with_a_progressive_jpeg(factory, toolset, tmp_path):
-    tools = toolset("recompress", "high", {"jpeg"})
-    jpg = factory.photo(size=(64, 48))
-    rung = next(r for r in L.plan(I.read_facts(jpg), profile="high").rungs if r.label == "guetzli-q84")
-    out = L.generate(rung, inputs={"source": jpg}, out_dir=tmp_path, tools=tools)
-    assert I.read_facts(out).progressive
-
-
 def test_lossless_png_rung_keeps_orientation_and_icc(factory, device_icc, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     png = factory.photo(name="rot.png", orientation=6, icc=device_icc)
@@ -205,17 +178,6 @@ def _failing_tool(tmp_path, name):
     script.write_text("#!/bin/sh\necho 'boom from fake' >&2\nexit 1\n")
     script.chmod(0o755)
     return T.Tool(name, str(script), "fake", "path")
-
-
-def test_failed_jpegtran_post_pass_raises_and_leaves_no_files(factory, toolset, tmp_path):
-    tools = dict(toolset("recompress", "lossless", {"jpeg"}))
-    tools["jpegtran"] = _failing_tool(tmp_path, "jpegtran")
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    rung = L.Rung("jo", "jpegoptim", "lossy", "source", ".jpg", ("-m90",), post_jpegtran=True)
-    with pytest.raises(L.EncodeError, match="jpegtran.*boom from fake"):
-        L.generate(rung, inputs={"source": factory.photo()}, out_dir=out_dir, tools=tools)
-    assert list(out_dir.iterdir()) == []
 
 
 def test_failed_oxipng_post_pass_raises_and_leaves_no_files(factory, toolset, tmp_path):
@@ -309,6 +271,6 @@ def test_animated_or_gamma_png_cannot_be_resized_or_converted(factory, make):
 
 
 def test_an_encoders_multi_line_complaint_stays_on_one_line():
-    """guetzli prints three lines on refusing an input; they must not break the candidates table."""
-    proc = subprocess.CompletedProcess([], 1, "", "Unsupported input JPEG file.\nPlease provide a PNG.\nGuetzli processing failed\n")
-    assert L._tail(proc) == "Unsupported input JPEG file. Please provide a PNG. Guetzli processing failed"
+    """An encoder that prints several lines on refusing an input must not break the candidates table."""
+    proc = subprocess.CompletedProcess([], 1, "", "Unsupported input JPEG file.\nPlease provide a PNG.\nProcessing failed\n")
+    assert L._tail(proc) == "Unsupported input JPEG file. Please provide a PNG. Processing failed"

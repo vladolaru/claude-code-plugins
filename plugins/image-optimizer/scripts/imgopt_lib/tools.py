@@ -35,7 +35,7 @@ JOBS = ("audit", "recompress", "prepare", "convert", "compare")
 
 VERSION_ARGS: dict[str, list[str] | None] = {
     "jpegoptim": ["--version"], "jpegtran": ["-version"], "cjpeg": ["-version"],
-    "oxipng": ["--version"], "pngquant": ["--version"], "guetzli": None, "cjpegli": None,
+    "oxipng": ["--version"], "pngquant": ["--version"], "cjpegli": None,
     "gifsicle": ["--version"], "svgo": ["--version"], "rsvg-convert": ["--version"],
     "ffmpeg": ["-version"], "ssimulacra2": None, "butteraugli_main": None,
     "cwebp": ["-version"], "avifenc": ["--version"],
@@ -48,7 +48,6 @@ ADDS = {
     "cjpeg": "mozjpeg encoder for JPEG made from pixels (resize, colour conversion, PNG master)",
     "oxipng": "lossless PNG optimization",
     "pngquant": "palette PNG candidates, usually the largest PNG savings",
-    "guetzli": "perceptual JPEG encoder; often the best size for larger photos",
     "cjpegli": "jpegli JPEG encoder: the most-picked lossy JPEG encoder; without it the high ladder saved 4.6-15 "
                "points less on photos (benchmark corpus)",
     "gifsicle": "lossless GIF optimization",
@@ -62,13 +61,12 @@ ADDS = {
 }
 
 BREW = {"jpegoptim": "jpegoptim", "jpegtran": "mozjpeg", "cjpeg": "mozjpeg", "oxipng": "oxipng",
-        "pngquant": "pngquant", "guetzli": "guetzli", "gifsicle": "gifsicle",
-        "rsvg-convert": "librsvg", "ffmpeg": "ffmpeg", "ssimulacra2": "jpeg-xl",
+        "pngquant": "pngquant", "gifsicle": "gifsicle", "rsvg-convert": "librsvg", "ffmpeg": "ffmpeg",
+        "ssimulacra2": "jpeg-xl",
         "butteraugli_main": "jpeg-xl", "cwebp": "webp", "avifenc": "libavif"}
-APT = {"jpegoptim": "jpegoptim", "pngquant": "pngquant", "guetzli": "guetzli",
-       "gifsicle": "gifsicle", "rsvg-convert": "librsvg2-bin", "ffmpeg": "ffmpeg",
-       "ssimulacra2": "libjxl-tools", "butteraugli_main": "libjxl-tools", "cwebp": "webp",
-       "avifenc": "libavif-bin"}
+APT = {"jpegoptim": "jpegoptim", "pngquant": "pngquant", "gifsicle": "gifsicle",
+       "rsvg-convert": "librsvg2-bin", "ffmpeg": "ffmpeg", "ssimulacra2": "libjxl-tools",
+       "butteraugli_main": "libjxl-tools", "cwebp": "webp", "avifenc": "libavif-bin"}
 OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install -g svgo",
          "jpegtran": "build mozjpeg: https://github.com/mozilla/mozjpeg",
          "cjpeg": "build mozjpeg: https://github.com/mozilla/mozjpeg",
@@ -97,8 +95,8 @@ ORDER = {"jpegoptim": ("bundle", "path"), "jpegtran": ("keg", "bundle", "path"),
 DEFAULT_ORDER = ("path", "bundle")
 MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
 # Tools ImageOptim 1.9.3 bundles older than Homebrew ships them (pngquant 3.0.2, gifsicle 1.88). doctor
-# suggests the Homebrew install when one of these resolves to the bundle; it never blocks. guetzli is not
-# listed: its upstream is archived, so no newer build exists. The bundled oxipng 9.0.0 is refused (MIN_MAJOR).
+# suggests the Homebrew install when one of these resolves to the bundle; it never blocks. The bundled
+# oxipng 9.0.0 is refused (MIN_MAJOR).
 FRESHER_ON_BREW = frozenset({"pngquant", "gifsicle"})
 # svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
 # oxipng 9 (the ImageOptim bundle's) ran the zopfli rung about 10x slower than oxipng 10 on 1.6 MP
@@ -150,7 +148,7 @@ class Tool:
     @property
     def cache_id(self) -> str:
         """What the candidates cache keys on: the version line, or a short sha256 of the binary for tools
-        that print none (guetzli, cjpegli, ssimulacra2, butteraugli_main): an upgrade changes it, a copy or
+        that print none (cjpegli, ssimulacra2, butteraugli_main): an upgrade changes it, a copy or
         touch does not."""
         if self.version and self.version != "unknown" and not self.version.startswith("unreadable"):
             return self.version

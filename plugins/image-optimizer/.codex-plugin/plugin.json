@@ -14,7 +14,7 @@
     "mozjpeg",
     "oxipng",
     "pngquant",
-    "guetzli",
+    "jpegli",
     "svgo",
     "ssim",
     "compression"

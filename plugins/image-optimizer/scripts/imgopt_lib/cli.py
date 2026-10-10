@@ -257,7 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--band", type=float)
     c.add_argument("--allow-missing", help="comma list of quality tools the human chose to go without")
     c.add_argument("--jobs", type=int, default=2,
-                   help="files measured in parallel (default 2; guetzli needs about 300 MB per megapixel each)")
+                   help="files measured in parallel (default 2)")
     c.set_defaults(func=cmd_candidates)
     i = sub.add_parser("inspect", help="facts and lossless headroom per file; changes nothing")
     i.add_argument("paths", nargs="+")

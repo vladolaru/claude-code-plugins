@@ -57,9 +57,8 @@ Measure against the original, never an already-optimized intermediate. For files
 
 ## What the scripts cannot enforce
 
-- guetzli is strong on larger photos and softens small thumbnails; it takes seconds to minutes per file and about 300 MB of memory per megapixel, so it is skipped above 6 megapixels (counted after any `--resize`). `candidates` measures two files at a time by default; on a machine short of memory pass `--jobs 1`.
+- `candidates` measures two files at a time by default; on a machine short of memory pass `--jobs 1`.
 - `jpegoptim -m` is not the IJG quality scale: a file another tool calls "q60" may measure about q86 in `inspect`.
-- On sources that are already around q86, guetzli's advantage mostly disappears.
 - JPEG banding is reported, not gated: look hardest at dark gradients, skies and soft shadows.
 - Animated PNGs and PNGs with gAMA/cHRM chunks get lossless candidates only, so they cannot be resized or converted.
 - Files marked "untouched" save too little to be worth a binary diff; do not override that for a few bytes.
