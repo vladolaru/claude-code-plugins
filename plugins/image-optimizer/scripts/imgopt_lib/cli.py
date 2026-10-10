@@ -252,9 +252,7 @@ def cmd_clean(args) -> int:
 
 def _one(dirs, name):
     """The one ``(folder, record)`` that ``name`` selects among the records of the working folders ``dirs``."""
-    rows = [row for d in dirs for row in C.load_records(Path(d).resolve())]
-    if not rows:
-        raise UsageError(f"no candidates results were found in {', '.join(str(d) for d in dirs)}")
+    rows = RV.rows_of([Path(d).resolve() for d in dirs])
     picked, problems = SEL.resolve([name], rows)
     if problems:
         raise UsageError(problems[0])
@@ -282,6 +280,27 @@ def cmd_choose(args) -> int:
         print(f"{record['source']['path']}: now {chosen['label']} ({C.kb(chosen['size'])}), {gate}; "
               f"verdict: {record['verdict']} ({record['verdict_reason']})")
     print(f"Next: rebuild the page: python3 {shlex.quote(str(SCRIPT))} sheet {shlex.quote(str(folder.parent))}")
+    return 0
+
+
+def cmd_record(args) -> int:
+    text = sys.stdin.read() if args.verdicts == "-" else Path(args.verdicts).read_text()
+    dirs = [Path(d).resolve() for d in args.out]
+    counts = RV.record_verdicts(dirs, text)
+    print("Recorded: " + (", ".join(f"{n} {v}" for v, n in sorted(counts.items())) or "no verdicts"))
+    q = shlex.quote
+    folders = " ".join(q(str(d)) for d in dirs)
+    asked = [(f, r) for f, r in RV.rows_of(dirs)
+             if (RV.verdict_of(f.parent, r) or {}).get("verdict") in ("milder", "stronger")]
+    for folder, record in asked:
+        how = RV.verdict_of(folder.parent, record)["verdict"]
+        print(f"  asked {how}: python3 {q(str(SCRIPT))} choose {q(str(folder.parent))} "
+              f"--file {q(record['source']['path'])} --{how}")
+    if asked:
+        print(f"Then rebuild the page: python3 {q(str(SCRIPT))} sheet {folders}")
+    if counts.get("keep"):
+        print(f"Place the kept files: python3 {q(str(SCRIPT))} apply {folders}   "
+              f"(or copy the paths: python3 {q(str(SCRIPT))} manifest {folders} --accepted)")
     return 0
 
 
@@ -339,6 +358,10 @@ def build_parser() -> argparse.ArgumentParser:
     how.add_argument("--stronger", action="store_true")
     how.add_argument("--default", action="store_true")
     ch.set_defaults(func=cmd_choose)
+    rc = sub.add_parser("record", help="store the verdicts the human copied from the page")
+    rc.add_argument("out", nargs="+", help="the working folder(s) the page was built from")
+    rc.add_argument("--verdicts", required=True, metavar="FILE|-", help="the pasted block, in a file or on stdin")
+    rc.set_defaults(func=cmd_record)
     a = sub.add_parser("apply", help="write approved picks and re-verify them")
     a.add_argument("out")
     a.add_argument("--only", help="comma list of file names or paths")

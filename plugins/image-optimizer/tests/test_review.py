@@ -87,3 +87,50 @@ def test_variant_lines_mark_the_default_and_the_choice(tmp_path):
     RV.choose(folder, record, "v15000")
     text = "\n".join(RV.variant_lines(folder, record))
     assert "v12000" in text and "default" in text and "choice" in text and "fails: banding 4.0 > 3" in text
+
+
+def block(fp, files):
+    return RV.BLOCK_HEADER + "\n" + json.dumps({"fingerprint": fp, "files": files})
+
+
+def test_a_block_from_another_page_is_refused(tmp_path):
+    folder, record = fake_record(tmp_path)
+    with pytest.raises(UsageError, match="built from other results"):
+        RV.record_verdicts([folder.parent], block("0" * 16, {}))
+
+
+def test_keep_with_another_variant_sets_the_choice_and_is_stored(tmp_path):
+    folder, record = fake_record(tmp_path)
+    rows = RV.rows_of([folder.parent])
+    path = record["source"]["path"]
+    counts = RV.record_verdicts([folder.parent], block(RV.fingerprint(rows), {
+        path: {"verdict": "keep", "variant": "v15000", "note": "the pick looked soft"}}))
+    assert counts == {"keep": 1}
+    [(_, fresh)] = RV.rows_of([folder.parent])
+    assert C.choice_of(fresh)["label"] == "v15000"
+    assert RV.verdict_of(folder.parent, fresh)["note"] == "the pick looked soft"
+
+
+def test_a_stored_verdict_stops_counting_once_the_choice_changes(tmp_path):
+    folder, record = fake_record(tmp_path)
+    path = record["source"]["path"]
+    RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+        path: {"verdict": "keep", "variant": "v12000", "note": ""}}))
+    RV.choose(folder, record, "v18000")
+    assert RV.verdict_of(folder.parent, record) is None
+
+
+def test_a_path_not_on_the_page_and_a_bad_verdict_are_refused(tmp_path):
+    folder, record = fake_record(tmp_path)
+    fp = RV.fingerprint(RV.rows_of([folder.parent]))
+    with pytest.raises(UsageError, match="not on this page"):
+        RV.record_verdicts([folder.parent], block(fp, {"/elsewhere/x.png": {"verdict": "keep", "variant": "v12000"}}))
+    with pytest.raises(UsageError, match="verdict must be one of"):
+        RV.record_verdicts([folder.parent], block(fp, {
+            record["source"]["path"]: {"verdict": "maybe", "variant": "v12000"}}))
+
+
+def test_text_around_the_block_is_ignored_and_a_cut_block_is_named():
+    with pytest.raises(UsageError, match="not complete JSON"):
+        RV.parse_block("Here you go:\n" + RV.BLOCK_HEADER + '\n{"fingerprint": "ab", "files": {')
+    assert RV.parse_block("x\n" + block("ab", {}) + "\nthanks")["fingerprint"] == "ab"
