@@ -213,6 +213,7 @@ def test_only_names_that_match_nothing_are_reported_and_fail_the_run(factory, tm
     logs = []
     assert AP.apply(out, tools={}, only=("nope.jpg",), approve=("photo.jpg",), log=logs.append) == 1
     assert sum("nope.jpg" in line for line in logs) == 1
+    assert any("matches no file of this run" in line for line in logs)
     assert "Nothing to apply." not in logs
     assert src.read_bytes() != (folder / "pick.jpg").read_bytes()
 
@@ -224,6 +225,7 @@ def test_a_matched_only_name_is_applied_even_when_another_matches_nothing(factor
     logs = []
     assert AP.apply(out, tools={}, only=("photo.jpg", "nope.jpg"), approve=("photo.jpg",), log=logs.append) == 1
     assert sum("nope.jpg" in line for line in logs) == 1
+    assert any("matches no file of this run" in line for line in logs)
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
 
 
@@ -448,7 +450,7 @@ def test_an_approval_naming_no_lossy_pick_fails(factory, tmp_path):
     _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
     lines = []
     assert AP.apply(out, tools={}, approve=("zzz.jpg",), log=lines.append) == 1
-    assert any("--approve 'zzz.jpg' matches no lossy pick" in l for l in lines)
+    assert any("--approve: 'zzz.jpg' matches no file of this run" in l for l in lines)
 
 
 def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolset, tmp_path):
@@ -478,3 +480,25 @@ def test_a_record_without_tool_ids_is_not_called_changed(factory, toolset, tmp_p
     lines = []
     AP.apply(out, tools=tools, approve=("a.jpg",), log=lines.append)
     assert not any("changed since candidates ran" in l for l in lines)
+
+
+def test_only_with_an_ambiguous_name_selects_nothing_and_fails(factory, tmp_path):
+    out = tmp_path / "out"
+    _lossy_record(out, factory, name="x.jpg", folder_name="a--1")
+    other = factory.root / "sub"
+    other.mkdir()
+    sub = type(factory)(other)
+    _lossy_record(out, sub, name="x.jpg", folder_name="b--2")
+    lines = []
+    assert AP.apply(out, tools={}, only=("x.jpg",), log=lines.append) == 1
+    assert any("ambiguous" in l for l in lines)
+
+
+def test_only_accepts_a_path_relative_to_the_current_folder(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    src, folder = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
+    monkeypatch.chdir(src.parent.parent)
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    rel = f"{src.parent.name}/{src.name}"
+    assert AP.apply(out, tools={}, only=(rel,), approve=(rel,), log=lambda _: None) == 0
+    assert src.read_bytes() == (folder / "pick.jpg").read_bytes()

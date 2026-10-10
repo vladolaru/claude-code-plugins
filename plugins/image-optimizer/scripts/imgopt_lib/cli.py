@@ -17,6 +17,7 @@ from . import candidates as C
 from . import compare as CP
 from . import gates as G
 from . import metrics as M
+from . import selection as SEL
 from . import sheet as S
 from . import tools as T
 from . import workdirs as W
@@ -110,10 +111,13 @@ def _expand_reporting(paths) -> list[Path]:
 
 
 def cmd_candidates(args) -> int:
+    paths = list(args.paths) + (SEL.read_list(args.files) if args.files else [])
+    if not paths:
+        raise UsageError("name the files: paths, folders, or --files <list>")
     out = Path(args.out).resolve()
-    _refuse_out_inside_inputs(out, args.paths)
+    _refuse_out_inside_inputs(out, paths)
     _refuse_unmarked_out(out)
-    inputs = _expand_reporting(args.paths)
+    inputs = _expand_reporting(paths)
     if args.ref and len(inputs) != 1:
         raise ValueError("--ref works with exactly one input file")
     if (args.ref or args.ref_rev) and any(format_of(p) == "svg" for p in inputs):
@@ -190,7 +194,7 @@ def cmd_sheet(args) -> int:
 def cmd_apply(args) -> int:
     out = Path(args.out).resolve()
     _print_ignored(out)
-    only = split_csv(args.only)
+    only = split_csv(args.only) + tuple(SEL.read_list(args.files) if args.files else ())
     needed = ["pillow"]
     if AP.needs_metrics(out, only):  # also refuses an `out` that is not a folder of candidates results
         needed += ["ffmpeg", "ssimulacra2"]
@@ -243,7 +247,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("paths", nargs="*", help="narrow the check to the formats present")
     d.set_defaults(func=cmd_doctor)
     c = sub.add_parser("candidates", help="try encoder settings per file, measure, gate and pick")
-    c.add_argument("paths", nargs="+", help="files or folders")
+    c.add_argument("paths", nargs="*", help="files or folders")
+    c.add_argument("--files", metavar="LIST", help="a file listing one path per line (- for stdin): the file set")
     c.add_argument("--out", required=True, help="working folder (from `imgopt workdir <task>`; never the repo)")
     c.add_argument("--profile", choices=PROFILE_NAMES, default="lossless")
     baseline = c.add_mutually_exclusive_group()
@@ -271,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("apply", help="write approved picks and re-verify them")
     a.add_argument("out")
     a.add_argument("--only", help="comma list of file names or paths")
+    a.add_argument("--files", metavar="LIST", help="like --only, one path per line (- for stdin)")
     a.add_argument("--approve", help="comma list of lossy picks the human approved on the page (file names or paths)")
     a.add_argument("--dest", help="folder for prepare/convert outputs instead of next to the source")
     a.set_defaults(func=cmd_apply)

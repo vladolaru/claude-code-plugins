@@ -21,6 +21,7 @@ from pathlib import Path
 from PIL import Image
 
 from . import ladder, metrics
+from . import selection as SEL
 from .candidates import kb, load_records, pick_of, sha256
 from .imaging import READ_FAILURES, display_pixels, read_facts
 from .ladder import UsageError
@@ -39,18 +40,13 @@ def _records(out: Path) -> list[tuple[Path, dict]]:
     return rows
 
 
-def _matches(record: dict, name: str) -> bool:
-    path = record["source"]["path"]
-    return name in (path, Path(path).name)
-
-
 def _selected(out: Path, only) -> tuple[list[tuple[Path, dict]], list[str]]:
-    """(the records `only` selects or all of them, the `only` names that match no record)."""
+    """(the records `only` selects or all of them, a problem line per `only` name that selects nothing or is
+    ambiguous)."""
     rows = _records(out)
     if not only:
         return rows, []
-    return ([(f, r) for f, r in rows if any(_matches(r, n) for n in only)],
-            [n for n in only if not any(_matches(r, n) for _, r in rows)])
+    return SEL.resolve(only, rows)
 
 
 def _to_apply(out: Path, only) -> list[tuple[Path, dict]]:
@@ -165,25 +161,27 @@ def _tools_changed(record: dict, tools: dict) -> str:
 
 def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = None, log=print) -> int:
     selected, unmatched = _selected(Path(out), only)
-    for name in unmatched:
-        log(f"No result in {out} for --only {name!r}; use a file name or path as `candidates` recorded it.")
+    for problem in unmatched:
+        log(f"--only: {problem}")
     rows = [(f, r) for f, r in selected if r["verdict"] == "apply"]
     if not rows:
         if not unmatched:
             log("Nothing to apply.")
         return 1 if unmatched else 0
     _refuse_clashes(rows, dest)
-    lossy = [r for _, r in rows if needs_tiles(r)]
-    unknown = [n for n in approve if not any(_matches(r, n) for r in lossy)]
-    for name in unknown:
-        log(f"--approve {name!r} matches no lossy pick of the last run; use a file name or path from the page.")
+    lossy_rows = [(f, r) for f, r in rows if needs_tiles(r)]
+    lossy = [r for _, r in lossy_rows]
+    approved_rows, unknown = SEL.resolve(approve, lossy_rows) if approve else ([], [])
+    for problem in unknown:
+        log(f"--approve: {problem}")
     if lossy and not approve:
         log("REFUSED: these picks are lossy and need the human's approval on the comparison page first:")
         for r in lossy:
             log(f"  {r['source']['path']}  ({pick_of(r)['label']})")
         log("Show the page (imgopt sheet); it gives the apply command with --approve for the files the human ticks.")
         return 1
-    held = [r for r in lossy if not any(_matches(r, n) for n in approve)]
+    approved_ids = {id(r) for _, r in approved_rows}
+    held = [r for r in lossy if id(r) not in approved_ids]
     for r in held:
         log(f"  not approved, left as it was: {r['source']['path']}")
     rows = [(f, r) for f, r in rows if not any(r is h for h in held)]
