@@ -245,7 +245,12 @@ def resize_width(img: Image.Image, width: int) -> Image.Image:
 
 
 def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
-    """What the viewer sees, scaled down to ``width`` when given; a width above the displayed one is refused."""
+    """What the viewer sees, scaled down to ``width`` when given; a width above the displayed one is refused.
+
+    The pixels are sRGB and carry no colour profile, so every pixel-route output is untagged sRGB: Pillow's
+    converted image holds a generated profile stamped with the current time, and cjpeg and oxipng copy a PNG
+    input's profile into their output, which made those candidates differ byte for byte on every run.
+    """
     im, icc = _oriented(path)
     if width and width > im.width:
         raise ImagingError(f"{Path(path).name}: --resize {width} would upscale it (it displays {im.width} px wide)")
@@ -255,6 +260,7 @@ def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
         rgba = im.convert("RGBA")
     if width and width != rgba.width:
         rgba = resize_width(rgba, width)
+    rgba.info.pop("icc_profile", None)
     return rgba
 
 

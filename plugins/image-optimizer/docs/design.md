@@ -35,7 +35,7 @@ SSIM is ffmpeg's `ssim` on gray (luma only), computed on both images flattened o
 
 ## What counts as lossless
 
-A pick is lossless only when a lossless encoder rewrote the source file itself. Then its colour profile and orientation survive and it needs no approval. Anything re-encoded from prepared pixels is lossy, even when its encoder is lossless: pixels converted to sRGB, rotated by their orientation tag, resized or flattened. Such a pick needs crops and the human's approval. Before this rule, a Display P3 PNG under `high` was reported as "identical", and `apply` overwrote it without its profile and with its wide-gamut colours clipped.
+A pick is lossless only when a lossless encoder rewrote the source file itself. Then its colour profile and orientation survive and it needs no approval. Anything re-encoded from prepared pixels is lossy, even when its encoder is lossless: pixels converted to sRGB, rotated by their orientation tag, resized or flattened. Such a pick needs crops and the human's approval. Before this rule, a Display P3 PNG under `high` was reported as "identical", and `apply` overwrote it without its profile and with its wide-gamut colours clipped. A pick made from pixels carries no colour profile, since its pixels are sRGB: the profile Pillow attaches when converting holds the time it was made, and cjpeg and oxipng copied it, so the same input gave different bytes on every run.
 
 Pillow's decoded pixels are not everything a browser or screen reader sees, so "identical" also covers:
 

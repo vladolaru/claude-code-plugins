@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageCms
 
 from imgopt_lib import imaging as I
 
@@ -36,6 +36,15 @@ def test_display_pixels_converts_a_device_profile_to_srgb(factory, device_icc):
     mean, peak = I.srgb_shift(tagged)
     assert mean > 0 and peak > 0
 
+
+
+@pytest.mark.parametrize("tag", ["device", "srgb"])
+def test_display_pixels_carry_no_colour_profile_so_encoders_write_the_same_bytes(factory, device_icc, tag):
+    # Pillow's generated sRGB profile holds the time it was made, and cjpeg and oxipng copy a PNG input's profile
+    # into their output; an sRGB source's own profile would ride along the same way.
+    icc = device_icc if tag == "device" else ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    pixels = I.display_pixels(factory.photo(name=f"{tag}.png", icc=icc))
+    assert "icc_profile" not in pixels.info
 
 def test_is_srgb():
     assert I.is_srgb("sRGB IEC61966-2.1")

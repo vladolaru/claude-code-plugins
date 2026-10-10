@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles for the agent and a comparison page for the human, re-measured writes, and a reviewer-runnable SSIM check.
-- Resizing to a target width, PNG-to-JPEG, and WebP or AVIF output (labelled uncalibrated) under the `high` or `medium` gates; like any pick made from re-encoded pixels, these wait for approval on the comparison page, and a resized or converted file that comes out larger than its original is flagged LARGER.
+- Resizing to a target width, PNG-to-JPEG, and WebP or AVIF output (labelled uncalibrated) under the `high` or `medium` gates, written as untagged sRGB so the same input always gives the same bytes; like any pick made from re-encoded pixels, these wait for approval on the comparison page, and a resized or converted file that comes out larger than its original is flagged LARGER.
 - The comparison page shows each lossy pick's 1:1 crops beside its gates and builds the `apply --approve a,b` command from the picks the human ticks; `apply` writes only the lossy picks named there.
 - `imgopt.py workdir <task>` gives a working folder that survives sessions, so a re-run reuses earlier candidates; sandboxes get one under `$TMPDIR`.
 - `candidates` refuses a working folder inside an input folder or a git work tree, or one that already has files it did not make.
