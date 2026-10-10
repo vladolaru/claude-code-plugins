@@ -141,9 +141,9 @@ def test_report_header_names_the_missing_optional_tools(tmp_path):
     assert "- Optional tools missing: not recorded" in report.render(tmp_path)
 
 
-def test_report_header_names_the_corpus_checksum_and_the_ledger_skips(tmp_path):
+def test_report_header_names_the_corpus_checksum_and_the_machine_dependent_skips(tmp_path):
     (tmp_path / "rows.jsonl").write_text("")
     (tmp_path / "timing.json").write_text(json.dumps({"corpus_sha256": "ab12"}))
     text = report.render(tmp_path)
     assert "- Corpus checksum (corpus.json sha256): ab12" in text
-    assert "written.jsonl" in text
+    assert "variant store's index" in text

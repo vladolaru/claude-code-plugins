@@ -154,7 +154,7 @@ def _run_category(job: Job, category: str, files: list[tuple[Path, str]], chk, o
                 skips[str(Path(found.group(1)).resolve())] = found.group(2).strip()
 
         opts = C.Options(profile=job.profile, out=out, gates=G.gates_for(job.profile), resize=job.resize,
-                         out_format=job.out_format, waived=chk.waived)
+                         out_format=job.out_format, waived=chk.waived, use_store=False)
         started = time.monotonic()
         try:
             records = C.run([p for p, _ in files], opts, chk.tools, log=log, jobs=jobs_parallel)

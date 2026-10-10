@@ -19,6 +19,7 @@ from . import gates as G
 from . import metrics as M
 from . import selection as SEL
 from . import sheet as S
+from . import store as ST
 from . import tools as T
 from . import workdirs as W
 from .formats import OUTPUT_FORMATS, WORKDIR_MARKER, expand_inputs, format_of, subdir_name
@@ -237,6 +238,12 @@ def cmd_workdir(args) -> int:
 
 
 def cmd_clean(args) -> int:
+    if args.store:
+        removed, freed = ST.prune(max_age_days=ST.MAX_AGE_DAYS if args.older_than is None else args.older_than)
+        print(f"Pruned {removed} variant(s), freed {freed / 1e6:.1f} MB; the store holds {ST.size() / 1e6:.1f} MB.")
+        return 0
+    if not args.out:
+        raise UsageError("name the working folder, or pass --store")
     freed = W.clean(Path(args.out).resolve(), keep_picks=args.keep_picks)
     print(f"Freed {freed / 1e6:.1f} MB.")
     return 0
@@ -297,8 +304,11 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("task")
     w.set_defaults(func=cmd_workdir)
     k = sub.add_parser("clean", help="delete a working folder, or with --keep-picks only its losing candidates")
-    k.add_argument("out")
+    k.add_argument("out", nargs="?", help="the working folder (omit with --store)")
     k.add_argument("--keep-picks", action="store_true")
+    k.add_argument("--store", action="store_true", help="prune the shared variant store instead of a folder")
+    k.add_argument("--older-than", type=float, metavar="DAYS",
+                   help=f"with --store: drop variants unused for this many days (default {ST.MAX_AGE_DAYS})")
     k.set_defaults(func=cmd_clean)
     return parser
 

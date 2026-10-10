@@ -37,11 +37,13 @@ from pathlib import Path
 from . import compare as CP
 from . import gates as G
 from . import ladder, metrics
+from . import store as ST
 from .formats import EXT_BY_FORMAT, format_of, subdir_name
 from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
                       srgb_shift)
+from .store import sha256  # also `candidates.sha256`, which `apply` and the tests import
 from .tools import describe
-from .workdirs import folder_size, mark, written_hashes
+from .workdirs import folder_size, mark
 
 SCHEMA = 1
 # Bump when a cached record would be wrong or lack a key. 6: svgo keeps <desc> and empty groups;
@@ -68,18 +70,11 @@ class Options:
     out_format: str = "keep"
     waived: tuple[str, ...] = ()
     min_saving: int = 0
+    use_store: bool = True  # False for the bench: its timings must not come from the store
 
 
 def kb(n: int) -> str:
     return f"{n / 1024:.1f} KB"
-
-
-def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def all_errored(record: dict) -> bool:
@@ -344,12 +339,13 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     folder = opts.out / subdir_name(src)
     ref_path = opts.refs.get(src, src)
     src_hash, ref_hash = sha256(src), sha256(ref_path)
-    written = written_hashes() if opts.profile != "lossless" else set()
-    if src not in opts.refs and src_hash in written:
+    lossy_run = opts.profile != "lossless"
+    if lossy_run and src not in opts.refs and ST.produced_lossy(src_hash):
         raise ImagingError(f"{src.name}: an earlier imgopt lossy pick wrote this file, so measuring it again "
                            "would stack a second lossy pass; measure against the original with --ref-rev <commit "
                            "before that change> or --ref <original>")
-    if src in opts.refs and ref_hash in written:  # a revision after the pick was committed, or the pick itself
+    # a revision after the pick was committed, or the pick itself
+    if lossy_run and src in opts.refs and ST.produced_lossy(ref_hash):
         baseline = f"its content at {opts.ref_rev}" if opts.ref_rev else str(ref_path)
         raise ImagingError(f"{src.name}: the baseline ({baseline}) is itself an earlier imgopt lossy pick, so "
                            "measuring against it would stack a second lossy pass; use a baseline from before "
@@ -430,8 +426,11 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         for rung in (r for r in rungs if _available(r, tools)):
             key = _key(src_hash, ref_hash, opts, rung, tools)
             old = previous.get(key)
+            stored = ST.get(key) if opts.use_store and not _reusable(old, folder) else None
             if _reusable(old, folder):
                 rec = _reuse(old)
+            elif stored is not None and ST.restore(stored, folder):
+                rec = _reuse(stored)
             elif fmt == "svg":
                 rec = _svg_rung(rung, key, inputs, folder, src, tools)
             else:
@@ -467,6 +466,9 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "verdict": verdict, "verdict_reason": why, "complete": True,
     }
     _write_record(folder, record)
+    if opts.use_store:
+        for cand in cands:
+            ST.put(cand, folder)
     return record
 
 
@@ -657,4 +659,9 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
                 f"(first error: {record['candidates'][0]['error']})")
         records.append(record)
     summarize(records, opts.out, script or Path("imgopt.py"), tools, log)
+    if opts.use_store:
+        removed, freed = ST.prune()
+        pruned = f"; pruned {removed} unused variant(s), {freed / 1e6:.1f} MB" if removed else ""
+        log(f"Variant store: {ST.size() / 1e6:.1f} MB at {ST.root()} (variants unused for {ST.MAX_AGE_DAYS} days "
+            f"go, and it stays under {ST.MAX_BYTES / 1e9:.0f} GB){pruned}")
     return records

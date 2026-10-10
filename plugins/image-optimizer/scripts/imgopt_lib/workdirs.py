@@ -68,36 +68,6 @@ def mark(out: Path) -> None:
     (out / WORKDIR_MARKER).write_text(WORKDIR_MARKER_TEXT)
 
 
-def ledger_path() -> Path:
-    """One line per lossy pick `apply` wrote (sha256 of the written file): how `candidates` recognises a file
-    an earlier lossy pass produced, so it is not re-encoded against itself."""
-    return cache_root() / "written.jsonl"
-
-
-def record_written(path: Path, sha: str, label: str) -> None:
-    ledger = ledger_path()
-    try:
-        ledger.parent.mkdir(parents=True, exist_ok=True)
-        with open(ledger, "a") as fh:
-            fh.write(json.dumps({"sha256": sha, "path": str(path), "label": label}) + "\n")
-    except OSError:  # a sandbox that cannot write the cache: the guard is best effort there
-        pass
-
-
-def written_hashes() -> set[str]:
-    try:
-        lines = ledger_path().read_text().splitlines()
-    except OSError:
-        return set()
-    hashes = set()
-    for line in lines:
-        try:
-            hashes.add(json.loads(line)["sha256"])
-        except (json.JSONDecodeError, KeyError, TypeError):  # a torn or foreign line: skip it, keep the rest
-            continue
-    return hashes
-
-
 def folder_size(path: Path) -> int:
     return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
 

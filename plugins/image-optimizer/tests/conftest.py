@@ -212,5 +212,5 @@ def toolset():
 
 @pytest.fixture(autouse=True)
 def _private_cache(monkeypatch, tmp_path_factory):
-    """No test (or CLI subprocess it starts) writes the real cache: `apply` appends to its written-files ledger."""
+    """No test (or CLI subprocess it starts) writes the real cache: the variant store lives under it."""
     monkeypatch.setenv("IMGOPT_CACHE", str(tmp_path_factory.mktemp("imgopt-cache")))

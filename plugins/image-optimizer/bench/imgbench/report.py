@@ -308,7 +308,7 @@ def _missing_optional(meta: dict) -> str:
 
 def render(run_dir: Path) -> str:
     """The full report: a header naming the run, commit, corpus version and checksum, tool versions, the optional
-    tools each job ran without and the machine-dependent ledger skips, then ``markdown``."""
+    tools each job ran without and the machine-dependent skips, then ``markdown``."""
     run_dir = Path(run_dir)
     meta = timing(run_dir)
     header = [f"# imgbench run {run_dir.name}", ""]
@@ -320,7 +320,7 @@ def render(run_dir: Path) -> str:
     if meta.get("tools"):
         header.append(f"- {meta['tools']}")
     header.append(f"- Optional tools missing: {_missing_optional(meta)}")
-    header.append("- Machine-dependent skips: for the lossy profiles imgopt skips a file whose sha256 is in this "
-                  "machine's written.jsonl ledger (a file an earlier `apply` wrote); such skips are listed under "
-                  "Skip reasons.")
+    header.append("- Machine-dependent skips: for the lossy profiles imgopt skips a file whose sha256 is a lossy "
+                  "variant it produced earlier on this machine (its variant store's index); such skips are listed "
+                  "under Skip reasons.")
     return "\n".join(header + ["", markdown(load(run_dir))]).rstrip("\n") + "\n"

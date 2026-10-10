@@ -12,6 +12,7 @@ from imgopt_lib import gates as G
 from imgopt_lib import imaging as I
 from imgopt_lib import ladder
 from imgopt_lib import sheet as S
+from imgopt_lib import store as ST
 from imgopt_lib import workdirs as W
 from imgopt_lib.formats import WORKDIR_MARKER
 from imgopt_lib.tools import Tool
@@ -231,13 +232,26 @@ def test_svg_pick_that_loses_semantics_is_discarded_with_the_reason(factory, too
 def test_cache_regenerates_a_candidate_whose_file_was_deleted(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo().resolve()
+    [first] = C.run([src], opts(tmp_path / "out", use_store=False), tools, log=quiet)
+    picked = C.pick_of(first)
+    folder = C.load_records(tmp_path / "out")[0][0]
+    (folder / picked["file"]).unlink()
+    calls = counting_generate(monkeypatch)
+    [r] = C.run([src], opts(tmp_path / "out", use_store=False), tools, log=quiet)
+    assert calls == [picked["label"]]
+    assert (folder / picked["file"]).is_file() and C.pick_of(r)["file"] == picked["file"]
+
+
+def test_a_candidate_whose_file_was_deleted_comes_back_from_the_store(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo().resolve()
     [first] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
     picked = C.pick_of(first)
     folder = C.load_records(tmp_path / "out")[0][0]
     (folder / picked["file"]).unlink()
     calls = counting_generate(monkeypatch)
     [r] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
-    assert calls == [picked["label"]]
+    assert calls == []
     assert (folder / picked["file"]).is_file() and C.pick_of(r)["file"] == picked["file"]
 
 
@@ -885,7 +899,7 @@ def test_an_encoder_killed_by_a_signal_is_not_cached_as_a_refusal(factory, tools
 def test_a_file_written_by_a_lossy_pick_is_not_measured_again_without_a_baseline(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"jpeg"})
     src = factory.photo(size=(200, 150))
-    W.record_written(src, C.sha256(src), "jpegoptim-m70")
+    ST.mark_produced(C.sha256(src), "lossy")
     lines = []
     records = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=lines.append)
     assert records == [] and any("an earlier imgopt lossy pick wrote this file" in l for l in lines)
@@ -906,7 +920,8 @@ def test_a_file_skipped_in_a_rerun_leaves_the_last_run(factory, toolset, tmp_pat
     out = tmp_path / "out"
     first = C.run([a, b], opts(out, "high"), tools, log=quiet, jobs=jobs)
     assert [S.needs_tiles(r) for r in first] == [True, True]  # both lossy picks wait for approval
-    assert AP.apply(out, tools=tools, approve=(str(a),), log=quiet) == 0  # a is rewritten and ledgered
+    assert AP.apply(out, tools=tools, approve=(str(a),), log=quiet) == 0  # a is rewritten; its bytes are a
+    # produced lossy variant
     second = C.run([a, b], opts(out, "high"), tools, log=quiet, jobs=jobs)
     assert [r["source"]["path"] for r in second] == [str(b)]
     assert [r["source"]["path"] for _, r in C.load_records(out)] == [str(b)]
@@ -921,7 +936,7 @@ def test_a_baseline_an_earlier_lossy_pick_wrote_is_refused(factory, toolset, tmp
     tools = toolset("recompress", "high", {"jpeg"})
     src = factory.photo(size=(200, 150)).resolve()
     original = factory.photo(name="orig.jpg", size=(200, 150), quality=60).resolve()
-    W.record_written(original, C.sha256(original), "jpegoptim-m60")
+    ST.mark_produced(C.sha256(original), "lossy")
     lines = []
     records = C.run([src], opts(tmp_path / "out", "high", refs={src: original}, ref_rev=ref_rev), tools,
                     log=lines.append)
@@ -933,7 +948,7 @@ def test_a_baseline_an_earlier_lossy_pick_wrote_is_refused(factory, toolset, tmp
 def test_a_lossless_job_may_run_on_a_file_a_lossy_pick_wrote(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo()
-    W.record_written(src, C.sha256(src), "pngquant-q70")
+    ST.mark_produced(C.sha256(src), "lossy")
     assert len(C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)) == 1
 
 
