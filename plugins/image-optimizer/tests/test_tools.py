@@ -70,7 +70,7 @@ def test_lossy_recompress_requires_metrics_and_blocks_on_encoders():
     req = T.requirements("recompress", "high", {"jpeg"})
     assert {"ffmpeg", "ssimulacra2"} <= set(req.required)
     assert {"guetzli", "cjpeg"} <= set(req.quality)
-    assert set(req.optional) == {"cjpegli", "butteraugli_main"}
+    assert set(req.optional) == {"butteraugli_main"}
 
 
 def test_formats_narrow_the_check():
@@ -144,7 +144,7 @@ def test_jpeg_to_png_requires_the_png_ladder():
 
 def test_png_to_jpeg_requires_the_jpeg_encoders():
     req = T.requirements("convert", "high", {"png"}, "jpeg")
-    assert "cjpeg" in req.required and "guetzli" in req.quality
+    assert {"cjpeg", "cjpegli"} <= set(req.required) and "guetzli" in req.quality
     assert not {"pngquant", "oxipng"} & set(req.all)
 
 
@@ -156,7 +156,7 @@ def test_jpeg_to_webp_requires_only_what_the_ladder_runs():
 
 def test_prepare_requires_the_pixel_encoders_not_the_lossless_ones():
     req = T.requirements("prepare", "high", {"jpeg"})
-    assert "cjpeg" in req.required and "guetzli" in req.quality
+    assert {"cjpeg", "cjpegli"} <= set(req.required) and "guetzli" in req.quality
     assert "jpegoptim" not in req.all
 
 
@@ -213,14 +213,20 @@ def test_label_names_the_version_or_the_build(tmp_path):
     assert unversioned.cache_id in T.describe({"ssimulacra2": unversioned})
 
 
-def test_jpegli_is_optional_and_doctor_says_what_it_adds():
-    req = T.requirements("recompress", "high", {"jpeg"})
-    assert "cjpegli" in req.optional and "cjpegli" not in req.quality
+@pytest.mark.parametrize("job,target", [("recompress", "keep"), ("convert", "jpeg"), ("prepare", "keep")])
+def test_jpegli_is_required_for_lossy_jpeg_and_cannot_be_waived(job, target):
+    formats = {"png"} if job == "convert" else {"jpeg"}
+    req = T.requirements(job, "medium", formats, target)
+    assert "cjpegli" in req.required and "cjpegli" not in req.quality + req.optional
+    chk = T.check(req, env(), allow_missing=["cjpegli"])
+    assert chk.blocked and chk.refused_waivers == ("cjpegli",)
+    text = T.report(chk, job=job, profile="medium", platform="darwin")
+    assert "4.6-15 points" in text and "cjpegli on PATH" in text
+
+
+def test_jpegli_is_not_asked_for_where_its_ladder_does_not_run():
     assert "cjpegli" not in T.requirements("recompress", "lossless", {"jpeg"}).all
-    text = T.report(T.check(T.Requirements(("pillow",), (), ("cjpegli",)), env()), job="recompress",
-                    profile="high", platform="darwin")
-    assert "Ready." in text and "BLOCKED" not in text
-    assert "31 WooCommerce photos" in text and "best" not in text
+    assert "cjpegli" not in T.requirements("recompress", "high", {"png"}).all
     [line] = T.install_lines(["cjpegli"], platform="darwin")
     assert "-DJPEGLI_ENABLE_OPENEXR=OFF" in line and "cjpegli on PATH" in line
 

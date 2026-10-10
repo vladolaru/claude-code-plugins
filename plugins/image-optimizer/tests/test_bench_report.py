@@ -10,7 +10,6 @@ sys.path.insert(0, str(BENCH))
 from imgbench import harness, manifest  # noqa: E402
 from imgbench import report as R  # noqa: E402
 from imgbench.harness import family_of  # noqa: E402
-from imgopt_lib import tools as T  # noqa: E402
 
 
 def row(category, size, cands, profile="high"):
@@ -202,7 +201,7 @@ def test_all_equals_saved_on_a_real_run(factory, toolset, tmp_path):
                                           license="CC0"))
     manifest.write(entries, corpus)
     run_dir = harness.run(corpus, tmp_path / "run", [harness.Job("recompress-high", ("photo-small",), "high")],
-                          say=lambda _: None, allow_missing=T.OPTIONAL_ENCODERS)  # the invariant holds either way
+                          say=lambda _: None)
     rows = R.load(run_dir)
     assert any(r["verdict"] == "apply" for r in rows)  # the invariant is about something
     assert R.ablate(rows, set())["photo-small"] == pytest.approx(R._real_saved(rows))

@@ -9,8 +9,8 @@ in the 2026-10-07 WooCommerce session; svgo older than 4 and oxipng older than 1
 profile and the formats present to required, quality-affecting and optional
 tools; the encoders come from ``ladder.tools_for``, so a job asks for exactly
 what its ladder runs (a convert job for the target format's encoders). ``check()`` applies the policy: required tools always block,
-quality-affecting ones block unless waived, optional ones never block. ``OPTIONAL_ENCODERS`` are ladder
-encoders that count as optional: the ladder uses them when present and notes their absence on every output.
+quality-affecting ones block unless waived, optional ones never block. ``REQUIRED_ENCODERS`` are ladder
+encoders that are required whenever the ladder runs them, so they cannot be waived either.
 Linux package names in ``APT`` are best effort and unverified.
 """
 
@@ -49,8 +49,8 @@ ADDS = {
     "oxipng": "lossless PNG optimization",
     "pngquant": "palette PNG candidates, usually the largest PNG savings",
     "guetzli": "perceptual JPEG encoder; often the best size for larger photos",
-    "cjpegli": "jpegli JPEG encoder: smaller JPEGs on some photos (36.3% saved against 34.6% without it, 31 "
-               "WooCommerce photos under high; not yet measured on other images)",
+    "cjpegli": "jpegli JPEG encoder: the most-picked lossy JPEG encoder; without it the high ladder saved 4.6-15 "
+               "points less on photos (benchmark corpus)",
     "gifsicle": "lossless GIF optimization",
     "svgo": "SVG optimization",
     "rsvg-convert": "renders SVG before and after so a changed drawing is rejected",
@@ -75,7 +75,7 @@ OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install 
          # Self-contained: jpegli static, libpng bundled, OpenEXR/GIF/JPEG readers off (imgopt feeds it PNG
          # only), so the binary loads nothing but system libraries and survives deleting the build folder or
          # upgrading Homebrew libraries.
-         "cjpegli": "optional, build jpegli for smaller JPEGs (not packaged by Homebrew or apt; needs git, "
+         "cjpegli": "build jpegli (not packaged by Homebrew or apt; needs git, "
                     "cmake and a C++ compiler): "
                     "git clone --recursive https://github.com/google/jpegli && cd jpegli && "
                     "cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF "
@@ -84,9 +84,10 @@ OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install 
                     "then put build/tools/cjpegli on PATH",
          "oxipng": "cargo install oxipng"}
 
-# Encoders a ladder uses when present but never waits for: jpegli has no package, and its measured gain (36.3%
-# against 34.6% under `high`, 31 WooCommerce photos) rests on one corpus until the benchmark corpus runs.
-OPTIONAL_ENCODERS = frozenset({"cjpegli"})
+# Encoders required whenever the ladder runs them, with no waiver: removing jpegli cost 4.6-15 points under
+# `high` on the benchmark corpus's photo categories (phone uploads 30.9% -> 15.9%) and 3.4-8.7 under `medium`,
+# more than any waivable tool. It has no package, so the first JPEG job asks for a cmake build.
+REQUIRED_ENCODERS = frozenset({"cjpegli"})
 
 # The ImageOptim bundle comes first only for jpegoptim: it is the one build linked against mozjpeg (Homebrew's
 # links libjpeg-turbo). Everything else prefers what the package manager keeps current; the bundle is a
@@ -298,15 +299,15 @@ def requirements(job: str, profile: str = "lossless", formats=None, target: str 
         if fmt == "svg" and ladder_tools:
             required.append("rsvg-convert")  # the render check that decides every SVG candidate
         quality += sorted(ladder_tools)
+        required += sorted(ladder_tools & REQUIRED_ENCODERS)
         if job in ("prepare", "convert") and fmt in ("jpeg", "png"):
             encoder = TARGET_ENCODER.get(fmt if out_format == "keep" else out_format)
             required += [encoder] if encoder in ladder_tools else []
     if profile != "lossless":
         required += ["ffmpeg", "ssimulacra2"]
         optional += ["butteraugli_main"]
-    optional = [t for t in quality if t in OPTIONAL_ENCODERS] + optional
     req = _dedupe(required)
-    return Requirements(req, tuple(q for q in _dedupe(quality) if q not in req and q not in OPTIONAL_ENCODERS),
+    return Requirements(req, tuple(q for q in _dedupe(quality) if q not in req),
                         _dedupe(optional))
 
 

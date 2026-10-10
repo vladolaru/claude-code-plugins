@@ -267,8 +267,6 @@ def test_lossy_jpeg_adds_jpegli_from_the_flattened_pixels():
 
 def test_cjpegli_encodes_a_progressive_jpeg(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"jpeg"})
-    if not tools["cjpegli"].ok:
-        pytest.skip("needs cjpegli")
     src = factory.photo()
     flat = tmp_path / "pixels_flat.png"
     I.flatten(I.display_pixels(src), "white").save(flat)

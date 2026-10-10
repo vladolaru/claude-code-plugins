@@ -31,17 +31,6 @@ def split_csv(value: str | None) -> tuple[str, ...]:
     return tuple(v.strip() for v in (value or "").split(",") if v.strip())
 
 
-def _waivers(value: str | None) -> tuple[str, ...]:
-    """--allow-missing as names. An optional encoder never blocks, so naming one waives nothing; say so, for an
-    agent following instructions written when it was required."""
-    names = split_csv(value)
-    for name in names:
-        if name in T.OPTIONAL_ENCODERS:
-            print(f"note: {name} is optional and never blocks, so --allow-missing {name} waives nothing",
-                  file=sys.stderr)
-    return names
-
-
 def _formats(paths) -> set[str]:
     return {format_of(p) for p in expand_inputs(paths)} if paths else set()
 
@@ -130,7 +119,7 @@ def cmd_candidates(args) -> int:
     if (args.ref or args.ref_rev) and any(format_of(p) == "svg" for p in inputs):
         raise UsageError("--ref and --ref-rev do not apply to SVG: the rendering check compares svgo's output "
                          "with the source itself")
-    waive = _waivers(args.allow_missing)
+    waive = split_csv(args.allow_missing)
     chk = T.ensure(_job_for(args), args.profile, {format_of(p) for p in inputs}, args.format, waive)
     gates = G.gates_for(args.profile, ssim=args.ssim, ss2=args.ss2, band=args.band)
     refs = {}
@@ -146,7 +135,7 @@ def cmd_candidates(args) -> int:
 
 def cmd_inspect(args) -> int:
     files = _expand_reporting(args.paths)
-    chk = T.ensure("audit", "lossless", {format_of(p) for p in files}, allow_missing=_waivers(args.allow_missing))
+    chk = T.ensure("audit", "lossless", {format_of(p) for p in files}, allow_missing=split_csv(args.allow_missing))
     with tempfile.TemporaryDirectory() as tmp:
         rows = [A.inspect_file(p, chk.tools, Path(tmp)) for p in files]
     if args.json:

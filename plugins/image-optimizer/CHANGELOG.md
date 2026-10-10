@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `/optimize-images` now follows the new `image-optimization` skill: it measures every candidate against a quality profile (`lossless` by default, `high` or `medium` on request) and picks per file instead of running one lossless pass.
-- Encoders are called directly (mozjpeg, oxipng, pngquant, guetzli, gifsicle, svgo, and jpegli when installed) instead of through the x86-only `imageoptim` CLI, and work stops until missing required tools are installed or explicitly waived; optional tools never stop it.
+- Encoders are called directly (mozjpeg, jpegli, jpegoptim, oxipng, pngquant, guetzli, gifsicle and svgo) instead of through the x86-only `imageoptim` CLI, and work stops until missing required tools are installed or explicitly waived; optional tools never stop it.
 - Homebrew's tools are preferred to the copies bundled with ImageOptim.app (except jpegoptim, whose bundled build is the one linked to mozjpeg), and `imgopt.py doctor` suggests the Homebrew install when only an older bundled copy is found.
 - oxipng 10 or newer is required, so ImageOptim's bundled oxipng 9 is refused and PNG work waits for `brew install oxipng`; oxipng 9's zopfli mode took about ten times as long for a fifth of the saving.
 - Runtime requirements: `python3` with Pillow for everything, plus ffmpeg and ssimulacra2 (from jpeg-xl) for the `high` and `medium` profiles; `imgopt.py doctor` lists the rest per job.
@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sheet` and `apply` act only on the files the last `candidates` run in a working folder measured, so a file that run skipped is not offered again, and they name the records they ignore.
 - An interrupted `candidates` run resumes from its last finished candidate, and its partial results are never applied.
 - The `candidates` summary and the page lead with whole-batch totals, signed, beside the files that will change, and printed commands quote their paths.
-- Lossy JPEG jobs also try jpegli when it is installed; it is optional because no package manager ships it and its gain (about 2 points on 31 WooCommerce photos) is unmeasured elsewhere, and `imgopt.py doctor` prints a build that keeps working after Homebrew upgrades.
+- Lossy JPEG jobs require jpegli, which cannot be waived because the `high` ladder saved 4.6 to 15 points less on photos without it; no package manager ships it, so `imgopt.py doctor` prints a build that keeps working after Homebrew upgrades.
 - PNGs up to 2 megapixels (after any resize) also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because on 5 MP screenshots it took one to three minutes per file for 0.4 to 3%.
 - Under `high` and `medium`, a lossy pick's Evidence SSIM (a luma SSIM, so ssimulacra2 goes in the evidence table too; what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
 - Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.

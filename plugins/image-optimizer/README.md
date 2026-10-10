@@ -56,7 +56,7 @@ brew install mozjpeg jpegoptim oxipng pngquant guetzli gifsicle librsvg ffmpeg j
 npm install -g svgo   # svgo 4 or newer
 ```
 
-**Optional: jpegli for smaller JPEGs.** When jpegli's `cjpegli` is on `PATH`, the lossy JPEG ladder also tries it; no package manager ships it yet. On 31 WooCommerce photos it gave the smallest passing JPEG for 13, and the `high` ladder saved 36.3% with it against 34.6% without; jobs run without it and say so. Build it once (needs git, cmake and a C++ compiler; `brew install cmake` if missing) and put the binary on `PATH`:
+**jpegli, for any lossy JPEG output.** jpegli's `cjpegli` is required whenever a `high` or `medium` job writes a JPEG, and it cannot be waived: on the benchmark corpus it was the most-picked JPEG encoder, and without it the `high` ladder saved 4.6 to 15 points less on photos. No package manager ships it, so build it once (needs git, cmake and a C++ compiler; `brew install cmake` if missing) and put the binary on `PATH`:
 
 ```bash
 git clone --recursive https://github.com/google/jpegli && cd jpegli

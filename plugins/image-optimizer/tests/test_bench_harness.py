@@ -1,4 +1,3 @@
-import dataclasses
 import hashlib
 import json
 import sys
@@ -117,28 +116,18 @@ def test_row_takes_in_place_from_the_record(target, resize, in_place):
     assert harness._row(job, "icon", "icon/a.png", record, 1.0, 0)["in_place"] is in_place
 
 
-def missing_cjpegli(monkeypatch):
-    """Make every job's tool check report cjpegli missing, whatever this machine has."""
-    real = harness.T.ensure
-    monkeypatch.setattr(harness.T, "ensure", lambda *a, **k: dataclasses.replace(
-        real(*a, **k), missing_optional=("cjpegli",)))
-
-
-def test_run_refuses_a_missing_optional_encoder_unless_allowed(factory, toolset, tmp_path, monkeypatch):
-    toolset("recompress", "lossless", {"jpeg", "png"})
+def test_run_checks_every_job_s_tools_before_writing_anything(factory, tmp_path, monkeypatch):
     corpus = tiny_corpus(factory, tmp_path)
-    job = harness.Job("lossless", ("photo-small",), "lossless")
-    missing_cjpegli(monkeypatch)
-    with pytest.raises(T.ToolingError, match=r"lossless: cjpegli .*--allow-missing cjpegli"):
-        harness.run(corpus, tmp_path / "refused", [job], say=lambda _: None)
+    seen = []
+
+    def blocked(*args, **kwargs):
+        seen.append((args, kwargs))
+        raise T.ToolingError("BLOCKED: cjpegli")
+    monkeypatch.setattr(harness.T, "ensure", blocked)
+    with pytest.raises(T.ToolingError, match="cjpegli"):
+        harness.run(corpus, tmp_path / "refused", [harness.Job("high", ("photo-small",), "high")], say=lambda _: None)
     assert not (tmp_path / "refused").exists()
-    run_dir = harness.run(corpus, tmp_path / "run", [job], say=lambda _: None, allow_missing={"cjpegli"})
-    assert json.loads((run_dir / "timing.json").read_text())["jobs"]["lossless"]["missing_optional"] == ["cjpegli"]
-
-
-def test_run_refuses_to_allow_a_tool_that_is_not_an_optional_encoder(capsys):
-    assert cli.main(["run", "--allow-missing", "oxipng"]) == 2
-    assert "cjpegli" in capsys.readouterr().out
+    assert seen and all("allow_missing" not in kwargs for _, kwargs in seen)  # a run never waives a tool
 
 
 def test_report_header_names_the_missing_optional_tools(tmp_path):

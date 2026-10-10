@@ -40,7 +40,7 @@ from . import ladder, metrics
 from .formats import EXT_BY_FORMAT, format_of, subdir_name
 from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
                       srgb_shift)
-from .tools import OPTIONAL_ENCODERS, describe
+from .tools import describe
 from .workdirs import folder_size, mark, written_hashes
 
 SCHEMA = 1
@@ -408,15 +408,10 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         notes.append(f"measured against {ref_path}")
     skipped = [r for r in rungs if not _available(r, tools)]
     missing = sorted({n for r in skipped for n in r.tools if not (n in tools and tools[n].ok)})
-    optional_missing = [n for n in missing if n in OPTIONAL_ENCODERS]
-    unwaived = [n for n in missing if n not in opts.waived and n not in OPTIONAL_ENCODERS]
+    unwaived = [n for n in missing if n not in opts.waived]
     if unwaived:  # the strict tool check must have blocked these; going on would silently skip rungs
         raise RuntimeError(f"{src.name}: the ladder needs {', '.join(unwaived)}, which the tool check neither "
                            "found nor saw waived (an imgopt bug: tools.requirements and the ladder disagree)")
-    if optional_missing:
-        n_opt = sum(1 for r in skipped if set(r.tools) & set(optional_missing))
-        notes.append(f"{', '.join(optional_missing)} not installed: {n_opt} rung(s) skipped "
-                     "(optional; picks may be larger)")
     waived_here = [n for n in missing if n in opts.waived]
     if waived_here:
         n_waived = sum(1 for r in skipped if set(r.tools) & set(waived_here))
@@ -462,7 +457,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "profile": opts.profile, "gates": asdict(opts.gates), "resize": opts.resize,
         "format_requested": opts.out_format, "format": target_fmt, "target": str(target),
         "uncalibrated": target_fmt in UNCALIBRATED,
-        "waived": list(opts.waived), "optional_missing": optional_missing, "notes": notes,
+        "waived": list(opts.waived), "notes": notes,
         "tools": {n: {"path": t.path, "version": t.version, "id": t.cache_id}
                   for n, t in sorted(tools.items()) if t.ok},
         "candidates": cands, "pick": chosen["file"] if chosen else None,
@@ -538,9 +533,6 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     if waived:
         log("WAIVED TOOLS (fewer candidates were tried, so picks may be larger than with them; state this in "
             "any report): " + ", ".join(waived))
-    absent = sorted({n for r in records for n in r.get("optional_missing", [])})
-    if absent:
-        log("OPTIONAL TOOLS MISSING (picks may be larger; mention it in any report): " + ", ".join(absent))
     lossy = [r for r in applied if pick_of(r)["kind"] == "lossy"]
     q = shlex.quote
     command = f"python3 {q(str(script))}"

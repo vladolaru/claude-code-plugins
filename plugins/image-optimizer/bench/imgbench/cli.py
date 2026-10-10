@@ -10,7 +10,6 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from imgopt_lib import tools as T
 from imgopt_lib.ladder import UsageError
 from imgopt_lib.tools import ToolingError
 
@@ -122,10 +121,6 @@ def cmd_run(args) -> int:
     if isinstance(chosen, str):
         print(chosen)
         return 2
-    allowed = _split(args.allow_missing)
-    if set(allowed) - T.OPTIONAL_ENCODERS:
-        print(f"--allow-missing takes optional encoders only: {', '.join(sorted(T.OPTIONAL_ENCODERS))}")
-        return 2
     corpus = paths.corpus_dir()
     if not (corpus / manifest.MANIFEST).is_file():
         print(f"{corpus} has no {manifest.MANIFEST}: run `build` first")
@@ -134,7 +129,7 @@ def cmd_run(args) -> int:
     run_dir = harness.new_run_dir(paths.runs_dir(), datetime.now(timezone.utc).strftime("%Y-%m-%d"), commit)
     print(f"run folder: {run_dir}")
     try:
-        harness.run(corpus, run_dir, chosen, jobs_parallel=max(1, args.jobs_parallel), allow_missing=allowed,
+        harness.run(corpus, run_dir, chosen, jobs_parallel=max(1, args.jobs_parallel),
                     meta={"commit": commit, "started": datetime.now(timezone.utc).isoformat(timespec="seconds")})
     except ToolingError as error:
         print(error)
@@ -222,8 +217,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--only-job", metavar="JOB,...", help="run just these jobs: "
                      + ", ".join(j.name for j in harness.JOBS))
     run.add_argument("--only-category", metavar="CATEGORY,...", help="narrow every job to these categories")
-    run.add_argument("--allow-missing", metavar="ENCODER,...", help="run without these optional encoders ("
-                     + ", ".join(sorted(T.OPTIONAL_ENCODERS)) + "); without it a missing one stops the run")
     run.set_defaults(func=cmd_run)
     summary = commands.add_parser("report", help="summarize a run into per-category Markdown tables")
     summary.add_argument("run_dir", help="a run folder made by `run`")
