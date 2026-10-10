@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 
 from imgopt_lib import candidates as C
 from imgopt_lib import cli
@@ -75,12 +76,41 @@ def test_a_copied_lossy_variant_is_not_measured_again(factory, toolset, tmp_path
     assert any("an earlier imgopt lossy pick wrote this file" in l for l in lines)
 
 
-def test_a_run_without_the_store_neither_reads_nor_writes_it(factory, toolset, tmp_path):
+def test_a_run_without_the_store_neither_reads_nor_writes_it(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo().resolve()
-    opts = C.Options(profile="lossless", out=tmp_path / "one", gates=G.gates_for("lossless"), use_store=False)
-    C.run([src], opts, tools, log=lambda _: None)
-    assert ST.size() == 0 and not ST.root().exists()
+    opts = lambda out, **kw: C.Options(profile="lossless", out=out, gates=G.gates_for("lossless"), **kw)
+    C.run([src], opts(tmp_path / "one"), tools, log=lambda _: None)  # seeds the store
+    seeded = ST.size()
+    calls, real = [], ladder.generate
+    monkeypatch.setattr(ladder, "generate", lambda *a, **k: calls.append(1) or real(*a, **k))
+    C.run([src], opts(tmp_path / "two", use_store=False), tools, log=lambda _: None)
+    assert calls and ST.size() == seeded  # it encoded despite the seeded store, and added nothing to it
+
+
+def test_prune_and_size_survive_entries_that_vanish_or_cannot_be_read(tmp_path, monkeypatch):
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    (folder / "v.png").write_bytes(b"x" * 1000)
+    for key in ("aa-good", "bb-vanishes", "cc-unreadable"):
+        ST.put({"key": key, "file": "v.png", "kind": "lossless"}, folder)
+    real_stat, real_iterdir = Path.stat, Path.iterdir
+
+    def stat(self, *a, **k):  # another process pruned this entry between the listing and the stat
+        if self.name == "bb-vanishes":
+            raise FileNotFoundError(self)
+        return real_stat(self, *a, **k)
+
+    def iterdir(self):
+        if self.name == "cc-unreadable":
+            raise PermissionError(self)
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    good = ST.size()
+    assert good >= 1000
+    assert ST.prune(max_age_days=0, now=time.time() + 1) == (1, good)
 
 
 def test_clean_store_prunes_by_age_and_needs_no_folder(tmp_path, capsys):

@@ -125,14 +125,24 @@ def put(rec: dict, folder: Path) -> None:
 
 
 def _entries() -> list[tuple[float, int, Path]]:
-    base = root() / "variants"
+    """(last use, bytes, folder) of each stored variant. A concurrent run may prune an entry while this lists
+    it, and a store folder may be unreadable: whatever vanishes or fails is left out, never raised."""
     found = []
-    if not base.is_dir():
+    try:
+        shards = list((root() / "variants").iterdir())
+    except OSError:
         return found
-    for shard in base.iterdir():
-        for entry in shard.iterdir() if shard.is_dir() else ():
-            size = sum(p.stat().st_size for p in entry.iterdir() if p.is_file())
-            found.append((entry.stat().st_mtime, size, entry))
+    for shard in shards:
+        try:
+            entries = list(shard.iterdir())
+        except OSError:  # not a folder, or gone
+            continue
+        for entry in entries:
+            try:
+                size = sum(p.stat().st_size for p in entry.iterdir() if p.is_file())
+                found.append((entry.stat().st_mtime, size, entry))
+            except OSError:
+                continue
     return found
 
 
