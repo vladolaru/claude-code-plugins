@@ -168,3 +168,10 @@ def test_a_larger_pick_outside_an_in_place_job_says_so():
     _, why = G.verdict(100_000, rec(size=112_000), in_place=False, replaces_source=True)
     assert why.endswith("12% LARGER than the original")
     assert "LARGER" not in G.verdict(100_000, rec(size=100_000), in_place=False)[1]
+
+
+def test_min_saving_raises_the_untouched_threshold():
+    chosen = {"size": 8000}
+    assert G.verdict(10_000, chosen)[0] == "apply"
+    verdict, why = G.verdict(10_000, chosen, min_saving=3072)
+    assert verdict == "untouched" and "3072 B" in why

@@ -32,6 +32,12 @@ def split_csv(value: str | None) -> tuple[str, ...]:
     return tuple(v.strip() for v in (value or "").split(",") if v.strip())
 
 
+def parse_size(value: str) -> int:
+    """Bytes from "3072", "3KB" or "3 kb"."""
+    text = value.strip().lower().replace(" ", "")
+    return int(float(text[:-2]) * 1024) if text.endswith("kb") else int(text)
+
+
 def _formats(paths) -> set[str]:
     return {format_of(p) for p in expand_inputs(paths)} if paths else set()
 
@@ -132,7 +138,8 @@ def cmd_candidates(args) -> int:
     elif args.ref_rev:
         refs = _baselines(inputs, args.ref_rev, out)
     opts = C.Options(profile=args.profile, out=out, gates=gates, refs=refs, ref_rev=args.ref_rev,
-                     resize=args.resize, out_format=args.format, waived=chk.waived)
+                     resize=args.resize, out_format=args.format, waived=chk.waived,
+                     min_saving=args.min_saving)
     records = C.run(inputs, opts, chk.tools, script=SCRIPT, jobs=max(1, args.jobs))
     return 0 if len(records) == len(inputs) and not any(C.all_errored(r) for r in records) else 1
 
@@ -257,6 +264,8 @@ def build_parser() -> argparse.ArgumentParser:
                           "revision (the original before an earlier pass)")
     c.add_argument("--resize", type=int, metavar="WIDTH", help="Lanczos resize to this width first")
     c.add_argument("--format", choices=OUTPUT_FORMATS, default="keep")
+    c.add_argument("--min-saving", type=parse_size, default=0, metavar="BYTES",
+                   help="leave files that save less than this untouched (bytes, or 3KB)")
     c.add_argument("--ssim", type=float)
     c.add_argument("--ss2", type=float)
     c.add_argument("--band", type=float)

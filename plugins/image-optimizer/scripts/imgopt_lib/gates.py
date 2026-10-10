@@ -76,10 +76,12 @@ def pick(cands: list[dict]) -> dict | None:
 
 
 def verdict(source_size: int, chosen: dict | None, *, in_place: bool = True,
-            replaces_source: bool = False) -> tuple[str, str]:
+            replaces_source: bool = False, min_saving: int = 0) -> tuple[str, str]:
     """("apply" or "untouched", why). Only an ``in_place`` job (same format, same size) can be too small a
     saving to apply; ``replaces_source`` says a resize job writes its pick over the original. Any other job
-    applies its pick even when it is larger (a new format is wanted for more than size), and says so."""
+    applies its pick even when it is larger (a new format is wanted for more than size), and says so.
+    ``min_saving`` raises the threshold for repositories where every changed file costs review time
+    (``candidates --min-saving``)."""
     if chosen is None:
         return "untouched", "no candidate passed the gates"
     if not in_place:
@@ -91,6 +93,7 @@ def verdict(source_size: int, chosen: dict | None, *, in_place: bool = True,
     saved = source_size - chosen["size"]
     if saved <= 0:
         return "untouched", "no candidate is smaller than the original"
-    if saved < max(SKIP_BYTES, SKIP_RATIO * source_size):
-        return "untouched", f"saving {saved} B is below max(1 KB, 1%)"
+    if saved < max(SKIP_BYTES, SKIP_RATIO * source_size, min_saving):
+        floor = f"max(1 KB, 1%, {min_saving} B)" if min_saving else "max(1 KB, 1%)"
+        return "untouched", f"saving {saved} B is below {floor}"
     return "apply", f"saves {saved} B ({saved / source_size:.0%})"

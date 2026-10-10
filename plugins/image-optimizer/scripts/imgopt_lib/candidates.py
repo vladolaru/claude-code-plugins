@@ -67,6 +67,7 @@ class Options:
     resize: int | None = None
     out_format: str = "keep"
     waived: tuple[str, ...] = ()
+    min_saving: int = 0
 
 
 def kb(n: int) -> str:
@@ -447,7 +448,8 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
             if chosen and "ssim" in chosen and not chosen.get("identical") and chosen.get("butteraugli") is None:
                 chosen["butteraugli"] = metrics.butteraugli_score(ref_img, display_pixels(folder / chosen["file"]),
                                                                   tools, Path(measure_dir))
-    verdict, why = G.verdict(size, chosen, in_place=in_place, replaces_source=target == src)
+    verdict, why = G.verdict(size, chosen, in_place=in_place, replaces_source=target == src,
+                             min_saving=opts.min_saving)
     if chosen is None:
         why = _no_pick_reason(cands, opts)
     record = {
@@ -455,6 +457,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "source": {"path": str(src), "sha256": src_hash, "size": size, **source_info},
         "ref": {"path": str(ref_path), "sha256": ref_hash, "size": ref_path.stat().st_size},
         "profile": opts.profile, "gates": asdict(opts.gates), "resize": opts.resize,
+        "min_saving": opts.min_saving,
         "format_requested": opts.out_format, "format": target_fmt, "target": str(target),
         "uncalibrated": target_fmt in UNCALIBRATED,
         "waived": list(opts.waived), "notes": notes,
@@ -505,6 +508,33 @@ def print_record(record: dict, log=print) -> None:
         log(f"   Evidence SSIM (luma): {evidence}")
 
 
+def savings_lines(records: list[dict]) -> list[str]:
+    """What a human needs to decide what is worth doing: the applied picks ranked by bytes saved with the
+    cumulative share, how many save little, and the folders that hold the most saving."""
+    saved = sorted(((max(0, r["source"]["size"] - pick_of(r)["size"]), r) for r in records
+                    if r["verdict"] == "apply" and pick_of(r)), key=lambda t: -t[0])
+    total = sum(s for s, _ in saved)
+    if not saved or total <= 0:
+        return []
+    marks, running, steps = [], 0, {5, 10, 20, 30, 50, len(saved)}
+    for i, (s, _) in enumerate(saved, 1):
+        running += s
+        if i in steps:
+            marks.append(f"top {i} = {kb(running)} ({running / total:.0%})")
+    lines = ["Savings, largest first: " + ", ".join(marks)]
+    small = []
+    for limit in (1024, 3072, 10240):
+        under = [s for s, _ in saved if s < limit]
+        small.append(f"under {limit // 1024} KB: {len(under)} ({kb(sum(under))})")
+    lines.append("Picks saving " + "; ".join(small))
+    by_folder: dict[str, list[int]] = {}
+    for s, r in saved:
+        by_folder.setdefault(str(Path(r["source"]["path"]).parent), []).append(s)
+    top = sorted(by_folder.items(), key=lambda kv: -sum(kv[1]))[:8]
+    lines.append("Largest by folder: " + "; ".join(f"{folder} {kb(sum(v))} ({len(v)} files)" for folder, v in top))
+    return lines
+
+
 def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=print) -> None:
     applied = [r for r in records if r["verdict"] == "apply"]
     before = sum(r["source"]["size"] for r in applied)
@@ -515,6 +545,8 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
     change = f" ({(total_after - total_before) / total_before:+.1%})" if total_before else ""
     log(f"\n{len(records)} file(s), {kb(total_before)} -> {kb(total_after)}{change} overall; "
         f"{len(applied)} to apply ({kb(before)} -> {kb(after)}), {len(records) - len(applied)} untouched.")
+    for line in savings_lines(records):
+        log(line)
     based = [r for r in records if r["ref"]["path"] != r["source"]["path"]]
     if based:
         based_before = sum(r["ref"]["size"] for r in based)

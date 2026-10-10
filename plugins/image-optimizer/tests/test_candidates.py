@@ -1091,3 +1091,24 @@ def test_nothing_smaller_than_the_original_is_named_as_such_when_no_pick_remains
         "no candidate is smaller than the original"
     failed = {"label": "x", "size": 100, "ssim": 0.9, "ss2": 50.0, "reason": "SSIM 0.9000 < 0.98"}
     assert "no candidate passed the gates" in C._no_pick_reason([unmeasured, failed], opts(tmp_path, "high"))
+
+
+def _applied(path, before, after):
+    return {"source": {"path": path, "size": before}, "verdict": "apply", "pick": "p",
+            "candidates": [{"file": "p", "size": after}]}
+
+
+def test_savings_lines_rank_files_and_show_the_cumulative_share():
+    records = [_applied(f"/r/a/{i}.png", 10_000 + i * 1000, 2_000) for i in range(12)]
+    records.append(_applied("/r/b/small.png", 1_500, 600))
+    lines = C.savings_lines(records)
+    assert lines[0].startswith("Savings, largest first: top 5 ")
+    assert any(l.startswith("Picks saving under 1 KB: 1") for l in lines)
+    assert any("/r/a" in l and "12 files" in l for l in lines)
+
+
+def test_min_saving_is_recorded_and_leaves_small_savings_untouched(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo()
+    [r] = C.run([src.resolve()], opts(tmp_path / "out", min_saving=10**9), tools, log=quiet)
+    assert r["min_saving"] == 10**9 and r["verdict"] == "untouched"
