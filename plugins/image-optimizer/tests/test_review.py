@@ -123,7 +123,7 @@ def test_milder_or_stronger_steps_from_the_variant_shown_and_reject_ignores_it(t
     fresh = {r["source"]["path"]: (f, r) for f, r in RV.rows_of([folder.parent])}
     folder, shown = fresh[a]
     assert C.choice_of(shown)["label"] == "v15000"
-    assert RV.verdict_of(folder.parent, shown) == {"verdict": how, "variant": "v15000", "note": "",
+    assert RV.verdict_of(folder.parent, shown) == {"verdict": how, "variant": "v15000", "key": "k15000", "note": "",
                                                     "sha256": shown["source"]["sha256"]}
     assert RV.choose(folder, shown, how)["label"] == stepped  # one step from what the human saw, not the pick
     _, rejected = fresh[b]
@@ -201,3 +201,46 @@ def test_manifest_command_prints_the_rows_as_json_and_as_text(tmp_path, capsys):
     assert cli.main(["manifest", str(folder.parent)]) == 0
     assert f"{record['source']['path']} -> {folder / 'v12000.png'}" in capsys.readouterr().out
 
+
+
+def remeasure(folder, record, label, key):
+    """What a re-run with other settings leaves: the same label, the same file name, another variant (key)."""
+    next(c for c in record["candidates"] if c["label"] == label)["key"] = key
+    C.write_record(folder, record)
+
+
+def test_a_verdict_names_the_variant_by_its_key_not_its_label(tmp_path):
+    folder, record = fake_record(tmp_path)
+    path = record["source"]["path"]
+    RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+        path: {"verdict": "keep", "variant": "v15000", "note": ""}}))
+    [(_, fresh)] = RV.rows_of([folder.parent])
+    assert RV.verdict_of(folder.parent, fresh)["key"] == "k15000"
+    remeasure(folder, fresh, "v15000", "k15000-resized")
+    [(_, rerun)] = RV.rows_of([folder.parent])
+    assert C.choice_of(rerun)["label"] == "v15000" and RV.verdict_of(folder.parent, rerun) is None
+    assert not RV.is_accepted(rerun, RV.verdict_of(folder.parent, rerun))
+
+
+def test_the_fingerprint_follows_the_variants_content(tmp_path):
+    folder, record = fake_record(tmp_path)
+    before = RV.fingerprint(RV.rows_of([folder.parent]))
+    remeasure(folder, record, "v18000", "k18000-other-tools")  # not the choice, but a variant the page offers
+    assert RV.fingerprint(RV.rows_of([folder.parent])) != before
+
+
+def test_a_keep_does_not_follow_its_label_into_a_resized_rerun(factory, toolset, tmp_path, keep):
+    from imgopt_lib import gates as G
+
+    tools = {**toolset("recompress", "high", {"jpeg"}), **toolset("prepare", "high", {"jpeg"})}
+    src = factory.photo(size=(800, 600), quality=95).resolve()
+    out = tmp_path / "F"
+    opts = lambda **kw: C.Options(profile="medium", out=out, gates=G.gates_for("medium"), **kw)
+    C.run([src], opts(), tools, log=lambda _: None)
+    [(_, record)] = C.load_records(out)
+    first = C.choice_of(record)
+    keep(out, src)
+    C.run([src], opts(resize=600), tools, log=lambda _: None)
+    [(folder, record)] = C.load_records(out)
+    RV.choose(folder, record, first["label"])
+    assert C.choice_of(record)["key"] != first["key"] and RV.verdict_of(out, record) is None

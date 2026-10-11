@@ -1,8 +1,9 @@
 """Per-file choices and the human's verdicts: what a file will be written as, and what the human said about it.
 
-A record keeps the gates' ``pick`` and, once someone chose another variant, a ``choice`` (`choose`). Everything
-that writes or shows "the" variant (`sheet`, `apply`, `manifest`, `clean --keep-picks`) reads
-`candidates.choice_of`. A variant whose file is gone is restored from the variant store; one the store no longer
+A record keeps the gates' ``pick`` and, once someone chose another variant, a ``choice`` (`choose`), which a
+`candidates` re-run keeps while that variant is still measured. Everything that writes or shows "the" variant
+(`sheet`, `apply`, `manifest`, `clean --keep-picks`) reads `candidates.choice_of`. Verdicts and the page's
+fingerprint name variants by ``key``, their content: a re-run with other settings keeps the labels. A variant whose file is gone is restored from the variant store; one the store no longer
 has needs `candidates` again.
 """
 
@@ -122,10 +123,12 @@ def rows_of(dirs) -> list[tuple[Path, dict]]:
 
 
 def fingerprint(rows) -> str:
-    """What a page showed: each file's source hash and current choice. A verdict block carries its page's
-    fingerprint, so verdicts made on a page built from other results (a later `choose` or `candidates`) are
-    refused instead of landing on variants nobody saw."""
-    items = sorted((r["source"]["path"], r["source"].get("sha256"), (choice_of(r) or {}).get("label")) for _, r in rows)
+    """What a page showed: each file's source hash, its current choice and the variants it offered, each named by
+    its key (its content: a re-run with other settings keeps a label but makes another variant). A verdict block
+    carries its page's fingerprint, so verdicts made on a page built from other results (a later `choose` or
+    `candidates`) are refused instead of landing on variants nobody saw."""
+    items = sorted((r["source"]["path"], r["source"].get("sha256"), (choice_of(r) or {}).get("key"),
+                    sorted(c.get("key") or "" for c in live_variants(r))) for _, r in rows)
     return hashlib.sha256(json.dumps(items).encode()).hexdigest()[:16]
 
 
@@ -192,19 +195,21 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
         out = folder.parent
         book = stored.setdefault(out, _load(out))
         book["files"][path] = {"verdict": entry["verdict"], "variant": chosen["label"] if chosen else None,
-                               "note": str(entry.get("note") or ""), "sha256": record["source"]["sha256"]}
+                               "key": chosen.get("key") if chosen else None, "note": str(entry.get("note") or ""),
+                               "sha256": record["source"]["sha256"]}
     for out, book in stored.items():
         (out / VERDICTS_FILE).write_text(json.dumps(book, indent=1))
     return dict(Counter(e["verdict"] for e in data["files"].values()))
 
 
 def verdict_of(out: Path, record: dict) -> dict | None:
-    """The human's stored verdict for ``record``, while it still describes it (same source, same choice)."""
+    """The human's stored verdict for ``record``, while it still describes it: the same source and, unless it
+    rejects the file, the same chosen variant by key (a label survives a re-run with other settings; a key does not)."""
     entry = _load(out)["files"].get(record["source"]["path"])
     chosen = choice_of(record)
     if not entry or entry.get("sha256") != record["source"]["sha256"]:
         return None
-    if entry["verdict"] in ("keep", "milder", "stronger") and entry.get("variant") != (chosen or {}).get("label"):
+    if entry["verdict"] in ("keep", "milder", "stronger") and entry.get("key") != (chosen or {}).get("key"):
         return None
     return entry
 

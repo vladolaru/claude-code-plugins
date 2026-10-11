@@ -156,13 +156,16 @@ def _record_skip(folder: Path, why: str) -> None:
         write_record(folder, {"schema": SCHEMA, "complete": False, "skipped": why, "candidates": []})
 
 
-def _previous(path: Path) -> dict:
+def _previous(path: Path) -> tuple[dict, str | None]:
+    """(the last record's candidates by key, the key of the variant someone chose with `choose`, if any)."""
     if not path.is_file():
-        return {}
+        return {}, None
     try:
-        return {c["key"]: c for c in json.loads(path.read_text()).get("candidates", []) if "key" in c}
+        record = json.loads(path.read_text())
+        chosen = choice_of(record) if record.get("choice") else None
+        return {c["key"]: c for c in record.get("candidates", []) if "key" in c}, (chosen or {}).get("key")
     except (json.JSONDecodeError, KeyError):
-        return {}
+        return {}, None
 
 
 def keyed_tools(rung: ladder.Rung) -> list[str]:
@@ -412,7 +415,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         if opts.resize:
             notes.append(f"resized {facts.width}x{facts.height} -> {pix.width}x{pix.height} (Lanczos); "
                          "the reference is scaled the same way")
-    previous = _previous(folder / "metrics.json")
+    previous, chosen_key = _previous(folder / "metrics.json")
     shutil.copyfile(src, folder / f"source{src.suffix.lower()}")
     if src in opts.refs:
         notes.append(f"measured against {ref_path}")
@@ -460,9 +463,13 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
             if chosen and "ssim" in chosen and not chosen.get("identical") and chosen.get("butteraugli") is None:
                 chosen["butteraugli"] = metrics.butteraugli_score(ref_img, display_pixels(folder / chosen["file"]),
                                                                   tools, Path(measure_dir))
-    verdict, why = G.verdict(size, chosen, in_place=in_place, replaces_source=target == src,
+    # Someone's choice outlives a re-run while its variant (its key) is still measured here.
+    kept = next((c for c in cands if chosen_key and c.get("key") == chosen_key and c.get("file") and "size" in c
+                 and not c.get("error") and not c.get("discarded")), None)
+    choice = kept if kept is not None and kept is not chosen else None
+    verdict, why = G.verdict(size, choice or chosen, in_place=in_place, replaces_source=target == src,
                              min_saving=opts.min_saving)
-    if chosen is None:
+    if chosen is None and choice is None:
         why = _no_pick_reason(cands, opts)
     record = {
         "schema": SCHEMA,
@@ -476,6 +483,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "tools": {n: {"path": t.path, "version": t.version, "id": t.cache_id}
                   for n, t in sorted(tools.items()) if t.ok},
         "candidates": cands, "pick": chosen["file"] if chosen else None,
+        **({"choice": choice["file"]} if choice else {}),
         "verdict": verdict, "verdict_reason": why, "complete": True,
     }
     write_record(folder, record)

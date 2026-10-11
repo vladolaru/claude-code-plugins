@@ -232,8 +232,9 @@ def keep():
         for _, record in C.load_records(Path(out)):
             source = record["source"]["path"]
             if source in wanted or Path(source).name in wanted:
-                book["files"][source] = {"verdict": verdict, "variant": C.choice_of(record)["label"], "note": "",
-                                         "sha256": record["source"]["sha256"]}
+                chosen = C.choice_of(record)
+                book["files"][source] = {"verdict": verdict, "variant": chosen["label"], "key": chosen.get("key"),
+                                         "note": "", "sha256": record["source"]["sha256"]}
         book_path.write_text(json.dumps(book))
 
     return store

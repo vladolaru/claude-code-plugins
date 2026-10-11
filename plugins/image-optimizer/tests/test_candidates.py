@@ -1124,6 +1124,22 @@ def test_savings_lines_rank_files_and_show_the_cumulative_share():
     assert any("/r/a" in l and "12 files" in l for l in lines)
 
 
+def test_a_rerun_keeps_the_choice_while_its_variant_is_still_measured(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.gradient(size=(300, 60)).resolve()
+    out = tmp_path / "out"
+    C.run([src], opts(out, "high"), tools, log=quiet)
+    [(folder, record)] = C.load_records(out)
+    other = next(c for c in record["candidates"] if c.get("file") and "size" in c and c["file"] != record["pick"]
+                 and not c.get("error") and not c.get("discarded"))
+    record["choice"] = other["file"]
+    C.write_record(folder, record)
+    C.run([src], opts(out, "high"), tools, log=quiet)
+    [(_, rerun)] = C.load_records(out)
+    assert rerun["choice"] == other["file"] and C.choice_of(rerun)["key"] == other["key"]
+    assert rerun["verdict"] == G.verdict(rerun["source"]["size"], C.choice_of(rerun))[0]
+
+
 def test_min_saving_is_recorded_and_leaves_small_savings_untouched(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo()
