@@ -11,7 +11,6 @@ from imgopt_lib import candidates as C
 from imgopt_lib import gates as G
 from imgopt_lib import imaging as I
 from imgopt_lib import ladder
-from imgopt_lib import review as RV
 from imgopt_lib import sheet as S
 from imgopt_lib import store as ST
 from imgopt_lib import workdirs as W
@@ -401,21 +400,11 @@ def test_pick_of_is_none_without_a_pick_even_when_a_candidate_has_no_file():
     assert C.pick_of(record) is None
 
 
-def _keep(out, *sources):
-    """Store a keep verdict for each of ``sources`` against its record's current choice, as `record` would."""
-    book = {"files": {}}
-    for _, record in C.load_records(out):
-        if Path(record["source"]["path"]) in map(Path, sources):
-            book["files"][record["source"]["path"]] = {"verdict": "keep", "variant": C.choice_of(record)["label"],
-                                                       "note": "", "sha256": record["source"]["sha256"]}
-    (Path(out) / RV.VERDICTS_FILE).write_text(json.dumps(book))
-
-
 def _refused_without_approval(out, src):
     before = src.read_bytes()
     logs = []
     assert AP.apply(out, tools={}, log=logs.append) == 1
-    assert "record" in "\n".join(logs)
+    assert "record the human's verdicts" in "\n".join(logs)
     assert src.read_bytes() == before
 
 
@@ -924,14 +913,14 @@ def test_a_file_written_by_a_lossy_pick_is_not_measured_again_without_a_baseline
 
 
 @pytest.mark.parametrize("jobs", [1, 2])
-def test_a_file_skipped_in_a_rerun_leaves_the_last_run(factory, toolset, tmp_path, jobs):
+def test_a_file_skipped_in_a_rerun_leaves_the_last_run(factory, toolset, tmp_path, jobs, keep):
     tools = toolset("recompress", "high", {"jpeg"})
     a = factory.photo(name="a.jpg", size=(200, 150), quality=95).resolve()
     b = factory.photo(name="b.jpg", size=(180, 140), quality=95).resolve()
     out = tmp_path / "out"
     first = C.run([a, b], opts(out, "high"), tools, log=quiet, jobs=jobs)
     assert [S.needs_tiles(r) for r in first] == [True, True]  # both lossy picks wait for approval
-    _keep(out, a)
+    keep(out, a)
     assert AP.apply(out, tools=tools, log=quiet) == 0  # a is rewritten; its bytes are a
     # produced lossy variant
     second = C.run([a, b], opts(out, "high"), tools, log=quiet, jobs=jobs)
@@ -939,7 +928,7 @@ def test_a_file_skipped_in_a_rerun_leaves_the_last_run(factory, toolset, tmp_pat
     assert [r["source"]["path"] for _, r in C.load_records(out)] == [str(b)]
     assert any("a.jpg" in s and "an earlier imgopt lossy pick wrote this file" in s for s in C.stale_records(out))
     lines = []
-    _keep(out, b)
+    keep(out, b)
     assert AP.apply(out, tools=tools, log=lines.append) == 0
     assert not any("a.jpg" in line for line in lines), lines
 

@@ -1,11 +1,11 @@
 """`imgopt apply`: write what the human's verdicts keep, then re-measure what was written.
 
-A lossy choice is written only when its stored verdict (`record`) is keep; reject leaves the file as it was,
-milder or stronger waits for a new choice, and with no verdict at all the lossy choices are refused. A lossless
-choice is written unless rejected. Several working folders apply in one call. A source that changed
-since `candidates` ran is refused, and so is a selection where two choices
-would land on one path or a choice would replace an existing file other than
-its own source (both before anything is written). Each choice is staged beside
+A lossy choice is written only when its stored verdict (`record`) is keep; a lossless one when it has no
+verdict or a keep. Reject leaves the file as it was, milder or stronger waits for a new choice, and with no
+verdict at all the lossy choices are refused (`review.is_accepted` decides, `manifest --accepted` too). Several
+working folders apply in one call. A source that changed since `candidates` ran is refused, and so is a
+selection where two written choices would land on one path or a choice would replace an existing file other
+than its own source (both before anything is written). Each choice is staged beside
 its target and re-measured against the recorded reference there; only a
 staged file that matches the recorded numbers replaces the target. A mismatch
 deletes the staged file and leaves the target's bytes and mtime as they were.
@@ -43,17 +43,22 @@ def _to_write(outs, only) -> tuple[list[tuple[Path, dict]], list[str]]:
     rows, problems = _rows(outs), []
     if only:
         rows, problems = SEL.resolve(only, rows)
-    return [(f, r) for f, r in rows if r["verdict"] == "apply" and choice_of(r)], problems
+    return [(f, r) for f, r in rows if RV.writes(r)], problems
+
+
+def _accepted(rows) -> list[tuple[Path, dict]]:
+    """The ``rows`` that `apply` writes: the ones the stored verdicts accept (`review.is_accepted`)."""
+    return [(f, r) for f, r in rows if RV.is_accepted(r, RV.verdict_of(f.parent, r))]
 
 
 def needs_metrics(outs, only=()) -> bool:
-    """True when a selected choice is lossy, so verifying it needs ffmpeg and ssimulacra2."""
-    return any(needs_tiles(r) for _, r in _to_write(outs, only)[0])
+    """True when a choice `apply` will write is lossy, so verifying it needs ffmpeg and ssimulacra2."""
+    return any(needs_tiles(r) for _, r in _accepted(_to_write(outs, only)[0]))
 
 
 def needs_rsvg(outs, only=()) -> bool:
-    """True when a selected choice is an SVG, so verifying it needs rsvg-convert."""
-    return any(r["format"] == "svg" for _, r in _to_write(outs, only)[0])
+    """True when a choice `apply` will write is an SVG, so verifying it needs rsvg-convert."""
+    return any(r["format"] == "svg" for _, r in _accepted(_to_write(outs, only)[0]))
 
 
 def _took_source(record: dict, chosen: dict, facts) -> bool:
@@ -160,26 +165,26 @@ def apply(outs, *, tools: dict, only=(), dest: Path | None = None, log=print) ->
         if not problems:
             log("Nothing to apply.")
         return 1 if problems else 0
-    _refuse_clashes(rows, dest)
     verdicts = {id(r): RV.verdict_of(f.parent, r) for f, r in rows}
-    lossy = [(f, r) for f, r in rows if needs_tiles(r)]
-    if lossy and not any(verdicts[id(r)] for _, r in lossy):
+    lossy = [r for _, r in rows if needs_tiles(r)]
+    if lossy and not any(verdicts[id(r)] for r in lossy):
         log("REFUSED: these choices are lossy; record the human's verdicts first (sheet, then record):")
-        for _, r in lossy:
+        for r in lossy:
             log(f"  {r['source']['path']}  ({choice_of(r)['label']})")
         return 1
-    chosen_rows = []
+    kept = []
     for folder, record in rows:
         entry = verdicts[id(record)]
-        if entry and entry["verdict"] == "reject":
+        if RV.is_accepted(record, entry):
+            kept.append((folder, record))
+        elif entry and entry["verdict"] == "reject":
             log(f"  rejected, left as it was: {record['source']['path']}")
         elif entry and entry["verdict"] in ("milder", "stronger"):
             log(f"  asked {entry['verdict']}, left as it was: {record['source']['path']} (choose, then review again)")
-        elif needs_tiles(record) and not (entry and entry["verdict"] == "keep"):
-            log(f"  no verdict yet, left as it was: {record['source']['path']}")
         else:
-            chosen_rows.append((folder, record))
-    rows = chosen_rows
+            log(f"  no verdict yet, left as it was: {record['source']['path']}")
+    rows = kept
+    _refuse_clashes(rows, dest)
     stale = [r for _, r in rows if not Path(r["source"]["path"]).is_file()
              or sha256(Path(r["source"]["path"])) != r["source"]["sha256"]]
     if stale:

@@ -214,3 +214,27 @@ def toolset():
 def _private_cache(monkeypatch, tmp_path_factory):
     """No test (or CLI subprocess it starts) writes the real cache: the variant store lives under it."""
     monkeypatch.setenv("IMGOPT_CACHE", str(tmp_path_factory.mktemp("imgopt-cache")))
+
+
+@pytest.fixture
+def keep():
+    """``keep(out, *paths, verdict="keep")``: store a verdict for the files of the working folder ``out`` named by
+    ``paths`` (a source path or a bare name) the way `record` would, against each record's current choice."""
+    import json
+
+    from imgopt_lib import candidates as C
+    from imgopt_lib import review as RV
+
+    def store(out, *paths, verdict="keep"):
+        wanted = {str(p) for p in paths}
+        book_path = Path(out) / RV.VERDICTS_FILE
+        book = json.loads(book_path.read_text()) if book_path.is_file() else {"files": {}}
+        for _, record in C.load_records(Path(out)):
+            source = record["source"]["path"]
+            if source in wanted or Path(source).name in wanted:
+                book["files"][source] = {"verdict": verdict, "variant": C.choice_of(record)["label"], "note": "",
+                                         "sha256": record["source"]["sha256"]}
+        book_path.write_text(json.dumps(book))
+
+    return store
+

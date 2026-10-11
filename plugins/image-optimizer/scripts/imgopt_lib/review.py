@@ -207,24 +207,35 @@ def verdict_of(out: Path, record: dict) -> dict | None:
     return entry
 
 
+def writes(record: dict) -> bool:
+    """Whether the record has a choice to write: a verdict of "apply" and a variant."""
+    return record["verdict"] == "apply" and bool(choice_of(record))
+
+
+def is_accepted(record: dict, entry: dict | None) -> bool:
+    """Whether `apply` writes ``record`` given its stored verdict ``entry`` (`verdict_of`): a lossy choice needs a
+    "keep"; a lossless one needs no entry or a "keep". Reject, milder and stronger hold either back."""
+    if not writes(record):
+        return False
+    verdict = entry["verdict"] if entry else None
+    return verdict == "keep" or (verdict is None and choice_of(record)["kind"] != "lossy")
+
+
 def manifest_rows(rows, *, accepted: bool = False) -> list[dict]:
     """Per file, where its chosen variant is and where it goes: the contract for an agent that places files
-    itself. ``accepted`` keeps lossless choices nobody rejected and lossy ones the human kept. Largest saving first."""
+    itself. ``accepted`` keeps what `apply` would write (`is_accepted`). Largest saving first."""
     out = []
     for folder, record in rows:
         chosen = choice_of(record)
         entry = verdict_of(folder.parent, record)
-        writes = bool(chosen) and record["verdict"] == "apply"
-        lossy = writes and chosen["kind"] == "lossy"
-        if accepted and not (writes and ((lossy and entry and entry["verdict"] == "keep")
-                                         or (not lossy and not (entry and entry["verdict"] == "reject")))):
+        if accepted and not is_accepted(record, entry):
             continue
         variant = (Path(folder) / chosen["file"]) if chosen else None
         out.append({"source": record["source"]["path"], "target": record.get("target"),
                     "variant": str(variant) if variant else None, "exists": bool(variant and variant.is_file()),
                     "label": chosen["label"] if chosen else None, "kind": chosen["kind"] if chosen else None,
                     "size": chosen["size"] if chosen else None,
-                    "saved": record["source"]["size"] - chosen["size"] if writes else 0,
+                    "saved": record["source"]["size"] - chosen["size"] if writes(record) else 0,
                     "gate": ("pass" if chosen.get("pass") else chosen.get("reason", "")) if chosen else None,
                     "scores": {k: chosen.get(k) for k in ("ssim", "ss2", "band")} if chosen else {},
                     "status": record["verdict"], "verdict": entry["verdict"] if entry else None})

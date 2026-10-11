@@ -19,17 +19,6 @@ from imgopt_lib.ladder import UsageError
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
 
 
-def keep(out, *paths, verdict="keep"):
-    """Store a verdict for ``paths`` the way `record` would, against each record's current choice."""
-    book_path = Path(out) / RV.VERDICTS_FILE
-    book = json.loads(book_path.read_text()) if book_path.is_file() else {"files": {}}
-    for folder, record in C.load_records(Path(out)):
-        if record["source"]["path"] in map(str, paths) or Path(record["source"]["path"]).name in map(str, paths):
-            book["files"][record["source"]["path"]] = {"verdict": verdict, "variant": C.choice_of(record)["label"],
-                                                       "note": "", "sha256": record["source"]["sha256"]}
-    book_path.write_text(json.dumps(book))
-
-
 def run_candidates(src, out, tools, profile="lossless"):
     opts = C.Options(profile=profile, out=out, gates=G.gates_for(profile))
     return C.run([src.resolve()], opts, tools, log=lambda _: None)
@@ -91,7 +80,7 @@ def test_lossy_choices_need_a_verdict(factory, tmp_path):
     assert src.read_bytes() == before
 
 
-def test_refuses_when_the_source_changed_since_candidates(factory, tmp_path):
+def test_refuses_when_the_source_changed_since_candidates(factory, tmp_path, keep):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory)
     src.write_bytes(src.read_bytes() + b"\0")
@@ -103,7 +92,7 @@ def test_refuses_when_the_source_changed_since_candidates(factory, tmp_path):
     assert src.read_bytes() == changed
 
 
-def test_untouched_files_are_skipped(factory, tmp_path):
+def test_untouched_files_are_skipped(factory, tmp_path, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
     rec = json.loads((folder / "metrics.json").read_text())
@@ -117,7 +106,7 @@ def test_untouched_files_are_skipped(factory, tmp_path):
     assert src.read_bytes() == before
 
 
-def test_a_matching_lossy_pick_replaces_the_target(factory, toolset, tmp_path):
+def test_a_matching_lossy_pick_replaces_the_target(factory, toolset, tmp_path, keep):
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
@@ -132,7 +121,7 @@ def test_a_matching_lossy_pick_replaces_the_target(factory, toolset, tmp_path):
     assert staged_files(src.parent) == []
 
 
-def test_remeasure_mismatch_fails_loudly_and_leaves_the_target_alone(factory, toolset, tmp_path):
+def test_remeasure_mismatch_fails_loudly_and_leaves_the_target_alone(factory, toolset, tmp_path, keep):
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory)  # claims ssim 0.5, which the real pick does not have
@@ -145,7 +134,7 @@ def test_remeasure_mismatch_fails_loudly_and_leaves_the_target_alone(factory, to
     assert staged_files(src.parent) == []
 
 
-def test_a_pick_tampered_with_after_candidates_is_not_written(factory, toolset, tmp_path):
+def test_a_pick_tampered_with_after_candidates_is_not_written(factory, toolset, tmp_path, keep):
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
@@ -162,7 +151,7 @@ def test_a_pick_tampered_with_after_candidates_is_not_written(factory, toolset, 
     assert staged_files(src.parent) == []
 
 
-def test_a_failed_verification_does_not_replace_the_target(factory, tmp_path, monkeypatch):
+def test_a_failed_verification_does_not_replace_the_target(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory)
     monkeypatch.setattr(AP, "_verify", lambda *a: "forced")
@@ -178,7 +167,7 @@ def test_a_failed_verification_does_not_replace_the_target(factory, tmp_path, mo
 @pytest.mark.parametrize("failure", [metrics.MetricError("ffmpeg died"), imaging.ImagingError("unreadable"),
                                      OSError("disk"), ValueError("pillow"), UsageError("no such plan")])
 def test_a_verification_failure_is_that_files_mismatch_and_the_run_continues(factory, tmp_path, monkeypatch,
-                                                                             failure):
+                                                                             failure, keep):
     out = tmp_path / "out"
     first, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
     second, _ = _lossy_record(out, factory, name="b.jpg", folder_name="b--1")
@@ -214,7 +203,7 @@ def test_a_bad_out_is_a_usage_error_naming_the_path(tmp_path, make):
     assert not (tmp_path / "missing").exists()
 
 
-def test_only_names_that_match_nothing_are_reported_and_fail_the_run(factory, tmp_path):
+def test_only_names_that_match_nothing_are_reported_and_fail_the_run(factory, tmp_path, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
     logs = []
@@ -226,7 +215,7 @@ def test_only_names_that_match_nothing_are_reported_and_fail_the_run(factory, tm
     assert src.read_bytes() != (folder / "pick.jpg").read_bytes()
 
 
-def test_a_matched_only_name_is_applied_even_when_another_matches_nothing(factory, tmp_path, monkeypatch):
+def test_a_matched_only_name_is_applied_even_when_another_matches_nothing(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
@@ -238,7 +227,7 @@ def test_a_matched_only_name_is_applied_even_when_another_matches_nothing(factor
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
 
 
-def test_dest_receives_the_file_and_the_source_is_untouched(factory, tmp_path, monkeypatch):
+def test_dest_receives_the_file_and_the_source_is_untouched(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
@@ -249,9 +238,10 @@ def test_dest_receives_the_file_and_the_source_is_untouched(factory, tmp_path, m
     assert src.read_bytes() == before
 
 
-def test_needs_metrics_only_for_lossy_picks_that_will_be_applied(factory, tmp_path):
+def test_needs_metrics_only_for_lossy_picks_that_will_be_applied(factory, tmp_path, keep):
     out = tmp_path / "out"
     _, folder = _lossy_record(out, factory)
+    keep(out, "photo.jpg")
     assert AP.needs_metrics(out) and not AP.needs_metrics(out, only=("other.jpg",))
     record = json.loads((folder / "metrics.json").read_text())
     record["verdict"] = "untouched"
@@ -293,7 +283,7 @@ def _scores(monkeypatch, **delta):
     pytest.param(lambda f: _claim(f, band=math.nan), id="recorded-nan"),
 ])
 def test_unusable_recorded_scores_fail_closed_before_anything_is_replaced(factory, tmp_path, monkeypatch,
-                                                                         break_record):
+                                                                         break_record, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory, scores={"ssim": 0.9, "ss2": 50.0, "band": 1.0})
     break_record(folder)
@@ -308,7 +298,7 @@ def test_unusable_recorded_scores_fail_closed_before_anything_is_replaced(factor
 
 
 @pytest.mark.parametrize("remeasured", [{"band": None}, {"band": math.nan}])
-def test_unusable_remeasured_scores_fail_closed(factory, tmp_path, monkeypatch, remeasured):
+def test_unusable_remeasured_scores_fail_closed(factory, tmp_path, monkeypatch, remeasured, keep):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory, scores={"ssim": 0.9, "ss2": 50.0, "band": 1.0})
     _scores(monkeypatch, **remeasured)
@@ -321,7 +311,7 @@ def test_unusable_remeasured_scores_fail_closed(factory, tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize("key,tol", [("ssim", 1e-6), ("ss2", 1e-3), ("band", 1e-6)])
-def test_the_tolerance_boundary(factory, tmp_path, monkeypatch, key, tol):
+def test_the_tolerance_boundary(factory, tmp_path, monkeypatch, key, tol, keep):
     recorded = {"ssim": 0.9, "ss2": 50.0, "band": 1.0}
     for shift, expected in ((0.9 * tol, 0), (1.1 * tol, 1)):
         out = tmp_path / f"out-{expected}"
@@ -333,7 +323,7 @@ def test_the_tolerance_boundary(factory, tmp_path, monkeypatch, key, tol):
         assert wrote == (expected == 0)
 
 
-def test_a_user_file_named_like_the_old_staging_name_survives(factory, tmp_path, monkeypatch):
+def test_a_user_file_named_like_the_old_staging_name_survives(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
     bystander = src.with_name(f".imgopt-{src.name}")
@@ -346,7 +336,7 @@ def test_a_user_file_named_like_the_old_staging_name_survives(factory, tmp_path,
     assert [p.name for p in src.parent.glob(".imgopt-*")] == [bystander.name]
 
 
-def test_a_staged_file_keeps_the_targets_permissions(factory, tmp_path, monkeypatch):
+def test_a_staged_file_keeps_the_targets_permissions(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory)
     src.chmod(0o640)
@@ -360,7 +350,7 @@ def _subfactory(factory, name):
     return type(factory)(factory.root / name)
 
 
-def test_dest_refuses_two_records_that_share_a_basename_before_writing(factory, tmp_path, monkeypatch):
+def test_dest_refuses_two_records_that_share_a_basename_before_writing(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     first, _ = _lossy_record(out, factory, name="photo.jpg", folder_name="a--1")
     other = _subfactory(factory, "sub")
@@ -399,7 +389,7 @@ def test_cli_exits_2_for_a_missing_out(tmp_path):
     assert proc.returncode == 2 and str(tmp_path / "missing") in proc.stderr
 
 
-def test_cli_prints_the_tools_line_and_applies(factory, toolset, tmp_path):
+def test_cli_prints_the_tools_line_and_applies(factory, toolset, tmp_path, keep):
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
@@ -415,7 +405,7 @@ def test_cli_prints_the_tools_line_and_applies(factory, toolset, tmp_path):
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
 
 
-def test_two_records_that_write_one_target_are_refused_before_writing(factory, tmp_path, monkeypatch):
+def test_two_records_that_write_one_target_are_refused_before_writing(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     a, _ = _lossy_record(out, factory, name="a.png", folder_name="a--1", target=factory.root / "a.webp")
     b, _ = _lossy_record(out, factory, name="a.jpg", folder_name="b--1", target=factory.root / "a.webp")
@@ -427,7 +417,7 @@ def test_two_records_that_write_one_target_are_refused_before_writing(factory, t
 
 
 @pytest.mark.parametrize("with_dest", [False, True])
-def test_an_existing_file_that_is_not_the_source_is_never_overwritten(factory, tmp_path, monkeypatch, with_dest):
+def test_an_existing_file_that_is_not_the_source_is_never_overwritten(factory, tmp_path, monkeypatch, with_dest, keep):
     out = tmp_path / "out"
     dest = tmp_path / "dest"
     existing = (dest if with_dest else factory.root) / "photo.webp"
@@ -442,7 +432,7 @@ def test_an_existing_file_that_is_not_the_source_is_never_overwritten(factory, t
     assert existing.read_bytes() == b"someone else's file"
 
 
-def test_a_same_format_resize_may_write_over_its_own_source(factory, tmp_path, monkeypatch):
+def test_a_same_format_resize_may_write_over_its_own_source(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory, resize=80)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
@@ -451,7 +441,7 @@ def test_a_same_format_resize_may_write_over_its_own_source(factory, tmp_path, m
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
 
 
-def test_only_kept_lossy_choices_are_written(factory, tmp_path, monkeypatch):
+def test_only_kept_lossy_choices_are_written(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     first, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
     second, _ = _lossy_record(out, factory, name="b.jpg", folder_name="b--2")
@@ -466,7 +456,7 @@ def test_only_kept_lossy_choices_are_written(factory, tmp_path, monkeypatch):
     assert first.read_bytes() == (out / "a--1" / "pick.jpg").read_bytes()
 
 
-def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolset, tmp_path):
+def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolset, tmp_path, keep):
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
     _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
@@ -482,7 +472,7 @@ def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolse
     assert any("ffmpeg changed since candidates ran" in l for l in lines)
 
 
-def test_a_record_without_tool_ids_is_not_called_changed(factory, toolset, tmp_path):
+def test_a_record_without_tool_ids_is_not_called_changed(factory, toolset, tmp_path, keep):
     """Records from before ids existed have only versions; a versionless tool must not look upgraded."""
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
@@ -509,7 +499,7 @@ def test_only_with_an_ambiguous_name_selects_nothing_and_fails(factory, tmp_path
     assert any("ambiguous" in l for l in lines)
 
 
-def test_only_accepts_a_path_relative_to_the_current_folder(factory, tmp_path, monkeypatch):
+def test_only_accepts_a_path_relative_to_the_current_folder(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
     monkeypatch.chdir(src.parent.parent)
@@ -520,7 +510,7 @@ def test_only_accepts_a_path_relative_to_the_current_folder(factory, tmp_path, m
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
 
 
-def test_a_rejected_file_is_left_as_it_was(factory, tmp_path, monkeypatch):
+def test_a_rejected_file_is_left_as_it_was(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
     keep(out, "a.jpg", verdict="reject")
@@ -538,7 +528,7 @@ def test_lossy_choices_without_any_verdict_are_refused(factory, tmp_path):
     assert any("record the human's verdicts first" in l for l in lines)
 
 
-def test_two_folders_apply_in_one_call(factory, tmp_path, monkeypatch):
+def test_two_folders_apply_in_one_call(factory, tmp_path, monkeypatch, keep):
     one, two = tmp_path / "one", tmp_path / "two"
     a, _ = _lossy_record(one, factory, name="a.jpg", folder_name="a--1")
     sub = factory.root / "s"
@@ -553,7 +543,7 @@ def test_two_folders_apply_in_one_call(factory, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("verdict, said", [("milder", "asked milder"), ("stronger", "asked stronger")])
-def test_a_file_asked_milder_or_stronger_waits_for_a_new_choice(factory, tmp_path, verdict, said):
+def test_a_file_asked_milder_or_stronger_waits_for_a_new_choice(factory, tmp_path, verdict, said, keep):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
     keep(out, "a.jpg", verdict=verdict)
@@ -563,7 +553,7 @@ def test_a_file_asked_milder_or_stronger_waits_for_a_new_choice(factory, tmp_pat
     assert src.read_bytes() == before and any(said in l and "left as it was" in l for l in lines)
 
 
-def test_a_kept_choice_that_fails_the_profile_says_so(factory, tmp_path, monkeypatch):
+def test_a_kept_choice_that_fails_the_profile_says_so(factory, tmp_path, monkeypatch, keep):
     out = tmp_path / "out"
     _, folder = _lossy_record(out, factory)
     record = json.loads((folder / "metrics.json").read_text())
@@ -574,4 +564,62 @@ def test_a_kept_choice_that_fails_the_profile_says_so(factory, tmp_path, monkeyp
     lines = []
     assert AP.apply(out, tools={}, log=lines.append) == 0
     assert any("fails the profile; kept by the human's verdict" in l for l in lines)
+
+
+def test_a_rejected_lossless_choice_is_left_alone(factory, tmp_path, keep):
+    out = tmp_path / "out"
+    src, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1", kind="lossless")
+    keep(out, "a.jpg", verdict="reject")
+    before = src.read_bytes()
+    lines = []
+    assert AP.apply(out, tools={}, log=lines.append) == 0
+    assert src.read_bytes() == before and any("rejected, left as it was" in l for l in lines)
+
+
+def test_a_rejected_convert_whose_target_exists_does_not_block_the_run(factory, tmp_path, monkeypatch, keep):
+    out = tmp_path / "out"
+    target = factory.root / "a.webp"
+    target.write_bytes(b"someone else's file")
+    _lossy_record(out, factory, name="a.jpg", folder_name="a--1", target=target)
+    other, folder = _lossy_record(out, factory, name="b.jpg", folder_name="b--1")
+    keep(out, "a.jpg", verdict="reject")
+    keep(out, "b.jpg")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    assert AP.apply(out, tools={}, log=lambda _: None) == 0
+    assert target.read_bytes() == b"someone else's file"
+    assert other.read_bytes() == (folder / "pick.jpg").read_bytes()
+
+
+def test_a_lossless_choice_marked_milder_is_held_back_by_apply_and_the_manifest(factory, tmp_path, keep):
+    out = tmp_path / "out"
+    src, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1", kind="lossless")
+    keep(out, "a.jpg", verdict="milder")
+    before = src.read_bytes()
+    lines = []
+    assert AP.apply(out, tools={}, log=lines.append) == 0
+    assert src.read_bytes() == before and any("asked milder, left as it was" in l for l in lines)
+    assert RV.manifest_rows(RV.rows_of([out]), accepted=True) == []
+
+
+def test_tools_are_needed_only_for_what_apply_will_write(factory, tmp_path, keep):
+    one, two = tmp_path / "one", tmp_path / "two"
+    _lossy_record(one, factory, name="a.jpg", folder_name="a--1")
+    sub = factory.root / "s"
+    sub.mkdir()
+    _lossy_record(two, type(factory)(sub), name="b.jpg", folder_name="b--2")
+    assert not AP.needs_metrics([one, two]) and not AP.needs_rsvg([one, two])  # no verdicts: nothing is written
+    keep(two, "b.jpg")
+    assert AP.needs_metrics([one, two]) and not AP.needs_metrics([one])
+    keep(two, "b.jpg", verdict="reject")
+    assert not AP.needs_metrics([one, two])
+
+
+def test_a_passing_choice_gets_no_fails_the_profile_suffix(factory, tmp_path, monkeypatch, keep):
+    out = tmp_path / "out"
+    _lossy_record(out, factory)
+    keep(out, "photo.jpg")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    lines = []
+    assert AP.apply(out, tools={}, log=lines.append) == 0
+    assert any("re-measured" in l for l in lines) and not any("fails the profile" in l for l in lines)
 
