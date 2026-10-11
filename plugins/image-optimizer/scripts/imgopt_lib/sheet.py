@@ -172,9 +172,13 @@ textarea{width:100%;font:12px ui-monospace,monospace}
 <script>
 const DATA = __DATA__;
 // The variant on screen, which a verdict names: the page's choice, else the first one listed.
-const SELECTED = new Map(DATA.files.map(f=>[f.name, f.variants.some(v=>v.label===f.choice)?f.choice:(f.variants[0]||{}).label||null]));
-const VERDICTS = new Map(DATA.files.filter(f=>f.recorded||f.default_verdict).map(f=>[f.name,{verdict:f.recorded?f.recorded.verdict:f.default_verdict,variant:SELECTED.get(f.name)}]));
-const NOTES = new Map(DATA.files.filter(f=>f.recorded&&f.recorded.note).map(f=>[f.name,f.recorded.note]));  // apart from VERDICTS: a note outlives a variant switch
+const SELECTED = new Map(DATA.files.map(f=>[f.name,
+  f.variants.some(v=>v.label===f.choice)?f.choice:(f.variants[0]||{}).label||null]));
+// A rebuilt page starts from what was recorded; a lossless choice without a verdict starts as keep.
+const VERDICTS = new Map(DATA.files.filter(f=>f.recorded||f.default_verdict).map(f=>[f.name,
+  {verdict:f.recorded?f.recorded.verdict:f.default_verdict,variant:SELECTED.get(f.name)}]));
+// Apart from VERDICTS: a note outlives a variant switch.
+const NOTES = new Map(DATA.files.filter(f=>f.recorded&&f.recorded.note).map(f=>[f.name,f.recorded.note]));
 const KINDS = ['keep','reject','milder','stronger'];
 function variantOf(f){return f.variants.find(v=>v.label===SELECTED.get(f.name));}
 function pane(label, src, name){
@@ -230,7 +234,11 @@ function card(f){
       l.append(r,' '+k); row.append(l);
     }
     row.append(note);
-    if(f.recorded){const r=document.createElement('span'); r.className='label'; r.textContent='Recorded earlier: '+f.recorded.verdict+(f.recorded.note?' ("'+f.recorded.note+'")':''); row.append(r);}
+    if(f.recorded){
+      const r=document.createElement('span'); r.className='label';
+      r.textContent='Recorded earlier: '+f.recorded.verdict+(f.recorded.note?' ("'+f.recorded.note+'")':'');
+      row.append(r);
+    }
     c.append(row);
   }
   return c;
