@@ -70,6 +70,7 @@ class Options:
     out_format: str = "keep"
     waived: tuple[str, ...] = ()
     min_saving: int = 0
+    assume_srgb: bool = False  # the human compared a gamma-tagged PNG in a browser: lossy candidates may drop gAMA
     use_store: bool = True  # False for the bench: its timings must not come from the store
 
 
@@ -121,8 +122,9 @@ def _scan(out: Path) -> tuple[list[tuple[Path, dict]], list[str]]:
             current.append((path.parent, record))
         elif record["source"]["path"] not in run["inputs"]:
             stale.append(f"{name}: {Path(record['source']['path']).name} is not in the last run")
-        elif (record.get("profile"), record.get("resize"), record.get("format_requested", run["format"])) != (
-                run["profile"], run["resize"], run["format"]):
+        elif (record.get("profile"), record.get("resize"), record.get("format_requested", run["format"]),
+              record.get("assume_srgb", False)) != (
+                run["profile"], run["resize"], run["format"], run.get("assume_srgb", False)):
             stale.append(f"{name}: made with other settings than the last run")
         else:
             current.append((path.parent, record))
@@ -374,7 +376,8 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         if opts.resize and opts.resize == facts.display_width == ref_facts.display_width:
             raise ImagingError(f"{src.name}: already displays {opts.resize} px wide, so there is nothing to "
                                "resize (optimize it without --resize)")
-        plan = ladder.plan(facts, profile=opts.profile, out_format=opts.out_format, resize=opts.resize)
+        plan = ladder.plan(facts, profile=opts.profile, out_format=opts.out_format, resize=opts.resize,
+                           assume_srgb=opts.assume_srgb)
         notes += plan.notes
         rungs, target_fmt = plan.rungs, plan.out_format
         source_info = {"format": facts.format, "width": facts.width, "height": facts.height, "colors": facts.colors,
@@ -464,7 +467,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
         "source": {"path": str(src), "sha256": src_hash, "size": size, **source_info},
         "ref": {"path": str(ref_path), "sha256": ref_hash, "size": ref_path.stat().st_size},
         "profile": opts.profile, "gates": asdict(opts.gates), "resize": opts.resize,
-        "min_saving": opts.min_saving,
+        "min_saving": opts.min_saving, "assume_srgb": opts.assume_srgb,
         "format_requested": opts.out_format, "format": target_fmt, "target": str(target),
         "uncalibrated": target_fmt in UNCALIBRATED,
         "waived": list(opts.waived), "notes": notes,

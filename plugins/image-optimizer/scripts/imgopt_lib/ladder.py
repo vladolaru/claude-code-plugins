@@ -1,7 +1,9 @@
 """The candidate ladder: which encoder settings imgopt tries for a file.
 
 ``plan()`` is pure (facts, profile, output format in; rungs out) so the
-ladder is testable without encoders. ``generate()`` runs one rung. Inputs
+ladder is testable without encoders. A PNG with gAMA/cHRM chunks gets lossless rungs only unless
+``assume_srgb`` says a human compared it in a browser and the chunks may be dropped; an animated PNG never
+gets lossy rungs. ``generate()`` runs one rung. Inputs
 are named: "source" (the file itself), "pixels" (RGBA PNG of what the viewer
 sees, resized when asked), "pixels_flat" (that, flattened onto white), "pixels_gray" (that as one
 gray channel, written for gray sources only),
@@ -115,7 +117,8 @@ def check_job(fmt: str, *, profile: str, out_format: str = "keep", resize: int |
     return target
 
 
-def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None = None) -> Plan:
+def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None = None,
+         assume_srgb: bool = False) -> Plan:
     target = check_job(f.format, profile=profile, out_format=out_format, resize=resize)
     lossy = profile != "lossless"
     notes: list[str] = []
@@ -126,7 +129,8 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
     # Reshaped pixels have no source file to keep; a device profile alone sends only the lossy
     # rungs to sRGB pixels, so the source's lossless rungs still offer a profile-keeping pick.
     reshaped = bool(resize) or target != f.format
-    if f.format == "png" and (f.frames > 1 or f.png_colour):
+    gamma_bound = f.png_colour and not assume_srgb
+    if f.format == "png" and (f.frames > 1 or gamma_bound):
         why = (f"animated PNG ({f.frames} frames)" if f.frames > 1
                else "PNG gAMA/cHRM chunks that browsers apply and pixel encoders drop")
         if reshaped:
@@ -135,6 +139,9 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
         if lossy:
             notes.append(f"{why}: lossless rungs only, so it renders as before")
         lossy = False
+    if f.format == "png" and f.png_colour and assume_srgb and lossy:
+        notes.append("gAMA/cHRM treated as sRGB (--assume-srgb, checked by the human): pixel candidates drop "
+                     "those chunks; lossless candidates keep them")
     pixel = reshaped or (lossy and f.device_profile)
     # What the encoders get: a resize scales both sides, so the encode-time caps count the encoded pixels.
     encoded_pixels = f.width * f.height * (resize / f.display_width) ** 2 if resize else f.width * f.height

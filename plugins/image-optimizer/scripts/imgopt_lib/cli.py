@@ -141,7 +141,7 @@ def cmd_candidates(args) -> int:
         refs = _baselines(inputs, args.ref_rev, out)
     opts = C.Options(profile=args.profile, out=out, gates=gates, refs=refs, ref_rev=args.ref_rev,
                      resize=args.resize, out_format=args.format, waived=chk.waived,
-                     min_saving=args.min_saving)
+                     min_saving=args.min_saving, assume_srgb=args.assume_srgb)
     records = C.run(inputs, opts, chk.tools, script=SCRIPT, jobs=max(1, args.jobs))
     return 0 if len(records) == len(inputs) and not any(C.all_errored(r) for r in records) else 1
 
@@ -346,6 +346,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--format", choices=OUTPUT_FORMATS, default="keep")
     c.add_argument("--min-saving", type=parse_size, default=0, metavar="BYTES",
                    help="leave files that save less than this untouched (bytes, or 3KB)")
+    c.add_argument("--assume-srgb", action="store_true",
+                   help="treat PNG gAMA/cHRM as sRGB so lossy candidates are tried; only for a file the human "
+                        "compared in a browser, run as its own set")
     c.add_argument("--ssim", type=float)
     c.add_argument("--ss2", type=float)
     c.add_argument("--band", type=float)

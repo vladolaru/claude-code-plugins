@@ -1129,3 +1129,13 @@ def test_min_saving_is_recorded_and_leaves_small_savings_untouched(factory, tool
     src = factory.logo()
     [r] = C.run([src.resolve()], opts(tmp_path / "out", min_saving=10**9), tools, log=quiet)
     assert r["min_saving"] == 10**9 and r["verdict"] == "untouched"
+
+
+def test_assume_srgb_is_recorded_and_a_different_setting_is_a_stale_record(factory, toolset, tmp_path):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.gamma_png(gamma=0.45455).resolve()
+    out = tmp_path / "out"
+    [r] = C.run([src], opts(out, "high", assume_srgb=True), tools, log=quiet)
+    assert r["assume_srgb"] is True
+    C.write_run(out, [src], opts(out, "high"))  # a later run without the flag
+    assert C.load_records(out) == [] and any("other settings" in s for s in C.stale_records(out))

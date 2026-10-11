@@ -69,7 +69,7 @@ def _took_source(record: dict, chosen: dict, facts) -> bool:
     is `candidates._judge`'s: a lossless-kind rung (``Rung.kind``).
     """
     plan = ladder.plan(facts, profile=record.get("profile", "lossless"), out_format=record["format"],
-                       resize=record.get("resize"))
+                       resize=record.get("resize"), assume_srgb=record.get("assume_srgb", False))
     rung = next((r for r in plan.rungs if r.label == chosen["label"]), None)
     return rung is None or rung.kind == "lossless"
 

@@ -274,3 +274,16 @@ def test_an_encoders_multi_line_complaint_stays_on_one_line():
     """An encoder that prints several lines on refusing an input must not break the candidates table."""
     proc = subprocess.CompletedProcess([], 1, "", "Unsupported input JPEG file.\nPlease provide a PNG.\nProcessing failed\n")
     assert L._tail(proc) == "Unsupported input JPEG file. Please provide a PNG. Processing failed"
+
+
+def test_assume_srgb_lets_a_gamma_png_have_lossy_rungs(factory):
+    f = I.read_facts(factory.gamma_png(gamma=0.45455))
+    assert not any(r.kind == "lossy" for r in L.plan(f, profile="high").rungs)
+    p = L.plan(f, profile="high", assume_srgb=True)
+    assert any(r.tool == "pngquant" for r in p.rungs)
+    assert any("treated as sRGB" in n for n in p.notes)
+
+
+def test_assume_srgb_never_unlocks_an_animated_png(factory):
+    f = I.read_facts(factory.apng())
+    assert not any(r.kind == "lossy" for r in L.plan(f, profile="high", assume_srgb=True).rungs)
