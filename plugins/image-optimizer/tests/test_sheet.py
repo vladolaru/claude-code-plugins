@@ -521,3 +521,25 @@ def test_an_untouched_card_shows_why(tmp_path, factory):
     _, page = S.build(out)
     [text] = run_page(page, "[...cards()].map(c => c.textContent)")
     assert "untouched (saving 308 B is below max(1 KB, 1%))" in text
+
+
+def with_a_second_variant(out, *, size_delta=10, **extra):
+    """fake_out's record plus a pngquant-c16 variant ``size_delta`` bytes larger than the pick."""
+    folder = out / "photo--x"
+    record = json.loads((folder / "metrics.json").read_text())
+    (folder / "c16.png").write_bytes((folder / "pick.png").read_bytes())
+    record["candidates"].append({**record["candidates"][0], "label": "pngquant-c16", "file": "c16.png",
+                                 "size": record["candidates"][0]["size"] + size_delta, **extra})
+    (folder / "metrics.json").write_text(json.dumps(record))
+
+
+def test_changing_the_variant_keeps_keyboard_focus_on_the_selector(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    with_a_second_variant(out)
+    _, page = S.build(out)
+    focused = run_page(page, """(() => {
+      const s = cards()[0].querySelector('select'); s.focus(); s.value = 'pngquant-c16'; s.onchange();
+      const now = cards()[0].querySelector('select');
+      return [document.activeElement === now, now.children.find(o => o.selected).value];
+    })()""")
+    assert focused == [True, "pngquant-c16"]  # arrow keys keep stepping through the variants

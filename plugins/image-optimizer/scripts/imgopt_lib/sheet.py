@@ -208,7 +208,10 @@ function card(f){
   if(f.variants.length){  // even one option: the selector names the variant a verdict keeps
     const s=document.createElement('select');
     for(const x of f.variants){const o=document.createElement('option'); o.value=x.label; o.textContent=x.meta; o.selected=x.label===SELECTED.get(f.name); s.append(o);}
-    s.onchange=()=>{SELECTED.set(f.name,s.value); VERDICTS.delete(f.name); c.replaceWith(card(f)); update();};  // a verdict names the variant on screen
+    s.onchange=()=>{  // a verdict names the variant on screen; the rebuilt card's selector keeps the focus
+      SELECTED.set(f.name,s.value); VERDICTS.delete(f.name);
+      const n=card(f); c.replaceWith(n); n.querySelector('select').focus(); update();
+    };
     const l=document.createElement('label'); l.append('Variant ',s); c.append(l);
   }
   if(f.tiles.length||(switched&&v&&v.changes_pixels)){
