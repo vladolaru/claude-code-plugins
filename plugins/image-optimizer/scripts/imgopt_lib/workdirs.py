@@ -74,9 +74,10 @@ def folder_size(path: Path) -> int:
 
 def clean(out: Path, *, keep_picks: bool) -> int:
     """Delete a working folder or, with ``keep_picks``, everything in its record folders except what `sheet`
-    and `apply` read (the record, the reference, the source copy, the pick and the choice), including the measurement
-    folders a killed run leaves behind; returns the bytes freed. The marker, run.json and .gitignore stay, so the folder still names its last run. Only a folder carrying
-    the marker `candidates` writes is touched: file names like run.json or metrics.json are common elsewhere."""
+    and `apply` read (the record, the reference, the source copy, the pick and the choice), including the
+    measurement folders a killed run leaves behind; returns the bytes freed. The marker, run.json and .gitignore
+    stay, so the folder still names its last run. Only a folder carrying the marker `candidates` writes is touched:
+    file names like run.json or metrics.json are common elsewhere."""
     out = Path(out)
     if not (out / WORKDIR_MARKER).is_file():
         raise UsageError(f"{out}: not an imgopt working folder (`candidates` makes one and marks it with "

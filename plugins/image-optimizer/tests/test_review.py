@@ -22,7 +22,8 @@ def fake_record(tmp_path, *, name="a.png", folder_name="a--1"):
         label = f"v{size}"
         (folder / f"{label}.png").write_bytes(b"v" * size)
         cands.append({"key": f"k{size}", "label": label, "file": f"{label}.png", "kind": "lossy", "size": size,
-                      "ssim": 0.99, "ss2": 85.0, "band": 1.0, "pass": passed, "reason": "" if passed else "banding 4.0 > 3"})
+                      "ssim": 0.99, "ss2": 85.0, "band": 1.0, "pass": passed,
+                      "reason": "" if passed else "banding 4.0 > 3"})
     record = {"schema": 1, "source": {"path": str(src), "sha256": C.sha256(src), "size": 20_000, "format": "png"},
               "target": str(src), "resize": None, "format": "png", "candidates": cands, "pick": "v12000.png",
               "verdict": "apply", "verdict_reason": "x", "min_saving": 0}
@@ -112,17 +113,19 @@ def test_keep_with_another_variant_sets_the_choice_and_is_stored(tmp_path):
     assert RV.verdict_of(folder.parent, fresh)["note"] == "the pick looked soft"
 
 
-def test_milder_or_stronger_steps_from_the_variant_shown_and_reject_ignores_it(tmp_path):
+@pytest.mark.parametrize("how, stepped", [("stronger", "v12000"), ("milder", "v18000")])
+def test_milder_or_stronger_steps_from_the_variant_shown_and_reject_ignores_it(tmp_path, how, stepped):
     folder, record = fake_record(tmp_path)
     folder2, record2 = fake_record(tmp_path, name="b.png", folder_name="b--1")
     a, b = record["source"]["path"], record2["source"]["path"]
     RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
-        a: {"verdict": "stronger", "variant": "v15000"}, b: {"verdict": "reject", "variant": "v18000"}}))
+        a: {"verdict": how, "variant": "v15000"}, b: {"verdict": "reject", "variant": "v18000"}}))
     fresh = {r["source"]["path"]: (f, r) for f, r in RV.rows_of([folder.parent])}
     folder, shown = fresh[a]
     assert C.choice_of(shown)["label"] == "v15000"
-    assert RV.verdict_of(folder.parent, shown)["variant"] == "v15000"
-    assert RV.choose(folder, shown, "stronger")["label"] == "v12000"  # stronger than what the human saw
+    assert RV.verdict_of(folder.parent, shown) == {"verdict": how, "variant": "v15000", "note": "",
+                                                    "sha256": shown["source"]["sha256"]}
+    assert RV.choose(folder, shown, how)["label"] == stepped  # one step from what the human saw, not the pick
     _, rejected = fresh[b]
     assert C.choice_of(rejected)["label"] == "v12000" and RV.verdict_of(folder.parent, rejected)["verdict"] == "reject"
 

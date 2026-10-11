@@ -400,7 +400,8 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("workdir", help="print (and create) a stable working folder for a task")
     w.add_argument("task")
     w.set_defaults(func=cmd_workdir)
-    k = sub.add_parser("clean", help="delete a working folder, or with --keep-picks only its losing candidates")
+    k = sub.add_parser("clean", help="delete a working folder, or with --keep-picks only its unchosen variants "
+                       "(each file's pick and choice stay)")
     k.add_argument("out", nargs="?", help="the working folder (omit with --store)")
     k.add_argument("--keep-picks", action="store_true")
     k.add_argument("--store", action="store_true", help="prune the shared variant store instead of a folder")
