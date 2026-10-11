@@ -516,7 +516,7 @@ def test_a_card_shows_the_status_line_with_larger_sizes_and_the_format_change(tm
     [[text, tags]] = run_page(page, "[...cards()].map(c => [c.textContent, c.querySelectorAll('.tag')"
                                     ".map(t => t.className + ':' + t.textContent)])")
     assert "LARGER than the original" in text and "jpeg -> png" in text
-    assert tags[:3] == ["tag:will be written", "tag warn:LARGER", "tag ok:passes"]  # a chip as well as the words
+    assert tags[:3] == ["tag:written if kept", "tag warn:LARGER", "tag ok:passes"]  # a chip as well as the words
     assert f"{C.kb(source['size'])} -> {C.kb(pick['size'])}" in text
     assert "SSIM 0.9500 (floor 0.98)" in text  # the variant's scores stay beside the status
 
@@ -525,8 +525,33 @@ def test_an_untouched_card_shows_why(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     _rewrite(out, verdict="untouched", verdict_reason="saving 308 B is below max(1 KB, 1%)")
     _, page = S.build(out)
-    [text] = run_page(page, "[...cards()].map(c => c.textContent)")
-    assert "untouched (saving 308 B is below max(1 KB, 1%))" in text
+    [[text, status]] = run_page(page, "[...cards()].map(c => [c.textContent, c.querySelector('.meta').textContent])")
+    assert "saving 308 B is below max(1 KB, 1%)" in text
+    assert status.count("untouched") == 1  # the chip says it; the line gives only the reason
+
+
+def test_the_chip_says_a_lossy_choice_is_written_only_once_kept(tmp_path, factory):
+    out = fake_out(tmp_path, factory)  # the pick is lossy: `apply` writes it only after a keep
+    _, page = S.build(out)
+    chips = run_page(page, """(() => {
+      const chip = () => cards()[0].querySelector('.tag').textContent, seen = [chip()];
+      const keep = cards()[0].querySelectorAll('input').find(i => i.value === 'keep');
+      keep.checked = true; keep.onchange(); seen.push(chip());
+      const reject = cards()[0].querySelectorAll('input').find(i => i.value === 'reject');
+      reject.checked = true; reject.onchange(); seen.push(chip());
+      return seen;
+    })()""")
+    assert chips == ["written if kept", "will be written", "written if kept"]
+
+
+def test_the_chip_says_a_lossless_choice_is_written(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    record = json.loads((out / "photo--x" / "metrics.json").read_text())
+    record["candidates"][0]["kind"] = "lossless"
+    (out / "photo--x" / "metrics.json").write_text(json.dumps(record))
+    _, page = S.build(out)
+    [chip] = run_page(page, "[...cards()].map(c => c.querySelector('.tag').textContent)")
+    assert chip == "will be written"  # no keep needed
 
 
 def with_a_second_variant(out, *, size_delta=10, **extra):

@@ -230,12 +230,15 @@ function pane(label, src, name, ...tags){
 }
 function card(f){
   const c=document.createElement('section'); c.className='card';
+  // `apply` writes a lossy choice only after a keep of that variant; a lossless one unless rejected.
+  const kept=()=>{const k=VERDICTS.get(f.name); return !!k&&k.verdict==='keep'&&k.variant===f.choice;};
+  const writeTag=()=>tag(f.choice_kind==='lossy'&&!kept()?'written if kept':'will be written');
   const cut=f.name.lastIndexOf('/')+1;  // the file name leads; its folder sits above it
   const h=document.createElement('h3'), dir=document.createElement('span');
   dir.className='dir'; dir.textContent=f.name.slice(0,cut); h.append(dir,f.name.slice(cut));
   const v=variantOf(f), switched=SELECTED.get(f.name)!==f.choice;
   // The status worked out for the page's choice: sizes, format change, LARGER, why it is or is not written.
-  const status=[f.verdict==='apply'?tag('will be written'):tag('untouched','warn')];
+  const status=[f.verdict==='apply'?writeTag():tag('untouched','warn')];
   if(f.larger) status.push(tag('LARGER','warn'));
   if(v&&!switched) status.push(gateTag(v));
   const head=document.createElement('div');
@@ -283,7 +286,11 @@ function card(f){
     for(const k of KINDS){
       const l=document.createElement('label'); const r=document.createElement('input');
       r.type='radio'; r.name='v-'+f.name; r.value=k; r.checked=!!cur&&cur.verdict===k;
-      r.onchange=()=>{NOTES.set(f.name,note.value); VERDICTS.set(f.name,{verdict:k,variant:SELECTED.get(f.name)}); update();};
+      r.onchange=()=>{
+        NOTES.set(f.name,note.value); VERDICTS.set(f.name,{verdict:k,variant:SELECTED.get(f.name)});
+        const chip=c.querySelector('.tag'); if(f.verdict==='apply'&&chip) chip.textContent=writeTag().textContent;
+        update();
+      };
       l.append(r,k); row.append(l);
     }
     row.append(note);
@@ -331,15 +338,21 @@ def _floor(value: float | None) -> str:
     return f" (floor {value:g})" if value is not None else ""
 
 
+def _decision(record: dict) -> str:
+    """The verdict and its reason; an untouched file's verdict is already the card's chip, so only the reason."""
+    reason = record["verdict_reason"]
+    return reason if record["verdict"] == "untouched" else f"{record['verdict']} ({reason})"
+
+
 def _meta(record: dict, chosen: dict | None) -> str:
     s = record["source"]
     dims = f"{s['width']}x{s['height']} " if s.get("width") else ""
     if not chosen:
-        return f"{dims}{s['format']} · {kb(s['size'])} · untouched ({record['verdict_reason']})"
+        return f"{dims}{s['format']} · {kb(s['size'])} · {record['verdict_reason']}"
     quality = _quality(record, chosen, "reported, not gated: gated only on palette PNG; view the tiles")
     dropped = f" · {removes(chosen)}" if removes(chosen) else ""
     return (f"{dims}{s['format']} -> {record['format']} · {kb(s['size'])} -> {kb(chosen['size'])} · "
-            f"{chosen['label']} · {quality}{dropped} · {record['verdict']} ({record['verdict_reason']})")
+            f"{chosen['label']} · {quality}{dropped} · {_decision(record)}")
 
 
 def _quality(record: dict, c: dict, ungated: str = "reported, not gated") -> str:
