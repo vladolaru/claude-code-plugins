@@ -122,8 +122,24 @@ def test_a_second_folder_reuses_every_candidate_without_encoding(factory, toolse
     monkeypatch.setattr(ladder, "generate", lambda *a, **k: calls.append(1))
     [r] = C.run([src], opts(tmp_path / "two"), tools, log=lambda _: None)
     assert calls == [] and C.pick_of(r) is not None
+    lines = []
+    C.run([src], opts(tmp_path / "three"), tools, log=lines.append)
+    n = len([c for c in r["candidates"] if "error" not in c or c.get("error_kind") == "refused"])
+    assert f"{n} variant(s) from the store, 0 encoded." in lines
     folder = next(p for p in (tmp_path / "two").iterdir() if p.is_dir())
     assert (folder / C.pick_of(r)["file"]).is_file()
+
+
+def test_the_summary_counts_what_was_encoded(factory, toolset, tmp_path):
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.logo().resolve()
+    opts = lambda out: C.Options(profile="lossless", out=out, gates=G.gates_for("lossless"))
+    lines = []
+    [r] = C.run([src], opts(tmp_path / "one"), tools, log=lines.append)
+    assert f"0 variant(s) from the store, {len(r['candidates'])} encoded." in lines
+    lines = []
+    C.run([src], opts(tmp_path / "one"), tools, log=lines.append)  # the same folder: its own files are reused
+    assert f"0 variant(s) from the store, 0 encoded, {len(r['candidates'])} already in the working folder." in lines
 
 
 def test_a_copied_lossy_variant_is_not_measured_again(factory, toolset, tmp_path):

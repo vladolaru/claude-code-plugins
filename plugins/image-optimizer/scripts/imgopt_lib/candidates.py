@@ -30,6 +30,7 @@ import json
 import shlex
 import shutil
 import tempfile
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -355,7 +356,9 @@ def _no_pick_reason(cands: list[dict], opts: Options) -> str:
     return why
 
 
-def _process(src: Path, opts: Options, tools: dict) -> dict:
+def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int]]:
+    """The record of ``src``, and where its candidates came from: {"here": reused from this working folder,
+    "store": taken from the variant store, "encoded": made now}."""
     folder = opts.out / subdir_name(src)
     ref_path = opts.refs.get(src, src)
     src_hash, ref_hash = sha256(src), sha256(ref_path)
@@ -443,6 +446,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     size = src.stat().st_size
     in_place = target == src and not opts.resize
     cands = []
+    origins = dict.fromkeys(("here", "store", "encoded"), 0)
     with tempfile.TemporaryDirectory(dir=folder) as measure_dir:
         ref_cache: dict = {}  # the flattened reference per background, written once for every candidate
         for rung in (r for r in rungs if _available(r, tools)):
@@ -450,14 +454,16 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
             old = previous.get(key)
             stored = ST.get(key) if opts.use_store and not _reusable(old, folder) else None
             if _reusable(old, folder):
-                rec = _reuse(old)
+                rec, origin = _reuse(old), "here"
             elif stored is not None and ST.restore(stored, folder):
-                rec = _reuse(stored)
+                rec, origin = _reuse(stored), "store"
             elif fmt == "svg":
-                rec = _svg_rung(rung, key, inputs, folder, src, tools)
+                rec, origin = _svg_rung(rung, key, inputs, folder, src, tools), "encoded"
             else:
                 rec = _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure,
                                 size if in_place else None, Path(measure_dir), ref_cache)
+                origin = "encoded"
+            origins[origin] += 1
             rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
             cands.append(rec)
             write_record(folder, {"schema": SCHEMA, "complete": False, "candidates": cands})
@@ -496,7 +502,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     if opts.use_store:
         for cand in cands:
             ST.put(cand, folder, source_sha=src_hash, ref_sha=ref_hash)
-    return record
+    return record, origins
 
 
 def _fmt_score(c: dict) -> str:
@@ -608,13 +614,14 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
         log("Next: nothing to apply.")
 
 
-def _process_or_skip(src: Path, opts: Options, tools: dict) -> tuple[dict | None, str]:
+def _process_or_skip(src: Path, opts: Options, tools: dict) -> tuple[dict | None, str, dict[str, int]]:
     """``_process`` for a worker process: a source that cannot be read comes back as its reason. Nothing here
     prints; the parent logs, in input order."""
     try:
-        return _process(Path(src), opts, tools), ""
+        record, origins = _process(Path(src), opts, tools)
     except READ_FAILURES as error:
-        return None, str(error)
+        return None, str(error), {}
+    return record, "", origins
 
 
 def _results(inputs: list[Path], opts: Options, tools: dict, jobs: int, log):
@@ -675,7 +682,9 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     mark(opts.out)
     write_run(opts.out, inputs, opts)
     records = []
-    for src, (record, error) in zip(inputs, _results(inputs, opts, tools, jobs, log)):
+    origins: Counter = Counter()
+    for src, (record, error, origin) in zip(inputs, _results(inputs, opts, tools, jobs, log)):
+        origins.update(origin)
         if record is None:
             log(f"\n== {src}: skipped: {error}")
             _record_skip(opts.out / subdir_name(src), error)
@@ -686,6 +695,8 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
                 f"(first error: {record['candidates'][0]['error']})")
         records.append(record)
     summarize(records, opts.out, script or Path("imgopt.py"), tools, log)
+    here = f", {origins['here']} already in the working folder" if origins["here"] else ""
+    log(f"{origins['store']} variant(s) from the store, {origins['encoded']} encoded{here}.")
     if opts.use_store:
         removed, freed = ST.prune()
         pruned = f"; pruned {removed} unused variant(s), {freed / 1e6:.1f} MB" if removed else ""
