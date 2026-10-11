@@ -79,10 +79,11 @@ def _refuse_out_inside_inputs(out: Path, paths) -> None:
 
 
 def _refuse_unmarked_out(out: Path) -> None:
-    """A later `clean` deletes any marked folder, so `candidates` marks only an empty folder or one it made."""
+    """A later `clean` deletes any marked folder, so `candidates` marks only an empty folder or one imgopt made
+    (`workdir`, or an earlier run)."""
     if out.is_dir() and not (out / WORKDIR_MARKER).is_file() and any(out.iterdir()):
-        raise UsageError(f"--out {out} already has files and was not made by `imgopt candidates`, which writes "
-                         "only into an empty folder or one it made earlier; use `imgopt workdir <task>`")
+        raise UsageError(f"--out {out} already has files and was not made by imgopt; `candidates` writes only into "
+                         "an empty folder or one `imgopt workdir` or an earlier run made; use `imgopt workdir <task>`")
 
 
 def _baselines(inputs: list[Path], rev: str, out: Path) -> dict[Path, Path]:

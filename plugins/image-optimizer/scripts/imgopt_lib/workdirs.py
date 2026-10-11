@@ -47,20 +47,24 @@ def _writable(folder: Path) -> bool:
 
 
 def workdir(task: str) -> Path:
-    """The working folder for ``task``: under the cache root, else under $TMPDIR (sandboxes)."""
+    """The working folder for ``task``: under the cache root, else under $TMPDIR (sandboxes). It is marked
+    (`mark`) as it is made, so a baseline staged in it before the first run (the skill's ``ref.<ext>``) does not
+    make `candidates` refuse it as a folder it did not make."""
     slug = _slug(task)
     options = [cache_root() / "work" / slug]
     if os.environ.get("TMPDIR"):
         options.append(Path(os.environ["TMPDIR"]) / "image-optimization" / slug)
     for folder in options:
         if _writable(folder):
+            mark(folder)
             return folder
     raise UsageError("no writable working folder (tried " + ", ".join(map(str, options)) + "); pass --out yourself")
 
 
 def mark(out: Path) -> None:
     """Make ``out`` an imgopt working folder: created if needed, never committed (.gitignore), and carrying the
-    marker `clean` requires. `candidates` calls it before it writes anything into ``out``."""
+    marker `clean` requires. `workdir` calls it on the folder it makes, and `candidates` before it writes anything
+    into ``out``."""
     out.mkdir(parents=True, exist_ok=True)
     ignore = out / ".gitignore"
     if not ignore.exists():

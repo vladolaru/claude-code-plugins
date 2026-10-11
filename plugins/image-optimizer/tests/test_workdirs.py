@@ -16,7 +16,7 @@ def test_cache_root_honours_imgopt_cache(monkeypatch, tmp_path):
 def test_workdir_is_stable_and_slugged(monkeypatch, tmp_path):
     monkeypatch.setenv("IMGOPT_CACHE", str(tmp_path / "c"))
     a = W.workdir("WooCommerce #69539 icons")
-    assert a == tmp_path / "c" / "work" / "woocommerce-69539-icons" and a.is_dir()
+    assert a == tmp_path / "c" / "work" / "woocommerce-69539-icons" and (a / WORKDIR_MARKER).is_file()
     assert W.workdir("WooCommerce #69539 icons") == a
 
 
@@ -106,6 +106,5 @@ def test_the_cli_prints_the_workdir_and_cleans_it(monkeypatch, tmp_path, capsys)
     assert cli.main(["workdir", "icons"]) == 0
     folder = tmp_path / "c" / "work" / "icons"
     assert capsys.readouterr().out.strip() == str(folder)
-    (folder / WORKDIR_MARKER).write_text("")
     assert cli.main(["clean", str(folder)]) == 0
     assert "Freed" in capsys.readouterr().out and not folder.exists()

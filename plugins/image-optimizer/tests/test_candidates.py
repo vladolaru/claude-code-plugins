@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1016,6 +1017,20 @@ def test_cli_refuses_a_non_empty_out_folder_it_did_not_make(factory, tmp_path):
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "imgopt workdir" in proc.stderr and "writes only into an empty folder" in proc.stderr
     assert sorted(p.name for p in out.iterdir()) == ["notes.txt"]
+
+
+def test_cli_accepts_a_workdir_holding_the_documented_baseline(factory, toolset, tmp_path):
+    env = {**os.environ, "IMGOPT_CACHE": str(tmp_path / "cache")}
+    out = Path(subprocess.run([sys.executable, str(SCRIPT), "workdir", "baseline"], capture_output=True, text=True,
+                              env=env, check=True).stdout.strip())
+    src = factory.logo()
+    ref = out / "ref.png"  # the skill's recipe: `git show <rev>:<path> > <workdir>/ref.<ext>`, then --ref
+    ref.write_bytes(src.read_bytes())
+    proc = subprocess.run([sys.executable, str(SCRIPT), "candidates", str(src), "--ref", str(ref), "--out", str(out)],
+                          capture_output=True, text=True, env=env)
+    if proc.returncode == 2 and "BLOCKED" in proc.stdout:
+        pytest.skip("tools missing on this machine")
+    assert proc.returncode in (0, 1) and "already has files" not in proc.stderr, proc.stdout + proc.stderr
 
 
 def test_cli_accepts_an_empty_out_folder_and_one_candidates_made(factory, toolset, tmp_path):
