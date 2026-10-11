@@ -408,3 +408,13 @@ def test_verdicts_are_written_whole_or_not_at_all(tmp_path, monkeypatch):
         RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
             record["source"]["path"]: {"verdict": "reject"}}))
     assert book.read_text() == '{"files": {}}'
+
+
+def test_choose_takes_one_way_of_naming_the_variant(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    folder, record = fake_record(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        cli.main(["choose", str(folder.parent), "--file", record["source"]["path"], "--label", "v15000", "--milder"])
+    assert error.value.code == 2 and "not allowed with argument" in capsys.readouterr().err
+    assert "choice" not in json.loads((folder / "metrics.json").read_text())
