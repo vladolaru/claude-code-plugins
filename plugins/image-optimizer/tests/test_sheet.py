@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from urllib.parse import unquote
@@ -9,6 +10,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from imgopt_lib import candidates as C
+from imgopt_lib import gates as G
 from imgopt_lib import review as RV
 from imgopt_lib import sheet as S
 from imgopt_lib.ladder import UsageError
@@ -446,3 +449,75 @@ def test_variants_say_whether_they_change_pixels(tmp_path, factory):
     _, page = S.build(out)
     [f] = _page_data(page)["files"]
     assert {v["label"]: v["changes_pixels"] for v in f["variants"]} == {"pngquant-c8": True, "oxipng": False}
+
+
+# Just enough DOM for the page's script to run under node: what a card shows is its text, not DATA.
+DOM = r"""
+class Text { constructor(t) { this.textContent = t; } }
+class El {
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.parent = null; this.className = '';
+                     this.style = {}; }
+  append(...xs) { for (const x of xs) { const n = typeof x === 'string' ? new Text(x) : x; n.parent = this;
+                                        this.children.push(n); } }
+  get textContent() { return this.children.map(c => c.textContent).join(''); }
+  set textContent(t) { this.children = []; if (t !== '') this.append(String(t)); }
+  replaceWith(n) { this.parent.children[this.parent.children.indexOf(this)] = n; n.parent = this.parent; }
+  addEventListener() {}
+  get classList() { const e = this; return { toggle(c) { e.className += ' ' + c; } }; }
+  focus() { document.activeElement = this; }
+  select() {}
+  *walk() { for (const c of this.children) if (c instanceof El) { yield c; yield* c.walk(); } }
+  querySelectorAll(sel) { return [...this.walk()].filter(e => sel.startsWith('.')
+    ? e.className.split(' ').includes(sel.slice(1)) : e.tagName === sel.toUpperCase()); }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+}
+const ids = {};
+const document = { body: new El('body'), activeElement: null, createElement: t => new El(t),
+  getElementById: id => ids[id]
+    || (ids[id] = Object.assign(new El('div'), {id, value: {sort: 'bytes', filter: 'all'}[id]})) };
+const cards = () => document.getElementById('cards').children;
+"""
+
+
+def run_page(page: Path, then: str):
+    """Run the page's script under node, then ``then`` (JS that prints one JSON value), and return that value."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("needs node to run the page's script")
+    script = re.search(r"<script>(.*)</script>", page.read_text(), re.S).group(1)
+    js = page.parent / "run-page.js"
+    js.write_text(DOM + script + "\nconsole.log(JSON.stringify(" + then + "));\n")
+    proc = subprocess.run([node, str(js)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _rewrite(out, name="photo--x", **changes):
+    path = out / name / "metrics.json"
+    record = json.loads(path.read_text())
+    record.update(changes)
+    path.write_text(json.dumps(record))
+    return record
+
+
+def test_a_card_shows_the_status_line_with_larger_sizes_and_the_format_change(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    record = json.loads((out / "photo--x" / "metrics.json").read_text())
+    pick = record["candidates"][0]
+    source = {**record["source"], "format": "jpeg", "size": pick["size"] // 2}
+    verdict, why = G.verdict(source["size"], pick, in_place=False)
+    _rewrite(out, source=source, target=str(Path(source["path"]).with_suffix(".png")), verdict=verdict,
+             verdict_reason=why)
+    _, page = S.build(out)
+    [text] = run_page(page, "[...cards()].map(c => c.textContent)")
+    assert "LARGER than the original" in text and "jpeg -> png" in text
+    assert f"{C.kb(source['size'])} -> {C.kb(pick['size'])}" in text
+    assert "SSIM 0.9500 (floor 0.98)" in text  # the variant's scores stay beside the status
+
+
+def test_an_untouched_card_shows_why(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    _rewrite(out, verdict="untouched", verdict_reason="saving 308 B is below max(1 KB, 1%)")
+    _, page = S.build(out)
+    [text] = run_page(page, "[...cards()].map(c => c.textContent)")
+    assert "untouched (saving 308 B is below max(1 KB, 1%))" in text

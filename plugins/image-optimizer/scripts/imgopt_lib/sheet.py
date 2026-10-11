@@ -13,8 +13,9 @@ before against the chosen variant, opens at 100% with panes that scroll
 together, and offers a selector over every measured variant (one that fails
 the gates says so). The selector always names the variant on screen: with
 no choice, the first listed is shown, and a verdict sends it. The 1:1 crops are of the variant the page was built
-with; switching to another dims them, drops the card's build-time status
-and says how to get crops of the variant on screen. The human marks each
+with; switching to another dims them, labels the card's status as the
+page's choice's, shows the scores of the variant on screen, and says how to
+get crops of it. The human marks each
 file keep, reject, milder or stronger, with an optional note, and "Copy
 verdicts" gives one block (header line `review.BLOCK_HEADER`, then JSON
 carrying the page's fingerprint and folders) for `imgopt record`. A verdict
@@ -190,15 +191,20 @@ function pane(label, src, name){
 function card(f){
   const c=document.createElement('section'); c.className='card';
   const h=document.createElement('h3'); h.textContent=f.name;
-  const m=document.createElement('div'); m.className='meta';
   const v=variantOf(f), switched=SELECTED.get(f.name)!==f.choice;
-  m.textContent=v?v.meta+(switched?'':' · '+f.verdict):f.meta;  // the status was worked out for the page's choice
+  // The status worked out for the page's choice: sizes, format change, LARGER, why it is or is not written.
+  const m=document.createElement('div'); m.className='meta';
+  m.textContent=(switched&&f.choice?"The page's choice: ":'')+f.meta;
+  c.append(h,m);
+  if(v&&switched){
+    const o=document.createElement('div'); o.className='meta'; o.textContent='On screen: '+v.meta; c.append(o);
+  }
   const panes=document.createElement('div'); panes.className='panes';
   if(f.before_src) panes.append(pane('Before', f.before_src, f.name));
   if(v) panes.append(pane('Variant: '+v.label+(v.pass?'':' (fails the gates)'), v.src, f.name));
   const all=[...panes.querySelectorAll('.pane')];
   all.forEach(p=>p.addEventListener('scroll',()=>all.forEach(o=>{if(o!==p){o.scrollTop=p.scrollTop;o.scrollLeft=p.scrollLeft;}})));
-  c.append(h,m,panes);
+  c.append(panes);
   if(f.variants.length){  // even one option: the selector names the variant a verdict keeps
     const s=document.createElement('select');
     for(const x of f.variants){const o=document.createElement('option'); o.value=x.label; o.textContent=x.meta; o.selected=x.label===SELECTED.get(f.name); s.append(o);}
