@@ -134,7 +134,8 @@ def fingerprint(rows) -> str:
 
 def parse_block(text: str) -> dict:
     """The verdict block the page's "Copy verdicts" gives: the header line, then one JSON object
-    {"fingerprint", "files": {source path: {"verdict", "variant", "note"}}}. Text around it is ignored."""
+    {"fingerprint", "folders": [the page's working folders], "files": {source path: {"verdict", "variant",
+    "note"}}}. Text around it is ignored."""
     start = text.find(BLOCK_HEADER)
     if start < 0:
         raise UsageError(f"no {BLOCK_HEADER!r} line: paste the whole block the page's Copy verdicts button gives")
@@ -145,6 +146,9 @@ def parse_block(text: str) -> dict:
         raise UsageError(f"the verdict block is not complete JSON ({error}); copy it again whole") from error
     if not isinstance(data, dict) or not isinstance(data.get("files"), dict) or "fingerprint" not in data:
         raise UsageError("the verdict block lacks its fingerprint or files; copy it again from the page")
+    folders = data.get("folders", [])
+    if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+        raise UsageError("the verdict block's folders are not a list of paths; copy it again from the page")
     for path, entry in data["files"].items():
         if not isinstance(entry, dict) or entry.get("verdict") not in VERDICTS:
             raise UsageError(f"{path}: verdict must be one of {', '.join(VERDICTS)}")
@@ -158,13 +162,27 @@ def _load(out: Path) -> dict:
         return {"files": {}}
 
 
+def page_folders(data: dict, dirs=None) -> list[Path]:
+    """The working folders a parsed verdict block is for: the ones it names, which ``dirs`` (when given) must
+    match in any order. A block that names none (a page built before blocks named them) needs ``dirs``."""
+    named = [Path(f).resolve() for f in data.get("folders", [])]
+    given = [Path(d).resolve() for d in dirs or []]
+    if given and named and set(given) != set(named):
+        raise UsageError(f"these verdicts are from the page of {' '.join(map(str, named))}, not of "
+                         f"{' '.join(map(str, given))}; name the page's folders, or none to use them")
+    if not (given or named):
+        raise UsageError("the verdict block names no working folders; name the folders its page was built from")
+    return given or named
+
+
 def record_verdicts(dirs, text: str) -> dict[str, int]:
-    """Store the pasted verdicts in each working folder's verdicts.json and return the count per verdict. A
-    "keep", "milder" or "stronger" naming a variant other than the current choice chooses it first, so the stored
-    entry names the variant the human was shown and a later `choose --milder/--stronger` steps from it. A "reject"
-    ignores the variant."""
+    """Store the pasted verdicts in each working folder's verdicts.json and return the count per verdict. The
+    folders are the block's own (`page_folders`); ``dirs``, when given, must be the same. A "keep", "milder" or
+    "stronger" naming a variant other than the current choice chooses it first, so the stored entry names the
+    variant the human was shown and a later `choose --milder/--stronger` steps from it. A "reject" ignores the
+    variant."""
     data = parse_block(text)
-    rows = rows_of(dirs)
+    rows = rows_of(page_folders(data, dirs))
     if data["fingerprint"] != fingerprint(rows):
         raise UsageError("these verdicts are from a page built from other results (a variant was chosen or "
                          "candidates ran again since); rebuild the page with `sheet` and review again")

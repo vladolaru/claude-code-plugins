@@ -244,3 +244,49 @@ def test_a_keep_does_not_follow_its_label_into_a_resized_rerun(factory, toolset,
     [(folder, record)] = C.load_records(out)
     RV.choose(folder, record, first["label"])
     assert C.choice_of(record)["key"] != first["key"] and RV.verdict_of(out, record) is None
+
+
+def two_folders(tmp_path):
+    """Two working folders of one page: a.png in the first, b.png in the second."""
+    folder, record = fake_record(tmp_path)
+    folder2, record2 = fake_record(tmp_path / "second", name="b.png", folder_name="b--1")
+    return [folder.parent, folder2.parent], record["source"]["path"], record2["source"]["path"]
+
+
+def page_block(dirs, files, folders=None):
+    return RV.BLOCK_HEADER + "\n" + json.dumps({"fingerprint": RV.fingerprint(RV.rows_of(dirs)),
+                                                "folders": [str(d) for d in (dirs if folders is None else folders)],
+                                                "files": files})
+
+
+def test_record_takes_the_folders_from_the_block_and_refuses_others(tmp_path):
+    dirs, a, b = two_folders(tmp_path)
+    text = page_block(dirs, {a: {"verdict": "reject", "variant": "v12000"}, b: {"verdict": "reject"}})
+    with pytest.raises(UsageError) as error:
+        RV.record_verdicts([dirs[0]], text)
+    assert all(str(d) in str(error.value) for d in dirs)
+    assert RV.record_verdicts(None, text) == {"reject": 2}
+    assert (dirs[0] / RV.VERDICTS_FILE).is_file() and (dirs[1] / RV.VERDICTS_FILE).is_file()
+    assert RV.record_verdicts(list(reversed(dirs)), text) == {"reject": 2}  # the same folders, in any order
+
+
+def test_record_cli_names_every_folder_of_the_page(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    dirs, a, b = two_folders(tmp_path)
+    pasted = tmp_path / "pasted.txt"
+    pasted.write_text(page_block(dirs, {a: {"verdict": "milder", "variant": "v12000"},
+                                        b: {"verdict": "keep", "variant": "v12000"}}))
+    assert cli.main(["record", "--verdicts", str(pasted)]) == 0
+    out = capsys.readouterr().out
+    both = f"{dirs[0]} {dirs[1]}"
+    assert f"choose {both} --file {a} --milder" in out
+    assert f"sheet {both}" in out and f"apply {both}" in out
+
+
+def test_choose_cli_rebuilds_the_page_of_every_folder(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    dirs, a, _ = two_folders(tmp_path)
+    assert cli.main(["choose", *map(str, dirs), "--file", a, "--label", "v15000"]) == 0
+    assert f"sheet {dirs[0]} {dirs[1]}" in capsys.readouterr().out

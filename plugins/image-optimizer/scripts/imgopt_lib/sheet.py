@@ -238,7 +238,7 @@ function update(){
   const open=DATA.files.filter(f=>f.variants.length&&!VERDICTS.has(f.name)).length;
   document.getElementById('counts').textContent=KINDS.map(k=>`${counts[k]||0} ${k}`).join(', ')+`; ${open} without a verdict`;
   const files=Object.fromEntries([...VERDICTS].map(([name,e])=>[name,{...e,note:NOTES.get(name)||''}]));
-  document.getElementById('block').value=DATA.block_header+'\\n'+JSON.stringify({fingerprint:DATA.fingerprint,files});
+  document.getElementById('block').value=DATA.block_header+'\\n'+JSON.stringify({fingerprint:DATA.fingerprint,folders:DATA.folders,files});
 }
 document.getElementById('copy').onclick=()=>{const b=document.getElementById('block'); b.select(); if(navigator.clipboard) navigator.clipboard.writeText(b.value);};
 document.getElementById('totals').textContent=DATA.totals;
@@ -291,7 +291,7 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
     first folder's ``_sheet``. The page lets the human switch each file between its measured variants, mark a
     verdict, and copy a verdict block that `record` stores. Refuses (UsageError) a folder without records before
     writing anything; per-file failures go to ``problems``."""
-    outs = [Path(o) for o in ([outs] if isinstance(outs, (str, Path)) else outs)]
+    outs = [Path(o).resolve() for o in ([outs] if isinstance(outs, (str, Path)) else outs)]
     rows = rows_of(outs)
     sheet_dir = outs[0] / "_sheet"
     tiles_dir = sheet_dir / "tiles"

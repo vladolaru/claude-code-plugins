@@ -296,13 +296,14 @@ def cmd_choose(args) -> int:
         gate = "passes the gates" if chosen.get("pass") else f"FAILS the gates ({chosen.get('reason', '')})"
         print(f"{record['source']['path']}: now {chosen['label']} ({C.kb(chosen['size'])}), {gate}; "
               f"verdict: {record['verdict']} ({record['verdict_reason']})")
-    print(f"Next: rebuild the page: python3 {shlex.quote(str(SCRIPT))} sheet {shlex.quote(str(folder.parent))}")
+    folders = " ".join(shlex.quote(str(Path(o).resolve())) for o in args.out)
+    print(f"Next: rebuild the page: python3 {shlex.quote(str(SCRIPT))} sheet {folders}")
     return 0
 
 
 def cmd_record(args) -> int:
     text = sys.stdin.read() if args.verdicts == "-" else Path(args.verdicts).read_text()
-    dirs = [Path(d).resolve() for d in args.out]
+    dirs = RV.page_folders(RV.parse_block(text), args.out)
     counts = RV.record_verdicts(dirs, text)
     print("Recorded: " + (", ".join(f"{n} {v}" for v, n in sorted(counts.items())) or "no verdicts"))
     q = shlex.quote
@@ -311,8 +312,8 @@ def cmd_record(args) -> int:
              if (RV.verdict_of(f.parent, r) or {}).get("verdict") in ("milder", "stronger")]
     for folder, record in asked:
         how = RV.verdict_of(folder.parent, record)["verdict"]
-        print(f"  asked {how}: python3 {q(str(SCRIPT))} choose {q(str(folder.parent))} "
-              f"--file {q(record['source']['path'])} --{how}")
+        print(f"  asked {how}: python3 {q(str(SCRIPT))} choose {folders} --file {q(record['source']['path'])} "
+              f"--{how}")
     if asked:
         print(f"Then rebuild the page: python3 {q(str(SCRIPT))} sheet {folders}")
     if counts.get("keep"):
@@ -378,7 +379,8 @@ def build_parser() -> argparse.ArgumentParser:
     how.add_argument("--default", action="store_true")
     ch.set_defaults(func=cmd_choose)
     rc = sub.add_parser("record", help="store the verdicts the human copied from the page")
-    rc.add_argument("out", nargs="+", help="the working folder(s) the page was built from")
+    rc.add_argument("out", nargs="*", help="the working folder(s) the page was built from (default: the ones "
+                    "the block names)")
     rc.add_argument("--verdicts", required=True, metavar="FILE|-", help="the pasted block, in a file or on stdin")
     rc.set_defaults(func=cmd_record)
     a = sub.add_parser("apply", help="write the choices the verdicts keep and re-verify them")

@@ -407,8 +407,10 @@ def test_a_block_made_as_the_page_makes_it_is_recorded_in_both_folders(tmp_path,
     assert keep["choice"] == "pngquant-c8" and "pngquant-c16" in [v["label"] for v in keep["variants"]]
     files = {keep["name"]: {"verdict": "keep", "variant": "pngquant-c16", "note": ""},
              reject["name"]: {"verdict": "reject", "variant": reject["choice"], "note": "too soft"}}
-    block = data["block_header"] + "\n" + json.dumps({"fingerprint": data["fingerprint"], "files": files})
-    assert RV.record_verdicts([first, second], block) == {"keep": 1, "reject": 1}
+    block = data["block_header"] + "\n" + json.dumps({"fingerprint": data["fingerprint"],
+                                                      "folders": data["folders"], "files": files})
+    assert data["folders"] == [str(first.resolve()), str(second.resolve())]
+    assert RV.record_verdicts(None, block) == {"keep": 1, "reject": 1}  # the block names its folders
     one = json.loads((first / RV.VERDICTS_FILE).read_text())["files"]
     two = json.loads((second / RV.VERDICTS_FILE).read_text())["files"]
     assert one[keep["name"]]["verdict"] == "keep" and one[keep["name"]]["variant"] == "pngquant-c16"
