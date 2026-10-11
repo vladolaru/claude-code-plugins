@@ -60,7 +60,7 @@ def test_record_refuses_a_path_outside_the_sample(tmp_path):
     (tmp_path / "sample.json").write_text('[{"file": "/a/x.jpg"}]')
     with pytest.raises(UsageError, match="/a/other.jpg"):
         RV.record(tmp_path, approved=["/a/other.jpg"])
-    assert not (tmp_path / "verdicts.json").exists()
+    assert not (tmp_path / RV.ACCEPTABLE).exists()
 
 
 def test_approved_from_takes_a_verdict_block_or_a_bare_list():
@@ -120,11 +120,14 @@ def check_cli(run_dir, capsys):
     first = sampled[0]["file"]
     pasted = f"{BLOCK_HEADER}\n" + json.dumps({"fingerprint": "ab", "files": {
         s["file"]: {"verdict": "keep" if s["file"] == first else "reject", "variant": "v"} for s in sampled}})
+    page_store = dest / "verdicts.json"  # imgopt's own file in the same folder: the page's verdict store
+    page_store.write_text("page store")
     assert cli.main(["review-record", str(dest), "--verdicts", pasted]) == 0
-    verdicts = {v["file"]: v["acceptable"] for v in json.loads((dest / "verdicts.json").read_text())}
+    assert page_store.read_text() == "page store" and (dest / RV.ACCEPTABLE).is_file()
+    verdicts = {v["file"]: v["acceptable"] for v in json.loads((dest / "acceptable.json").read_text())}
     assert verdicts[first] is True and not any(v for f, v in verdicts.items() if f != first)
-    assert cli.main(["review", str(run_dir)]) == 2  # a rebuild would erase the verdicts
-    assert "verdicts" in capsys.readouterr().out
+    assert cli.main(["review", str(run_dir)]) == 2  # a rebuild would erase the recorded file
+    assert "acceptable.json" in capsys.readouterr().out
 
 
 def test_a_real_run_is_sampled_assembled_reviewed_and_recorded(factory, toolset, tmp_path, capsys):

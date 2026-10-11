@@ -5,7 +5,7 @@ applied is worth a human's eye. Within each (job, category) of a run, `sample` t
 (the ones a gate barely let through, where a wrong floor shows first) plus one random pick from the rest, so the
 review also catches a floor that is too tight everywhere. `assemble` builds, for one job, an imgopt working
 folder holding copies of the sampled record folders and the comparison page `sheet` makes; `review-record` turns
-the verdict block the page's Copy verdicts gives (its `keep` entries) into `verdicts.json`.
+the verdict block the page's Copy verdicts gives (its `keep` entries) into `acceptable.json`.
 
 One folder per job, because a `run.json` carries one profile, resize and format and `load_records` keeps only the
 records that match it. The folders live under `paths.bench_root()/review/<run name>/<job>/`, never in the run.
@@ -31,7 +31,7 @@ from imgopt_lib.ladder import UsageError
 from . import harness, report
 
 SAMPLE = "sample.json"
-VERDICTS = "verdicts.json"
+ACCEPTABLE = "acceptable.json"  # not imgopt's `verdicts.json`, the page's store in the same folder
 
 
 def is_reviewable(row: dict) -> bool:
@@ -107,14 +107,15 @@ def assemble(run_dir: Path, sampled: list[dict], dest: Path, *, problems: list[s
 def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3,
                  seed: int = 1) -> tuple[dict[str, Path], list[str]]:
     """Sample a run's rows and build one review folder per job under ``review_dir``. Returns ({job: folder},
-    problems). Refuses before writing when a folder already holds verdicts: a rebuild would erase them."""
+    problems). Refuses before writing when a folder already holds a recorded acceptable.json: a rebuild would erase
+    it."""
     rows = report.load(run_dir)
     by_job: dict[str, list[dict]] = defaultdict(list)
     for row in sample(rows, per_category, seed):
         by_job[row["job"]].append(row)
-    kept = sorted(str(review_dir / job / VERDICTS) for job in by_job if (review_dir / job / VERDICTS).is_file())
+    kept = sorted(str(review_dir / job / ACCEPTABLE) for job in by_job if (review_dir / job / ACCEPTABLE).is_file())
     if kept:
-        raise UsageError("these folders hold recorded verdicts that a rebuild would erase; move them first: "
+        raise UsageError("these folders hold a recorded acceptable.json that a rebuild would erase; move them first: "
                          + ", ".join(kept))
     problems: list[str] = []
     built: dict[str, Path] = {}
@@ -135,7 +136,7 @@ def approved_from(text: str) -> list[str]:
 
 
 def record(dest: Path, approved: list[str]) -> Path:
-    """Write ``dest``/verdicts.json: every sampled file with `acceptable` true when it was kept. Raises
+    """Write ``dest``/acceptable.json: every sampled file with `acceptable` true when it was kept. Raises
     UsageError for an approved path that is not in the sample (a verdict from some other page)."""
     dest = Path(dest)
     sampled = json.loads((dest / SAMPLE).read_text())
@@ -143,6 +144,6 @@ def record(dest: Path, approved: list[str]) -> Path:
     if unknown:
         raise UsageError(f"not in {dest / SAMPLE}: {', '.join(unknown)}; paste the verdicts of this folder's page")
     kept = set(approved)
-    out = dest / VERDICTS
+    out = dest / ACCEPTABLE
     out.write_text(json.dumps([{**s, "acceptable": s["file"] in kept} for s in sampled], indent=1))
     return out

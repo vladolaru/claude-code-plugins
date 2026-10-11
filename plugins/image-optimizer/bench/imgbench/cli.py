@@ -181,7 +181,7 @@ def _verdicts_text(value: str) -> str:
 
 
 def cmd_review_record(args) -> int:
-    """Write verdicts.json for a review folder from the picks the human kept."""
+    """Write acceptable.json for a review folder from the picks the human kept."""
     dest = Path(args.dest)
     if not (dest / review.SAMPLE).is_file():
         print(f"{dest}: no {review.SAMPLE}; give a review folder that `review` made")
@@ -227,7 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="picks closest to a floor per job and category (default 3), plus one random pick")
     pages.add_argument("--seed", type=int, default=1, help="seed of the random pick (default 1)")
     pages.set_defaults(func=cmd_review)
-    record = commands.add_parser("review-record", help="record the picks a human kept as verdicts.json")
+    record = commands.add_parser("review-record", help="record the picks a human kept as acceptable.json")
     record.add_argument("dest", help="a review folder made by `review` (one per job)")
     record.add_argument("--verdicts", required=True, metavar="LIST|BLOCK|-",
                         help="the page's pasted verdict block (its keep entries count), a comma list of kept paths, "
