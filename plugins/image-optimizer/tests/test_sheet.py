@@ -416,3 +416,32 @@ def test_a_block_made_as_the_page_makes_it_is_recorded_in_both_folders(tmp_path,
     assert one[keep["name"]]["verdict"] == "keep" and one[keep["name"]]["variant"] == "pngquant-c16"
     assert two[reject["name"]]["verdict"] == "reject" and two[reject["name"]]["note"] == "too soft"
     assert set(one) == {keep["name"]} and set(two) == {reject["name"]}
+
+
+def test_a_rebuilt_page_starts_from_the_verdicts_already_recorded(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    _, page = S.build(out)
+    data = _page_data(page)
+    [f] = data["files"]
+    assert f["recorded"] is None
+    RV.record_verdicts(None, data["block_header"] + "\n" + json.dumps({
+        "fingerprint": data["fingerprint"], "folders": data["folders"],
+        "files": {f["name"]: {"verdict": "reject", "variant": f["choice"], "note": "too soft"}}}))
+    _, page = S.build(out)
+    [f] = _page_data(page)["files"]
+    assert f["recorded"] == {"verdict": "reject", "note": "too soft"}
+    text = page.read_text()
+    assert "Recorded earlier: " in text and "f.recorded.note" in text
+
+
+def test_variants_say_whether_they_change_pixels(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    path = out / "photo--x" / "metrics.json"
+    record = json.loads(path.read_text())
+    (out / "photo--x" / "same.png").write_bytes((out / "photo--x" / "pick.png").read_bytes())
+    record["candidates"].append({**record["candidates"][0], "label": "oxipng", "file": "same.png", "kind": "lossless",
+                                 "identical": True, "size": record["candidates"][0]["size"] + 1})
+    path.write_text(json.dumps(record))
+    _, page = S.build(out)
+    [f] = _page_data(page)["files"]
+    assert {v["label"]: v["changes_pixels"] for v in f["variants"]} == {"pngquant-c8": True, "oxipng": False}

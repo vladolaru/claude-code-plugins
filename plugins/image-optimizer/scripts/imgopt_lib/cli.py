@@ -303,11 +303,24 @@ def cmd_choose(args) -> int:
 
 def cmd_record(args) -> int:
     text = sys.stdin.read() if args.verdicts == "-" else Path(args.verdicts).read_text()
-    dirs = RV.page_folders(RV.parse_block(text), args.out)
+    data = RV.parse_block(text)
+    dirs = RV.page_folders(data, args.out)
+    shown = {r["source"]["path"]: C.choice_of(r) for _, r in RV.rows_of(dirs)}  # what the page was built with
     counts = RV.record_verdicts(dirs, text)
     print("Recorded: " + (", ".join(f"{n} {v}" for v, n in sorted(counts.items())) or "no verdicts"))
     q = shlex.quote
     folders = " ".join(q(str(d)) for d in dirs)
+    # A keep of another variant than the page's choice was judged without the 1:1 crops the page had for it.
+    unseen = []
+    for _, record in RV.rows_of(dirs):
+        path, chosen = record["source"]["path"], C.choice_of(record)
+        if (data["files"].get(path, {}).get("verdict") == "keep" and S.needs_tiles(record)
+                and chosen["file"] != (shown[path] or {}).get("file")):
+            unseen.append((path, chosen))
+    for path, chosen in unseen:
+        print(f"  kept without its 1:1 crops: {path} ({chosen['label']})")
+    if unseen:
+        print(f"  view them before placing: python3 {q(str(SCRIPT))} sheet {folders}")
     asked = [(f, r) for f, r in RV.rows_of(dirs)
              if (RV.verdict_of(f.parent, r) or {}).get("verdict") in ("milder", "stronger")]
     for folder, record in asked:

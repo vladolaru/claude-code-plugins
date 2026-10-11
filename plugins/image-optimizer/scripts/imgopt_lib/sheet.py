@@ -12,12 +12,15 @@ One page covers the records of one or more working folders. Each card shows
 before against the chosen variant, opens at 100% with panes that scroll
 together, and offers a selector over every measured variant (one that fails
 the gates says so). The 1:1 crops are of the variant the page was built
-with; switching to another dims them. The human marks each file keep,
-reject, milder or stronger, with an optional note, and "Copy verdicts"
-gives one block (header line `review.BLOCK_HEADER`, then JSON carrying the
-page's fingerprint) for `imgopt record`. A verdict names the variant on
-screen: switching the variant clears the file's verdict (the note stays),
-and a lossless choice starts as keep only while it is shown.
+with; switching to another dims them, drops the card's build-time status
+and says how to get crops of the variant on screen. The human marks each
+file keep, reject, milder or stronger, with an optional note, and "Copy
+verdicts" gives one block (header line `review.BLOCK_HEADER`, then JSON
+carrying the page's fingerprint and folders) for `imgopt record`. A verdict
+names the variant on screen: switching the variant clears the file's
+verdict (the note stays). A rebuilt page starts from the verdicts and
+notes already recorded (`review.verdict_of`), and a lossless choice
+without one starts as keep while it is shown.
 
 A file whose pixels cannot be read gets its card but no tiles; build()
 appends the reason to ``problems`` and carries on, and the command exits 1.
@@ -37,7 +40,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from .candidates import choice_of, kb
 from .imaging import READ_FAILURES, display_pixels, flatten
 from .metrics import diff_max, smooth_mask
-from .review import BLOCK_HEADER, fingerprint, live_variants, rows_of
+from .review import BLOCK_HEADER, fingerprint, live_variants, rows_of, verdict_of
 
 TILE = 320
 SMALL_TILE = 160
@@ -168,8 +171,8 @@ textarea{width:100%;font:12px ui-monospace,monospace}
 <script>
 const DATA = __DATA__;
 const SELECTED = new Map(DATA.files.map(f=>[f.name, f.choice]));
-const VERDICTS = new Map(DATA.files.filter(f=>f.default_verdict).map(f=>[f.name,{verdict:f.default_verdict,variant:f.choice}]));
-const NOTES = new Map();  // kept apart from VERDICTS: a note typed before a verdict, or across a variant switch, stays
+const VERDICTS = new Map(DATA.files.filter(f=>f.recorded||f.default_verdict).map(f=>[f.name,{verdict:f.recorded?f.recorded.verdict:f.default_verdict,variant:SELECTED.get(f.name)}]));
+const NOTES = new Map(DATA.files.filter(f=>f.recorded&&f.recorded.note).map(f=>[f.name,f.recorded.note]));  // apart from VERDICTS: a note outlives a variant switch
 const KINDS = ['keep','reject','milder','stronger'];
 function variantOf(f){return f.variants.find(v=>v.label===SELECTED.get(f.name));}
 function pane(label, src, name){
@@ -182,7 +185,8 @@ function card(f){
   const c=document.createElement('section'); c.className='card';
   const h=document.createElement('h3'); h.textContent=f.name;
   const m=document.createElement('div'); m.className='meta';
-  const v=variantOf(f); m.textContent=v?v.meta+' · '+f.verdict:f.meta;
+  const v=variantOf(f), switched=SELECTED.get(f.name)!==f.choice;
+  m.textContent=v?v.meta+(switched?'':' · '+f.verdict):f.meta;  // the status was worked out for the page's choice
   const panes=document.createElement('div'); panes.className='panes';
   if(f.before_src) panes.append(pane('Before', f.before_src, f.name));
   if(v) panes.append(pane('Variant: '+v.label+(v.pass?'':' (fails the gates)'), v.src, f.name));
@@ -195,11 +199,13 @@ function card(f){
     s.onchange=()=>{SELECTED.set(f.name,s.value); VERDICTS.delete(f.name); c.replaceWith(card(f)); update();};  // a verdict names the variant on screen
     const l=document.createElement('label'); l.append('Variant ',s); c.append(l);
   }
-  if(f.tiles.length){
-    const t=document.createElement('div'); t.className='tiles'+(SELECTED.get(f.name)===f.choice?'':' stale');
+  if(f.tiles.length||(switched&&v&&v.changes_pixels)){
+    const t=document.createElement('div'); t.className='tiles'+(switched?' stale':'');
     const cap=document.createElement('div'); cap.className='label';
-    cap.textContent=SELECTED.get(f.name)===f.choice?'1:1 crops: reference | choice | difference x8 (required ones first)'
-      :'These 1:1 crops are of '+f.choice+'. For crops of '+SELECTED.get(f.name)+', ask the agent to choose it and rebuild the page.';
+    const ask='ask the agent to choose it and rebuild the page.';
+    cap.textContent=!switched?'1:1 crops: reference | choice | difference x8 (required ones first)'
+      :f.tiles.length?'These 1:1 crops are of '+f.choice+'. For crops of '+v.label+', '+ask
+      :'This page has no 1:1 crops of '+v.label+'. For them, '+ask;
     t.append(cap);
     for(const tile of f.tiles){
       const w=document.createElement('div'); w.className='tile';
@@ -221,7 +227,9 @@ function card(f){
       r.onchange=()=>{NOTES.set(f.name,note.value); VERDICTS.set(f.name,{verdict:k,variant:SELECTED.get(f.name)}); update();};
       l.append(r,' '+k); row.append(l);
     }
-    row.append(note); c.append(row);
+    row.append(note);
+    if(f.recorded){const r=document.createElement('span'); r.className='label'; r.textContent='Recorded earlier: '+f.recorded.verdict+(f.recorded.note?' ("'+f.recorded.note+'")':''); row.append(r);}
+    c.append(row);
   }
   return c;
 }
@@ -324,8 +332,9 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
                     problems.append(f"{folder.name}: no tiles: {error}")
         tiles += record_tiles
         variants = [{"label": c["label"], "src": url(c["file"]), "meta": _variant_meta(record, c),
-                     "pass": bool(c.get("pass"))}
+                     "pass": bool(c.get("pass")), "changes_pixels": c["kind"] == "lossy" and not c.get("identical")}
                     for c in live_variants(record) if (folder / c["file"]).is_file()]
+        entry = verdict_of(folder.parent, record)
         lossless_write = writes and chosen["kind"] == "lossless"
         files.append({"name": record["source"]["path"], "meta": _meta(record, chosen),
                       "before_src": url(sources[0].name) if sources else "",
@@ -333,6 +342,7 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
                       "verdict": record["verdict"], "pick_kind": chosen["kind"] if chosen else None,
                       "before": record["source"]["size"], "saved": saved,
                       "default_verdict": "keep" if lossless_write else "",
+                      "recorded": {"verdict": entry["verdict"], "note": entry.get("note", "")} if entry else None,
                       "tiles": [{"label": t.window, "src": quote(f"tiles/{t.path.name}"), "required": t.required}
                                 for t in sorted(record_tiles, key=lambda t: not t.required)]})
         if record["uncalibrated"]:

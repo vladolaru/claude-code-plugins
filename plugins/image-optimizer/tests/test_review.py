@@ -290,3 +290,16 @@ def test_choose_cli_rebuilds_the_page_of_every_folder(tmp_path, capsys):
     dirs, a, _ = two_folders(tmp_path)
     assert cli.main(["choose", *map(str, dirs), "--file", a, "--label", "v15000"]) == 0
     assert f"sheet {dirs[0]} {dirs[1]}" in capsys.readouterr().out
+
+
+def test_record_cli_warns_of_a_keep_switched_to_a_variant_without_crops(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    dirs, a, b = two_folders(tmp_path)
+    pasted = tmp_path / "pasted.txt"
+    pasted.write_text(page_block(dirs, {a: {"verdict": "keep", "variant": "v15000"},  # switched on the page
+                                        b: {"verdict": "keep", "variant": "v12000"}}))  # the page's choice
+    assert cli.main(["record", "--verdicts", str(pasted)]) == 0
+    out = capsys.readouterr().out
+    assert f"kept without its 1:1 crops: {a} (v15000)" in out and b not in out.split("kept without")[-1]
+    assert f"view them before placing: python3 {cli.SCRIPT} sheet {dirs[0]} {dirs[1]}" in out
