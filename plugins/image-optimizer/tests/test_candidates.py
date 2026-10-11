@@ -1137,5 +1137,7 @@ def test_assume_srgb_is_recorded_and_a_different_setting_is_a_stale_record(facto
     out = tmp_path / "out"
     [r] = C.run([src], opts(out, "high", assume_srgb=True), tools, log=quiet)
     assert r["assume_srgb"] is True
+    assert json.loads((out / C.RUN_FILE).read_text())["assume_srgb"] is True
+    assert [rec["source"]["path"] for _, rec in C.load_records(out)] == [str(src)]
     C.write_run(out, [src], opts(out, "high"))  # a later run without the flag
     assert C.load_records(out) == [] and any("other settings" in s for s in C.stale_records(out))

@@ -101,7 +101,8 @@ def choice_of(record: dict) -> dict | None:
 def write_run(out: Path, inputs: list[Path], opts: Options) -> None:
     """Record which inputs and settings this run has; `load_records` keeps only what matches it."""
     run = {"schema": SCHEMA, "inputs": sorted(str(Path(p).resolve()) for p in inputs), "profile": opts.profile,
-           "resize": opts.resize, "format": opts.out_format}
+           "resize": opts.resize, "format": opts.out_format,
+           "assume_srgb": opts.assume_srgb}
     tmp = out / (RUN_FILE + ".tmp")
     tmp.write_text(json.dumps(run, indent=1))
     tmp.replace(out / RUN_FILE)

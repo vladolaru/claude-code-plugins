@@ -1,9 +1,7 @@
 """The candidate ladder: which encoder settings imgopt tries for a file.
 
 ``plan()`` is pure (facts, profile, output format in; rungs out) so the
-ladder is testable without encoders. A PNG with gAMA/cHRM chunks gets lossless rungs only unless
-``assume_srgb`` says a human compared it in a browser and the chunks may be dropped; an animated PNG never
-gets lossy rungs. ``generate()`` runs one rung. Inputs
+ladder is testable without encoders. ``generate()`` runs one rung. Inputs
 are named: "source" (the file itself), "pixels" (RGBA PNG of what the viewer
 sees, resized when asked), "pixels_flat" (that, flattened onto white), "pixels_gray" (that as one
 gray channel, written for gray sources only),
@@ -15,6 +13,10 @@ flattening), so it is lossy even when the encoder is not: it needs tiles and
 the human's approval. ``check_job()`` is the one place a request the ladder
 cannot serve becomes a UsageError; ``tools_for()`` lists every tool a
 request's ladder can run, which is what ``tools.requirements()`` asks for.
+
+A PNG with gAMA/cHRM chunks gets lossless rungs only, because pixel encoders drop them; ``plan(assume_srgb=True)``
+is the human's word, after comparing the file in a browser, that they may be dropped. An animated PNG never gets
+lossy rungs.
 """
 
 from __future__ import annotations
