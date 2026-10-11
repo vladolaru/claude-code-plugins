@@ -152,7 +152,8 @@ body{margin:0;padding:var(--s4);background:var(--bg);color:var(--fg);font:14px/1
 header{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s4);margin-bottom:var(--s4)}
 #totals{flex-basis:100%;font-variant-numeric:tabular-nums}
 header label{display:inline-flex;align-items:center;gap:var(--s1)}
-.banner{background:var(--warn-bg);color:var(--warn);padding:var(--s2) var(--s3);border-radius:6px;margin-bottom:var(--s2)}
+.banner{background:var(--warn-bg);color:var(--warn);padding:var(--s2) var(--s3);border-radius:6px;
+  margin-bottom:var(--s2)}
 .card{display:flex;flex-direction:column;gap:var(--s3);border:1px solid var(--line);border-radius:8px;
   margin-bottom:var(--s5);padding:var(--s4)}
 .card h3{margin:0;font-size:15px;font-weight:600;overflow-wrap:anywhere}
@@ -177,10 +178,18 @@ body.dark{--pane:#282828}
 .tag.ok{color:var(--ok);background:var(--ok-bg)}
 .tag.bad{color:var(--bad);background:var(--bad-bg)}
 .tag.warn{color:var(--warn);background:var(--warn-bg)}
-footer{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 0}
-code{word-break:break-all}
-.verdicts{display:flex;flex-wrap:wrap;gap:var(--s3);align-items:center}
+footer{position:sticky;bottom:0;z-index:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+  gap:var(--s2) var(--s4);background:var(--bg);border-top:1px solid var(--line);padding:var(--s2) 0}
+#counts{flex:1 1 12em;font-variant-numeric:tabular-nums}
+#copy{min-width:9em}
+footer details{flex-basis:100%}
+footer summary{cursor:pointer;font-size:12px;color:var(--muted)}
+.verdicts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
+.verdicts label{display:inline-flex;align-items:center;gap:var(--s1);min-height:32px;padding:0 var(--s3);
+  border:1px solid var(--line);border-radius:6px;cursor:pointer}
+.verdicts label:has(input:checked){border-color:var(--accent);background:var(--accent-bg);font-weight:600}
 .verdicts input[type=text]{flex:1;min-width:200px}
+.verdicts .recorded{flex-basis:100%;padding:0}
 textarea{width:100%;font:12px ui-monospace,monospace}
 @media (max-width:600px){.pane{max-height:40vh}}
 </style></head><body class="actual">
@@ -191,9 +200,10 @@ textarea{width:100%;font:12px ui-monospace,monospace}
 <label>Sort <select id="sort"><option value="bytes">bytes saved</option><option value="pct">% saved</option><option value="name">name</option></select></label>
 <label>Show <select id="filter"><option value="all">all</option><option value="apply">to write</option><option value="lossy">lossy choices</option><option value="untouched">untouched</option><option value="open">no verdict yet</option></select></label>
 </header><main id="cards"></main>
-<footer><span id="counts"></span> <button id="copy">Copy verdicts</button>
-<div>Paste the copied block to the agent; it stores it with <code>imgopt record</code>.</div>
-<textarea id="block" rows="3" readonly></textarea></footer>
+<footer><span id="counts"></span><button id="copy" type="button">Copy verdicts</button>
+<details id="blockbox"><summary>Show the block</summary>
+<div class="label">Paste the copied block to the agent; it stores it with <code>imgopt record</code>.</div>
+<textarea id="block" rows="3" readonly></textarea></details></footer>
 <script>
 const DATA = __DATA__;
 // The variant on screen, which a verdict names: the page's choice, else the first one listed.
@@ -266,6 +276,7 @@ function card(f){
   if(f.variants.length){
     const row=document.createElement('div'); row.className='verdicts';
     const cur=VERDICTS.get(f.name);
+    if(f.recorded) row.append(line('label recorded','Recorded earlier: '+f.recorded.verdict));  // its note is below
     const note=document.createElement('input'); note.type='text'; note.placeholder='note for the agent (optional)';
     note.value=NOTES.get(f.name)||'';
     note.oninput=()=>{NOTES.set(f.name,note.value); update();};
@@ -273,14 +284,9 @@ function card(f){
       const l=document.createElement('label'); const r=document.createElement('input');
       r.type='radio'; r.name='v-'+f.name; r.value=k; r.checked=!!cur&&cur.verdict===k;
       r.onchange=()=>{NOTES.set(f.name,note.value); VERDICTS.set(f.name,{verdict:k,variant:SELECTED.get(f.name)}); update();};
-      l.append(r,' '+k); row.append(l);
+      l.append(r,k); row.append(l);
     }
     row.append(note);
-    if(f.recorded){
-      const r=document.createElement('span'); r.className='label';
-      r.textContent='Recorded earlier: '+f.recorded.verdict+(f.recorded.note?' ("'+f.recorded.note+'")':'');
-      row.append(r);
-    }
     c.append(row);
   }
   return c;
@@ -300,7 +306,16 @@ function update(){
   const files=Object.fromEntries([...VERDICTS].map(([name,e])=>[name,{...e,note:NOTES.get(name)||''}]));
   document.getElementById('block').value=DATA.block_header+'\\n'+JSON.stringify({fingerprint:DATA.fingerprint,folders:DATA.folders,files});
 }
-document.getElementById('copy').onclick=()=>{const b=document.getElementById('block'); b.select(); if(navigator.clipboard) navigator.clipboard.writeText(b.value);};
+document.getElementById('copy').onclick=()=>{
+  const button=document.getElementById('copy'), block=document.getElementById('block');
+  // No clipboard: show the block selected, so Cmd/Ctrl+C copies it.
+  const byHand=()=>{document.getElementById('blockbox').open=true; block.focus(); block.select();};
+  if(!navigator.clipboard) return byHand();
+  navigator.clipboard.writeText(block.value).then(()=>{
+    button.textContent='Copied'; clearTimeout(button.reset);
+    button.reset=setTimeout(()=>{button.textContent='Copy verdicts';},2000);
+  },byHand);
+};
 document.getElementById('totals').textContent=DATA.totals;
 for(const b of DATA.banners){const d=document.createElement('div');d.className='banner';d.textContent=b;document.getElementById('banners').append(d);}
 document.getElementById('actual').onchange=e=>document.body.classList.toggle('actual',e.target.checked);

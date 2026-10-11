@@ -434,8 +434,12 @@ def test_a_rebuilt_page_starts_from_the_verdicts_already_recorded(tmp_path, fact
     _, page = S.build(out)
     [f] = _page_data(page)["files"]
     assert f["recorded"] == {"verdict": "reject", "note": "too soft"}
-    text = page.read_text()
-    assert "Recorded earlier: " in text and "f.recorded.note" in text
+    shown = run_page(page, """(() => {
+      const c = cards()[0], note = c.querySelectorAll('input').find(i => i.type === 'text');
+      return [c.querySelector('.recorded').textContent, note.value,
+              c.querySelectorAll('input').filter(i => i.checked).map(i => i.value)];
+    })()""")
+    assert shown == ["Recorded earlier: reject", "too soft", ["reject"]]  # the note shows once, in its input
 
 
 def test_variants_say_whether_they_change_pixels(tmp_path, factory):
