@@ -229,8 +229,9 @@ def cmd_manifest(args) -> int:
     for r in rows:
         running += r["saved"]
         state = "" if r["exists"] else "  (file gone: run choose to restore it)"
+        note = f"  {C.removes(r)}" if C.removes(r) else ""  # a row carries metadata_removed as a candidate does
         print(f"{C.kb(r['saved']):>9} {running / total:>4.0%}  {r['verdict'] or '-':8} {r['label'] or '-':20} "
-              f"{r['source']} -> {r['variant']}{state}")
+              f"{r['variant']} -> {r['target']}{note}{state}")
     return 0
 
 
@@ -294,8 +295,9 @@ def cmd_choose(args) -> int:
         print(f"{record['source']['path']}: no variant (nothing passed the gates)")
     else:
         gate = "passes the gates" if chosen.get("pass") else f"FAILS the gates ({chosen.get('reason', '')})"
+        note = f"; {C.removes(chosen)} (tell the human)" if C.removes(chosen) else ""
         print(f"{record['source']['path']}: now {chosen['label']} ({C.kb(chosen['size'])}), {gate}; "
-              f"verdict: {record['verdict']} ({record['verdict_reason']})")
+              f"verdict: {record['verdict']} ({record['verdict_reason']}){note}")
     folders = " ".join(shlex.quote(str(Path(o).resolve())) for o in args.out)
     print(f"Next: rebuild the page: python3 {shlex.quote(str(SCRIPT))} sheet {folders}")
     return 0

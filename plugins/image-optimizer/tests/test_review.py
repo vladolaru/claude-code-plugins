@@ -1,5 +1,6 @@
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -203,7 +204,38 @@ def test_manifest_command_prints_the_rows_as_json_and_as_text(tmp_path, capsys):
     [row] = json.loads(capsys.readouterr().out)
     assert row["source"] == record["source"]["path"] and row["saved"] == 8000
     assert cli.main(["manifest", str(folder.parent)]) == 0
-    assert f"{record['source']['path']} -> {folder / 'v12000.png'}" in capsys.readouterr().out
+    assert f"{folder / 'v12000.png'} -> {record['target']}" in capsys.readouterr().out  # what to copy, and where
+
+
+def test_a_conversion_manifest_points_from_the_variant_to_the_new_target(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    folder, record = fake_record(tmp_path)
+    target = str(Path(record["source"]["path"]).with_suffix(".webp"))
+    record.update(target=target, format="webp")
+    C.write_record(folder, record)
+    assert cli.main(["manifest", str(folder.parent)]) == 0
+    out = capsys.readouterr().out
+    assert f"{folder / 'v12000.png'} -> {target}" in out and f"-> {record['source']['path']}" not in out
+
+
+def removing(folder, record, label, kinds):
+    next(c for c in record["candidates"] if c["label"] == label)["metadata_removed"] = kinds
+    C.write_record(folder, record)
+
+
+def test_the_metadata_a_choice_removes_shows_in_variants_choose_and_manifest(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    folder, record = fake_record(tmp_path)
+    removing(folder, record, "v15000", ["exif", "xmp"])
+    assert any("v15000" in line and "removes exif, xmp" in line for line in RV.variant_lines(folder, record))
+    assert cli.main(["choose", str(folder.parent), "--file", record["source"]["path"], "--label", "v15000"]) == 0
+    assert "removes exif, xmp" in capsys.readouterr().out
+    [row] = RV.manifest_rows(RV.rows_of([folder.parent]))
+    assert row["metadata_removed"] == ["exif", "xmp"]
+    assert cli.main(["manifest", str(folder.parent)]) == 0
+    assert "removes exif, xmp" in capsys.readouterr().out
 
 
 

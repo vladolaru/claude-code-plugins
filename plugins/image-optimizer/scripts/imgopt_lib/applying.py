@@ -23,7 +23,7 @@ from PIL import Image
 from . import ladder, metrics
 from . import review as RV
 from . import selection as SEL
-from .candidates import choice_of, kb, sha256
+from .candidates import choice_of, kb, removes, sha256
 from .imaging import READ_FAILURES, display_pixels, read_facts
 from .ladder import UsageError
 from .sheet import needs_tiles
@@ -221,8 +221,9 @@ def apply(outs, *, tools: dict, only=(), dest: Path | None = None, log=print) ->
         written += 1
         before += record["source"]["size"]
         after += target.stat().st_size
+        note = f"  {removes(chosen)}" if removes(chosen) else ""
         log(f"  re-measured {target}  {kb(record['source']['size'])} -> {kb(target.stat().st_size)}  "
-            f"({chosen['label']}){'' if chosen.get('pass') else SUFFIX}")
+            f"({chosen['label']}){'' if chosen.get('pass') else SUFFIX}{note}")
     log(f"\nWrote {written} of {len(rows)} file(s): {kb(before)} -> {kb(after)}."
         + (f" {failures} problem(s): investigate before committing." if failures else ""))
     return 1 if failures else 0

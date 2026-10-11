@@ -121,6 +121,19 @@ def test_a_matching_lossy_pick_replaces_the_target(factory, toolset, tmp_path, k
     assert staged_files(src.parent) == []
 
 
+def test_the_written_line_names_the_metadata_the_choice_removes(factory, toolset, tmp_path, keep):
+    tools = toolset("recompress", "high", {"jpeg"})
+    out = tmp_path / "out"
+    src, folder = _lossy_record(out, factory)
+    record = json.loads((folder / "metrics.json").read_text())
+    record["candidates"][0].update(_measured(folder, tools), metadata_removed=["exif", "icc"])
+    (folder / "metrics.json").write_text(json.dumps(record))
+    logs = []
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools=tools, log=logs.append) == 0
+    assert any("re-measured" in line and "removes exif, icc" in line for line in logs), logs
+
+
 def test_remeasure_mismatch_fails_loudly_and_leaves_the_target_alone(factory, toolset, tmp_path, keep):
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"

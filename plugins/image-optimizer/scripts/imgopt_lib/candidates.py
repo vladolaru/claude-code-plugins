@@ -78,6 +78,12 @@ def kb(n: int) -> str:
     return f"{n / 1024:.1f} KB"
 
 
+def removes(cand: dict | None) -> str:
+    """"removes exif, icc" for a candidate that drops metadata, else "": every place that shows a choice says it,
+    because copyright and credit live there."""
+    return f"removes {', '.join(cand['metadata_removed'])}" if cand and cand.get("metadata_removed") else ""
+
+
 def all_errored(record: dict) -> bool:
     """Every candidate failed to encode or measure: a tool problem, not "nothing passed the gates"."""
     return bool(record["candidates"]) and all("error" in c for c in record["candidates"])

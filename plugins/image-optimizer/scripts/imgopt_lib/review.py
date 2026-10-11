@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import gates as G
 from . import store as ST
-from .candidates import choice_of, kb, load_records, write_record
+from .candidates import choice_of, kb, load_records, removes, write_record
 from .ladder import UsageError
 
 BLOCK_HEADER = "imgopt-verdicts 1"
@@ -87,7 +87,8 @@ def choose(folder: Path, record: dict, how: str) -> dict:
 
 
 def variant_lines(folder: Path, record: dict) -> list[str]:
-    """One line per measured variant: label, size, saving, scores, gate result, default/choice marks, file state."""
+    """One line per measured variant: label, size, saving, scores, gate result, default/choice marks, file state,
+    and the metadata it removes."""
     src = record["source"]
     current = choice_of(record)
     lines = [f"{src['path']}  {kb(src['size'])}"]
@@ -99,8 +100,9 @@ def variant_lines(folder: Path, record: dict) -> list[str]:
         gate = "PASS" if c.get("pass") else f"fails: {c.get('reason', '')}"
         scores = (f"SSIM {c['ssim']:.4f} ss2 {c['ss2']:.1f} band {c['band']:.1f}" if "ssim" in c else "not measured")
         mark = f"  [{', '.join(marks)}]" if marks else ""
+        note = f"  {removes(c)}" if removes(c) else ""
         lines.append(f"  {c['label']:22} {kb(c['size']):>9} {(c['size'] - src['size']) / src['size']:+.0%}  "
-                     f"{scores}  {gate}{mark}  {state}")
+                     f"{scores}  {gate}{mark}  {state}{note}")
     return lines
 
 
@@ -269,5 +271,6 @@ def manifest_rows(rows, *, accepted: bool = False) -> list[dict]:
                     "saved": record["source"]["size"] - chosen["size"] if writes(record) else 0,
                     "gate": ("pass" if chosen.get("pass") else chosen.get("reason", "")) if chosen else None,
                     "scores": {k: chosen.get(k) for k in ("ssim", "ss2", "band")} if chosen else {},
+                    "metadata_removed": chosen.get("metadata_removed", []) if chosen else [],
                     "status": record["verdict"], "verdict": entry["verdict"] if entry else None})
     return sorted(out, key=lambda r: -r["saved"])

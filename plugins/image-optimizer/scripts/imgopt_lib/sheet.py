@@ -38,7 +38,7 @@ from urllib.parse import quote
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from .candidates import choice_of, kb
+from .candidates import choice_of, kb, removes
 from .imaging import READ_FAILURES, display_pixels, flatten
 from .metrics import diff_max, smooth_mask
 from .review import BLOCK_HEADER, fingerprint, live_variants, rows_of, verdict_of
@@ -272,9 +272,9 @@ def _meta(record: dict, chosen: dict | None) -> str:
     if not chosen:
         return f"{dims}{s['format']} · {kb(s['size'])} · untouched ({record['verdict_reason']})"
     quality = _quality(record, chosen, "reported, not gated: gated only on palette PNG; view the tiles")
-    removes = f" · removes {', '.join(chosen['metadata_removed'])}" if chosen.get("metadata_removed") else ""
+    dropped = f" · {removes(chosen)}" if removes(chosen) else ""
     return (f"{dims}{s['format']} -> {record['format']} · {kb(s['size'])} -> {kb(chosen['size'])} · "
-            f"{chosen['label']} · {quality}{removes} · {record['verdict']} ({record['verdict_reason']})")
+            f"{chosen['label']} · {quality}{dropped} · {record['verdict']} ({record['verdict_reason']})")
 
 
 def _quality(record: dict, c: dict, ungated: str = "reported, not gated") -> str:
@@ -292,8 +292,8 @@ def _quality(record: dict, c: dict, ungated: str = "reported, not gated") -> str
 def _variant_meta(record: dict, c: dict) -> str:
     """One option of a card's variant selector: label, size, scores, and whether it passes the gates."""
     gate = "passes" if c.get("pass") else f"FAILS: {c.get('reason', '')}"
-    removes = f" · removes {', '.join(c['metadata_removed'])}" if c.get("metadata_removed") else ""
-    return f"{c['label']} · {kb(c['size'])} · {_quality(record, c)} · {gate}{removes}"
+    dropped = f" · {removes(c)}" if removes(c) else ""
+    return f"{c['label']} · {kb(c['size'])} · {_quality(record, c)} · {gate}{dropped}"
 
 
 def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]:
