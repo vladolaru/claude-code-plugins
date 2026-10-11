@@ -1140,6 +1140,29 @@ def test_a_rerun_keeps_the_choice_while_its_variant_is_still_measured(factory, t
     assert rerun["verdict"] == G.verdict(rerun["source"]["size"], C.choice_of(rerun), by_hand=True)[0]
 
 
+def test_a_kept_pick_under_the_floor_is_still_written_after_a_rerun(factory, toolset, tmp_path):
+    from imgopt_lib import review as RV
+
+    tools = toolset("recompress", "lossless", {"jpeg"})
+    src = factory.photo(size=(400, 300)).resolve()
+    out = tmp_path / "out"
+    run_opts = opts(out, min_saving=10**7)
+    C.run([src], run_opts, tools, log=quiet)
+    [(_, record)] = C.load_records(out)
+    assert record["verdict"] == "untouched"  # the pick saves less than --min-saving
+    block = RV.BLOCK_HEADER + "\n" + json.dumps({
+        "fingerprint": RV.fingerprint(RV.rows_of([out])), "folders": [str(out)],
+        "files": {str(src): {"verdict": "keep", "variant": C.choice_of(record)["label"]}}})
+    RV.record_verdicts(None, block)  # the human keeps it on the page
+    C.run([src], run_opts, tools, log=quiet)
+    [(_, rerun)] = C.load_records(out)
+    assert rerun["verdict"] == "apply" and "chosen by hand" in rerun["verdict_reason"]
+    assert RV.is_accepted(rerun, RV.verdict_of(out, rerun))
+    lines = []
+    AP.apply([out], tools=tools, log=lines.append, dest=tmp_path / "dest")
+    assert not any("nothing to write" in line for line in lines) and (tmp_path / "dest" / src.name).is_file(), lines
+
+
 def test_min_saving_is_recorded_and_leaves_small_savings_untouched(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo()

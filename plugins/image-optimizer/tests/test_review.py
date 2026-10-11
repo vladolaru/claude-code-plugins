@@ -361,6 +361,15 @@ def test_a_kept_pick_under_the_floor_is_written(tmp_path):
     assert kept["verdict"] == "apply" and RV.is_accepted(kept, RV.verdict_of(folder.parent, kept))
 
 
+def test_choosing_the_pick_by_hand_is_stored_as_a_choice(tmp_path):
+    folder, record = fake_record(tmp_path)
+    record["min_saving"] = 9000
+    RV.choose(folder, record, "v12000")  # the gates' own pick, under the floor
+    saved = json.loads((folder / "metrics.json").read_text())
+    assert saved["choice"] == saved["pick"] == "v12000.png"  # a re-run carries the by-hand decision forward
+    assert saved["verdict"] == "apply" and "chosen by hand" in saved["verdict_reason"]
+
+
 def with_a_larger_variant(tmp_path):
     """fake_record plus a 25,000 B variant: larger than its 20,000 B source, so keeping it writes nothing."""
     folder, record = fake_record(tmp_path)

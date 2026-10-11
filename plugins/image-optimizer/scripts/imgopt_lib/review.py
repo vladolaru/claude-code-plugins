@@ -1,7 +1,7 @@
 """Per-file choices and the human's verdicts: what a file will be written as, and what the human said about it.
 
-A record keeps the gates' ``pick`` and, once someone chose another variant, a ``choice`` (`choose`), which a
-`candidates` re-run keeps while that variant is still measured. Everything that writes or shows "the" variant
+A record keeps the gates' ``pick`` and, once someone chose a variant by hand (the pick too), a ``choice``
+(`choose`), which a `candidates` re-run keeps while that variant is still measured. Everything that writes or shows "the" variant
 (`sheet`, `apply`, `manifest`, `clean --keep-picks`) reads `candidates.choice_of`. Verdicts and the page's
 fingerprint name variants by ``key``, their content: a re-run with other settings keeps the labels. A variant
 whose file is gone is restored from the variant store; one the store no longer has needs `candidates` again.
@@ -46,7 +46,8 @@ def choose(folder: Path, record: dict, how: str) -> dict:
     """Set the file's variant: a label, "milder" (the next larger passing variant), "stronger" (the next smaller
     variant, which may fail the gates), or "default" (back to the gates' pick). Rewrites the record, verdict
     included, and returns the chosen candidate. Anything but "default" is a choice made by hand, which applies
-    whenever it is smaller than the source, under the saving floors too (`gates.verdict`)."""
+    whenever it is smaller than the source, under the saving floors too (`gates.verdict`), and is stored as the
+    ``choice`` even when it is the pick, so a `candidates` re-run keeps that decision."""
     live = live_variants(record)
     current = choice_of(record)
     if how == "default":
@@ -74,16 +75,18 @@ def choose(folder: Path, record: dict, how: str) -> dict:
                              f"choose one of: {', '.join(c['label'] for c in live)}")
     if chosen is not None:
         _ensure_file(Path(folder), chosen)
-        if chosen.get("file") != record.get("pick"):
+        if how != "default":
             record["choice"] = chosen["file"]
-        else:
-            record.pop("choice", None)
-    target_is_source = record.get("target") == record["source"]["path"]
-    record["verdict"], record["verdict_reason"] = G.verdict(
-        record["source"]["size"], chosen, in_place=_in_place(record), replaces_source=target_is_source,
-        min_saving=record.get("min_saving", 0), by_hand=how != "default")
+    record["verdict"], record["verdict_reason"] = verdict_for(record, chosen, by_hand=how != "default")
     write_record(Path(folder), record)
     return chosen
+
+
+def verdict_for(record: dict, cand: dict | None, *, by_hand: bool) -> tuple[str, str]:
+    """`gates.verdict` for writing ``cand`` as this record's file; ``by_hand`` is a variant someone chose."""
+    return G.verdict(record["source"]["size"], cand, in_place=_in_place(record),
+                     replaces_source=record.get("target") == record["source"]["path"],
+                     min_saving=record.get("min_saving", 0), by_hand=by_hand)
 
 
 def variant_lines(folder: Path, record: dict) -> list[str]:

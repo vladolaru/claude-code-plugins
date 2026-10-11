@@ -164,7 +164,7 @@ def _record_skip(folder: Path, why: str) -> None:
 
 
 def _previous(path: Path) -> tuple[dict, str | None]:
-    """(the last record's candidates by key, the key of the variant someone chose with `choose`, if any)."""
+    """(the last record's candidates by key, the key of the variant someone chose by hand, if any)."""
     if not path.is_file():
         return {}, None
     try:
@@ -475,10 +475,10 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
             if chosen and "ssim" in chosen and not chosen.get("identical") and chosen.get("butteraugli") is None:
                 chosen["butteraugli"] = metrics.butteraugli_score(ref_img, display_pixels(folder / chosen["file"]),
                                                                   tools, Path(measure_dir))
-    # Someone's choice outlives a re-run while its variant (its key) is still measured here.
-    kept = next((c for c in cands if chosen_key and c.get("key") == chosen_key and c.get("file") and "size" in c
-                 and not c.get("error") and not c.get("discarded")), None)
-    choice = kept if kept is not None and kept is not chosen else None
+    # Someone's choice (the pick too: a by-hand keep under the floors) outlives a re-run while its variant (its
+    # key) is still measured here.
+    choice = next((c for c in cands if chosen_key and c.get("key") == chosen_key and c.get("file") and "size" in c
+                   and not c.get("error") and not c.get("discarded")), None)
     verdict, why = G.verdict(size, choice or chosen, in_place=in_place, replaces_source=target == src,
                              min_saving=opts.min_saving, by_hand=choice is not None)
     if chosen is None and choice is None:
