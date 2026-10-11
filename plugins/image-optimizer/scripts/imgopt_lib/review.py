@@ -1,10 +1,10 @@
 """Per-file choices and the human's verdicts: what a file will be written as, and what the human said about it.
 
 A record keeps the gates' ``pick`` and, once someone chose a variant by hand (the pick too), a ``choice``
-(`choose`), which a `candidates` re-run keeps while that variant is still measured. Everything that writes or shows "the" variant
-(`sheet`, `apply`, `manifest`, `clean --keep-picks`) reads `candidates.choice_of`. Verdicts and the page's
-fingerprint name variants by ``key``, their content: a re-run with other settings keeps the labels. A variant
-whose file is gone is restored from the variant store; one the store no longer has needs `candidates` again.
+(`choose`), which a `candidates` re-run keeps while that variant is still measured. Everything that writes or
+shows "the" variant (`sheet`, `apply`, `manifest`, `clean --keep-picks`) reads `candidates.choice_of`. Verdicts and
+the page's fingerprint name variants by ``key``, their content: a re-run with other settings keeps the labels. A
+variant whose file is gone is restored from the variant store; one the store no longer has needs `candidates` again.
 """
 
 from __future__ import annotations
