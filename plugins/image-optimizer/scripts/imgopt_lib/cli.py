@@ -325,7 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="imgopt",
         description="Measured image optimization: doctor, inspect, workdir, candidates, variants, choose, sheet, "
-                    "apply, compare, clean.")
+                    "record, apply, manifest, compare, clean.")
     sub = parser.add_subparsers(dest="command", required=True)
     d = sub.add_parser("doctor", help="check the tools a job needs and print install lines")
     d.add_argument("--job", choices=T.JOBS, required=True)
@@ -390,7 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
     mf = sub.add_parser("manifest", help="each file's chosen variant and target: paths an agent can copy")
     mf.add_argument("out", nargs="+")
     mf.add_argument("--json", action="store_true")
-    mf.add_argument("--accepted", action="store_true", help="only lossless choices not rejected and lossy ones kept")
+    mf.add_argument("--accepted", action="store_true",
+                    help="only what apply would write: lossy choices kept, lossless ones kept or with no verdict")
     mf.set_defaults(func=cmd_manifest)
     m = sub.add_parser("compare", help="measure a pair and print a reviewer-runnable check")
     m.add_argument("ref", help="path, git:<rev>:<path>, or URL")

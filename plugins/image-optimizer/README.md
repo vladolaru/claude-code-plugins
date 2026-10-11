@@ -1,6 +1,6 @@
 # image-optimizer
 
-Measured image optimization for PNG, JPEG, GIF and SVG, with WebP and AVIF output on request. Every candidate is measured against a quality profile, the smallest one that passes wins, and nothing that changes pixels is written before you approve it on a side-by-side page.
+Measured image optimization for PNG, JPEG, GIF and SVG, with WebP and AVIF output on request. Every candidate is measured against a quality profile, the smallest one that passes wins, and nothing that changes pixels is written before you keep it on a side-by-side page.
 
 ## How it works
 
@@ -12,11 +12,11 @@ The command loads the `image-optimization` skill, which:
 
 1. checks the tools the job needs and asks you to install any that are missing;
 2. works out where each image is used and how large it is shown, and proposes a profile per group;
-3. runs `imgopt.py candidates`: a ladder of encoder settings per file, each measured with SSIM, ssimulacra2 and a banding score;
-4. builds 1:1 review crops and a comparison page where you approve each lossy pick, with `imgopt.py sheet`;
-5. writes the picks with `imgopt.py apply` and re-measures every written file: lossless picks apply once you have confirmed the profile, lossy picks only when you approved them on the comparison page.
+3. runs `imgopt.py candidates`: a ladder of encoder settings per file, each measured with SSIM, ssimulacra2 and a banding score, with the smallest passing variant as each file's default choice and the savings ranked so you can decide what is worth changing;
+4. builds 1:1 review crops and a review page with `imgopt.py sheet`, where you can browse every measured variant of a file and mark it keep, reject, milder or stronger; the page's "Copy verdicts" block goes back to the agent, which stores it with `imgopt.py record` and, for milder or stronger, picks another variant with `imgopt.py choose` and shows you a new page;
+5. places what you kept: `imgopt.py apply` writes each kept file and re-measures it in place, or `imgopt.py manifest --accepted` lists the paths for the agent to copy. Lossless choices need no verdict once you have confirmed the profile; lossy ones need your keep.
 
-The candidates, crops and page live in a working folder outside the repository (`imgopt.py workdir <task>`: under `~/Library/Caches/imgopt/work/` on macOS, or `$IMGOPT_CACHE` when set), so a later session reuses them; `imgopt.py clean <folder>` removes it.
+The variants, crops and page live in a working folder outside the repository (`imgopt.py workdir <task>`: under `~/Library/Caches/imgopt/work/` on macOS, or `$IMGOPT_CACHE` when set), so a later session reuses them; `imgopt.py clean <folder>` removes it. Every measured variant also goes into a variant store shared by all working folders (`~/Library/Caches/imgopt/store/` on macOS, or `store/` under `$IMGOPT_CACHE`), so measuring a file set again in a new folder costs no encoding. Variants unused for 30 days are pruned, the store stays under 2 GB, and `imgopt.py clean --store` prunes it on demand. The store also remembers every lossy variant it produced, so a later lossy run refuses to compress such a file a second time, even one the agent copied into place by hand.
 
 ## Profiles
 

@@ -17,26 +17,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `apply` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles for the agent and a comparison page for the human, re-measured writes, and a reviewer-runnable SSIM check.
-- Resizing to a target width, PNG-to-JPEG, and WebP or AVIF output (labelled uncalibrated) under the `high` or `medium` gates, written as untagged sRGB so the same input always gives the same bytes; like any pick made from re-encoded pixels, these wait for approval on the comparison page, and a resized or converted file that comes out larger than its original is flagged LARGER.
-- The comparison page shows each lossy pick's 1:1 crops beside its gates and builds the `apply --approve a,b` command from the picks the human ticks; `apply` writes only the lossy picks named there.
+- `imgopt.py` with `doctor`, `inspect`, `candidates`, `sheet`, `record`, `apply`, `manifest` and `compare`: tool checks, an audit-only report, per-file picks, 1:1 review tiles for the agent and a review page for the human, the human's verdicts, re-measured writes, placement paths, and a reviewer-runnable SSIM check.
+- Resizing to a target width, PNG-to-JPEG, and WebP or AVIF output (labelled uncalibrated) under the `high` or `medium` gates, written as untagged sRGB so the same input always gives the same bytes; like any choice made from re-encoded pixels, these wait for the human's keep on the review page, and a resized or converted file that comes out larger than its original is flagged LARGER.
+- The review page shows each file's choice beside its original at 100%, with 1:1 crops, its gates and a selector over every measured variant, and the human marks each file keep, reject, milder or stronger, with a note; "Copy verdicts" gives one block for `record`.
+- `apply` writes a lossy choice only when the human kept it and a lossless one unless the human rejected it or asked for another variant, and refuses the run when no lossy choice has a verdict; `manifest --accepted` lists the same files.
 - `imgopt.py workdir <task>` gives a working folder that survives sessions, so a re-run reuses earlier candidates; sandboxes get one under `$TMPDIR`.
 - `candidates` refuses a working folder inside an input folder or a git work tree, or one that already has files it did not make.
-- `imgopt.py clean` deletes a folder `candidates` made, or with `--keep-picks` everything but each file's pick, and `candidates` prints the folder's size and that command.
+- `imgopt.py clean` deletes a folder `candidates` made, or with `--keep-picks` everything but each file's pick and choice, and `candidates` prints the folder's size and that command.
 - `sheet` and `apply` act only on the files the last `candidates` run in a working folder measured, so a file that run skipped is not offered again, and they name the records they ignore.
 - An interrupted `candidates` run resumes from its last finished candidate, and its partial results are never applied.
 - The `candidates` summary and the page lead with whole-batch totals, signed, beside the files that will change, and printed commands quote their paths.
 - Lossy JPEG jobs require jpegli, which cannot be waived because the `high` ladder saved 4.6 to 15 points less on photos without it; no package manager ships it, so `imgopt.py doctor` prints a build that keeps working after Homebrew upgrades.
 - PNGs up to 2 megapixels (after any resize) also get an oxipng zopfli candidate, about 2% smaller on small PNGs; larger images skip it, because on 5 MP screenshots it took one to three minutes per file for 0.4 to 3%.
-- Under `high` and `medium`, a lossy pick's Evidence SSIM (a luma SSIM, so ssimulacra2 goes in the evidence table too; what the PR reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in PR evidence never shows below it.
+- Under `high` and `medium`, a lossy pick's Evidence SSIM (a luma SSIM, so ssimulacra2 goes in the evidence table too; what the reviewer's ffmpeg check prints) must also clear the SSIM floor, so the number quoted in evidence never shows below it.
 - Every pick lists the metadata it removes (EXIF, XMP, IPTC, comments, PNG text), whether it is a lossless pass or a re-encode, so copyright and credit fields are never dropped silently.
 - `--ref-rev <rev>` measures a whole batch against each file's content at an earlier commit, with each baseline's size beside the file's.
-- Under `high` and `medium`, a file an earlier lossy pick wrote is measured only against a baseline from before that pick, so lossy passes never stack.
+- Under `high` and `medium`, a file that is a lossy variant imgopt produced, whether `apply` wrote it or it was copied by hand, is measured only against a baseline from before that change, so lossy passes never stack.
 - Folder inputs skip git-ignored files, vendored folders and imgopt working folders, and say what they skipped.
 - A file the job cannot serve (a GIF in a resize) or a Git LFS pointer gets its own line instead of stopping the batch.
 - A cached candidate is made again when any tool that made or measured it changes, including tools that print no version.
-- `apply` stops with a clear reason when ffmpeg or ssimulacra2 changed since the picks were measured.
+- `apply` stops with a clear reason when ffmpeg or ssimulacra2 changed since the choices were measured.
 - `candidates` measures two files at a time by default (`--jobs`), or one at a time where a sandbox denies worker processes.
+- Every measured variant goes into a variant store shared by all working folders, so measuring a file set again in a new folder costs no encoding; variants unused for 30 days are pruned, the store stays under 2 GB, and `clean --store` prunes it on demand.
+- `imgopt.py variants` lists every measured variant of one file, and `imgopt.py choose` sets its variant by label, one step milder or stronger, or back to the default, restoring a variant's file from the store when needed.
+- `imgopt.py record` stores the pasted verdict block in each working folder and refuses a block from a page built from other results; a keep, milder or stronger on a variant other than the current choice chooses that variant first.
+- `imgopt.py manifest` lists each file's chosen variant path and target (`--json` for scripts), so an agent can place files itself.
+- `apply --only`, `apply --files` and `--file` select files by absolute path, relative path or unique name, and refuse an ambiguous name with the matching paths listed.
+- `candidates --files <list>` and `apply --files <list>` take a file set as one path per line, or `-` for stdin.
+- `candidates --min-saving <bytes>` leaves files that save less untouched, and the summary ranks picks by bytes saved with the cumulative share, the count of small savings and the folders that hold the most.
+- `sheet`, `record`, `apply` and `manifest` take several working folders, so a set that needed two runs is reviewed on one page and placed in one call.
+- `candidates --assume-srgb` tries lossy candidates for a gamma-tagged PNG the human compared in a browser, run as its own set; without it such PNGs stay lossless-only.
 
 ### Fixed
 
