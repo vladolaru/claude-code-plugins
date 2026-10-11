@@ -157,7 +157,9 @@ def _load(out: Path) -> dict:
 
 def record_verdicts(dirs, text: str) -> dict[str, int]:
     """Store the pasted verdicts in each working folder's verdicts.json and return the count per verdict. A
-    "keep" naming a variant other than the current choice chooses it first."""
+    "keep", "milder" or "stronger" naming a variant other than the current choice chooses it first, so the stored
+    entry names the variant the human was shown and a later `choose --milder/--stronger` steps from it. A "reject"
+    ignores the variant."""
     data = parse_block(text)
     rows = rows_of(dirs)
     if data["fingerprint"] != fingerprint(rows):
@@ -172,7 +174,7 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
         folder, record = by_path[path]
         variant = entry.get("variant")
         current = choice_of(record)
-        if entry["verdict"] == "keep" and variant and (current is None or variant != current["label"]):
+        if entry["verdict"] != "reject" and variant and (current is None or variant != current["label"]):
             # Validate every change before applying any: a failed `choose` midway would leave the page
             # half-applied, and the block unrecoverable (the fingerprint has moved).
             cand = next((c for c in live_variants(record) if c["label"] == variant), None)

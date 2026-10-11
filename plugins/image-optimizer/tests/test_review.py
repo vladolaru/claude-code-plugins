@@ -112,6 +112,21 @@ def test_keep_with_another_variant_sets_the_choice_and_is_stored(tmp_path):
     assert RV.verdict_of(folder.parent, fresh)["note"] == "the pick looked soft"
 
 
+def test_milder_or_stronger_steps_from_the_variant_shown_and_reject_ignores_it(tmp_path):
+    folder, record = fake_record(tmp_path)
+    folder2, record2 = fake_record(tmp_path, name="b.png", folder_name="b--1")
+    a, b = record["source"]["path"], record2["source"]["path"]
+    RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+        a: {"verdict": "stronger", "variant": "v15000"}, b: {"verdict": "reject", "variant": "v18000"}}))
+    fresh = {r["source"]["path"]: (f, r) for f, r in RV.rows_of([folder.parent])}
+    folder, shown = fresh[a]
+    assert C.choice_of(shown)["label"] == "v15000"
+    assert RV.verdict_of(folder.parent, shown)["variant"] == "v15000"
+    assert RV.choose(folder, shown, "stronger")["label"] == "v12000"  # stronger than what the human saw
+    _, rejected = fresh[b]
+    assert C.choice_of(rejected)["label"] == "v12000" and RV.verdict_of(folder.parent, rejected)["verdict"] == "reject"
+
+
 def test_a_stored_verdict_stops_counting_once_the_choice_changes(tmp_path):
     folder, record = fake_record(tmp_path)
     path = record["source"]["path"]
