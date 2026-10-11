@@ -244,12 +244,12 @@ def test_a_pixel_identical_pick_in_a_new_format_gets_no_tiles(tmp_path, factory)
     assert tiles == []
 
 
-def test_the_card_meta_names_the_metadata_the_pick_removes():
+def test_the_card_facts_name_the_metadata_the_pick_removes():
     record = {"source": {"width": 10, "height": 10, "format": "jpeg", "size": 2048}, "format": "jpeg",
               "verdict": "apply", "verdict_reason": "smaller"}
     chosen = {"size": 1024, "label": "x", "identical": True, "metadata_removed": ["exif"]}
-    assert "removes exif" in S._meta(record, chosen)
-    assert "removes" not in S._meta(record, {k: v for k, v in chosen.items() if k != "metadata_removed"})
+    assert S._facts(record, chosen) == "x · 10×10 · jpeg · removes exif"
+    assert "removes" not in S._facts(record, {k: v for k, v in chosen.items() if k != "metadata_removed"})
 
 
 def _page_data(page: Path) -> dict:
@@ -287,18 +287,18 @@ def test_same_basename_files_get_distinct_cards(tmp_path, factory):
     assert sorted(names) == ["/shop/a/photo.png", "/shop/b/photo.png"]
 
 
-def test_meta_states_the_gate_beside_a_reported_banding(tmp_path, factory):
+def test_scores_state_the_gate_beside_a_reported_banding(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     _, page = S.build(out)
-    meta = _page_data(page)["files"][0]["meta"]
-    assert "banding 5.0 (reported, not gated" in meta and "SSIM 0.9500 (floor 0.98)" in meta
-    assert "ss2 70.0 (floor 80)" in meta
+    scores = _page_data(page)["files"][0]["scores"]
+    assert "banding 5.0 (not gated for this image; check the crops)" in scores
+    assert "SSIM 0.9500 (floor 0.98)" in scores and "ss2 70.0 (floor 80)" in scores
 
 
-def test_meta_states_the_gate_on_a_gated_banding(tmp_path, factory):
+def test_scores_state_the_gate_on_a_gated_banding(tmp_path, factory):
     out = fake_out(tmp_path, factory, band_gated=True)
     _, page = S.build(out)
-    assert "banding 5.0 (gated at ≤3)" in _page_data(page)["files"][0]["meta"]
+    assert "banding 5.0 (gated at ≤3)" in _page_data(page)["files"][0]["scores"]
 
 
 def test_totals_cover_the_whole_batch(tmp_path, factory):
@@ -515,9 +515,9 @@ def test_a_card_shows_the_status_line_with_larger_sizes_and_the_format_change(tm
     _, page = S.build(out)
     [[text, tags]] = run_page(page, "[...cards()].map(c => [c.textContent, c.querySelectorAll('.tag')"
                                     ".map(t => t.className + ':' + t.textContent)])")
-    assert "LARGER than the original" in text and "jpeg -> png" in text
+    assert "LARGER than the original" in text and "jpeg → png" in text
     assert tags[:3] == ["tag:written if kept", "tag warn:LARGER", "tag ok:passes"]  # a chip as well as the words
-    assert f"{C.kb(source['size'])} -> {C.kb(pick['size'])}" in text
+    assert f"{C.kb(source['size'])} → {C.kb(pick['size'])}" in text and f"+{C.kb(pick['size'] - source['size'])}" in text
     assert "SSIM 0.9500 (floor 0.98)" in text  # the variant's scores stay beside the status
 
 
@@ -525,9 +525,10 @@ def test_an_untouched_card_shows_why(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     _rewrite(out, verdict="untouched", verdict_reason="saving 308 B is below max(1 KB, 1%)")
     _, page = S.build(out)
-    [[text, status]] = run_page(page, "[...cards()].map(c => [c.textContent, c.querySelector('.meta').textContent])")
+    [[text, facts, gain]] = run_page(page, "[...cards()].map(c => [c.textContent, "
+                                           "...['.facts', '.gain'].map(k => c.querySelector(k).textContent)])")
     assert "saving 308 B is below max(1 KB, 1%)" in text
-    assert status.count("untouched") == 1  # the chip says it; the line gives only the reason
+    assert facts.count("untouched") == 1 and gain.startswith("no change")  # the chip says it, the reason why
 
 
 def test_the_chip_says_a_lossy_choice_is_written_only_once_kept(tmp_path, factory):
@@ -542,6 +543,16 @@ def test_the_chip_says_a_lossy_choice_is_written_only_once_kept(tmp_path, factor
       return seen;
     })()""")
     assert chips == ["written if kept", "will be written", "written if kept"]
+
+
+def test_the_headline_gives_the_saving_and_both_sizes(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    record = json.loads((out / "photo--x" / "metrics.json").read_text())
+    before, after = record["source"]["size"], record["candidates"][0]["size"]
+    _, page = S.build(out)
+    [gain] = run_page(page, "[...cards()].map(c => c.querySelector('.gain').textContent)")
+    pct = round(100 * (before - after) / before)
+    assert gain == f"\u2212{C.kb(before - after)} (\u2212{pct}%){C.kb(before)} → {C.kb(after)}"
 
 
 def test_the_chip_says_a_lossless_choice_is_written(tmp_path, factory):

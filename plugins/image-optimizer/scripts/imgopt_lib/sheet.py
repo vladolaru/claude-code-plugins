@@ -156,9 +156,18 @@ header label{display:inline-flex;align-items:center;gap:var(--s1)}
   margin-bottom:var(--s2)}
 .card{display:flex;flex-direction:column;gap:var(--s3);border:1px solid var(--line);border-radius:8px;
   margin-bottom:var(--s5);padding:var(--s4)}
-.card h3{margin:0;font-size:15px;font-weight:600;overflow-wrap:anywhere}
-.card h3 .dir{display:block;font-weight:400;font-size:12px;color:var(--muted)}
-.meta{color:var(--muted);font-size:12px;margin:var(--s1) 0 0;font-variant-numeric:tabular-nums}
+.head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s1) var(--s4);align-items:baseline;
+  font-variant-numeric:tabular-nums}
+.head h3{margin:0;font-size:18px;font-weight:600;overflow-wrap:anywhere}
+.head .dir{grid-column:1;font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.gain{grid-column:2;grid-row:1/span 2;text-align:right;white-space:nowrap}
+.gain .big{font-size:18px;font-weight:700}
+.gain .better{color:var(--ok)}
+.gain .worse{color:var(--warn)}
+.gain .sizes{font-size:13px;color:var(--muted)}
+.head .facts,.head .scores,.head .reason{grid-column:1/-1}
+.facts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);margin-top:var(--s2)}
+.scores,.reason{font-size:13px;color:var(--muted)}
 .panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--s2)}
 .pane{overflow:auto;max-height:70vh;border:1px solid var(--line);background:var(--pane)}
 .pane img{display:block;max-width:100%}
@@ -173,8 +182,8 @@ body.dark{--pane:#282828}
 .tiles.stale > .tile{opacity:.45}
 .tile{overflow:auto;border:1px solid var(--line);width:fit-content;max-width:100%}
 .tile img{display:block;max-width:none}
-.tag{display:inline-block;padding:0 var(--s1);margin-right:var(--s1);border-radius:4px;font-size:12px;font-weight:600;
-  line-height:18px;color:var(--fg);background:var(--tag-bg)}
+.tag{display:inline-block;padding:0 var(--s2);border-radius:4px;font-size:13px;font-weight:600;
+  line-height:22px;color:var(--fg);background:var(--tag-bg)}
 .tag.ok{color:var(--ok);background:var(--ok-bg)}
 .tag.bad{color:var(--bad);background:var(--bad-bg)}
 .tag.warn{color:var(--warn);background:var(--warn-bg)}
@@ -191,7 +200,8 @@ footer summary{cursor:pointer;font-size:12px;color:var(--muted)}
 .verdicts input[type=text]{flex:1;min-width:200px}
 .verdicts .recorded{flex-basis:100%;padding:0}
 textarea{width:100%;font:12px ui-monospace,monospace}
-@media (max-width:600px){.pane{max-height:40vh}}
+@media (max-width:600px){.pane{max-height:40vh}
+  .head{grid-template-columns:minmax(0,1fr)}.gain{grid-column:1;grid-row:auto;text-align:left}}
 </style></head><body class="actual">
 <div id="banners"></div>
 <header><strong id="totals"></strong>
@@ -220,6 +230,16 @@ function variantOf(f){return f.variants.find(v=>v.label===SELECTED.get(f.name));
 function tag(text, kind){
   const t=document.createElement('span'); t.className='tag'+(kind?' '+kind:''); t.textContent=text; return t;
 }
+const KB=n=>(n/1024).toFixed(1)+' KB';
+// What writing the page's choice gains: the headline a reviewer weighs the card by.
+function gain(f){
+  const g=document.createElement('div'); g.className='gain';
+  if(f.after==null){g.append(line('big','no change'),line('sizes',KB(f.before))); return g;}
+  const d=f.after-f.before, sign=d>0?'+':'\u2212', pct=Math.abs(Math.round(100*d/(f.before||1)));
+  g.append(line('big '+(d>0?'worse':'better'),sign+KB(Math.abs(d))+' ('+sign+pct+'%)'),
+           line('sizes',KB(f.before)+' \u2192 '+KB(f.after)));
+  return g;
+}
 function gateTag(v){return v.pass?tag('passes','ok'):tag('fails the gates','bad');}
 function line(cls, ...parts){const d=document.createElement('div'); d.className=cls; d.append(...parts); return d;}
 function pane(label, src, name, ...tags){
@@ -233,17 +253,18 @@ function card(f){
   // `apply` writes a lossy choice only after a keep of that variant; a lossless one unless rejected.
   const kept=()=>{const k=VERDICTS.get(f.name); return !!k&&k.verdict==='keep'&&k.variant===f.choice;};
   const writeTag=()=>tag(f.choice_kind==='lossy'&&!kept()?'written if kept':'will be written');
-  const cut=f.name.lastIndexOf('/')+1;  // the file name leads; its folder sits above it
-  const h=document.createElement('h3'), dir=document.createElement('span');
-  dir.className='dir'; dir.textContent=f.name.slice(0,cut); h.append(dir,f.name.slice(cut));
+  const cut=f.name.lastIndexOf('/')+1;  // the file name leads; its folder sits below it
+  const h=document.createElement('h3'); h.textContent=f.name.slice(cut);
   const v=variantOf(f), switched=SELECTED.get(f.name)!==f.choice;
   // The status worked out for the page's choice: sizes, format change, LARGER, why it is or is not written.
   const status=[f.verdict==='apply'?writeTag():tag('untouched','warn')];
   if(f.larger) status.push(tag('LARGER','warn'));
   if(v&&!switched) status.push(gateTag(v));
-  const head=document.createElement('div');
-  head.append(h,line('meta',...(switched&&f.choice?["The page's choice: "]:[]),...status,f.meta));
-  if(v&&switched) head.append(line('meta','On screen: ',gateTag(v),v.meta));
+  const head=document.createElement('div'); head.className='head';
+  head.append(h,gain(f),line('dir',f.name.slice(0,cut)),
+    line('facts',...(switched&&f.choice?["The page's choice: "]:[]),...status,f.facts),
+    ...(f.scores?[line('scores',f.scores)]:[]),...(f.reason?[line('reason',f.reason)]:[]));
+  if(v&&switched) head.append(line('facts','On screen: ',gateTag(v),v.meta));
   c.append(head);
   const panes=document.createElement('div'); panes.className='panes';
   if(f.before_src) panes.append(pane('Before', f.before_src, f.name));
@@ -266,7 +287,8 @@ function card(f){
     const ask='ask the agent to choose it and rebuild the page.';
     cap.textContent=!f.tiles.length?'This page has no 1:1 crops of '+v.label+'. For them, '+ask
       :switched?'These 1:1 crops are of '+f.choice+'. For crops of '+v.label+', '+ask
-      :'1:1 crops: reference | choice | difference x8 (required ones first)';
+      :'1:1 crops, required ones first: reference | choice | difference x8 (how much each pixel changed, '
+        +'brightened 8 times so small errors show; black means unchanged)';
     t.append(cap);
     for(const tile of f.tiles){
       const w=document.createElement('div'); w.className='tile';
@@ -338,21 +360,22 @@ def _floor(value: float | None) -> str:
     return f" (floor {value:g})" if value is not None else ""
 
 
-def _decision(record: dict) -> str:
-    """The verdict and its reason; an untouched file's verdict is already the card's chip, so only the reason."""
-    reason = record["verdict_reason"]
-    return reason if record["verdict"] == "untouched" else f"{record['verdict']} ({reason})"
-
-
-def _meta(record: dict, chosen: dict | None) -> str:
+def _facts(record: dict, chosen: dict | None) -> str:
+    """The card's choice in a few words: its variant, the image's pixel size, the format (and any change), and
+    the metadata it drops. The sizes and the saving are the card's headline, so they are not repeated here."""
     s = record["source"]
-    dims = f"{s['width']}x{s['height']} " if s.get("width") else ""
-    if not chosen:
-        return f"{dims}{s['format']} · {kb(s['size'])} · {record['verdict_reason']}"
-    quality = _quality(record, chosen, "reported, not gated: gated only on palette PNG; view the tiles")
-    dropped = f" · {removes(chosen)}" if removes(chosen) else ""
-    return (f"{dims}{s['format']} -> {record['format']} · {kb(s['size'])} -> {kb(chosen['size'])} · "
-            f"{chosen['label']} · {quality}{dropped} · {_decision(record)}")
+    changed = chosen and record["format"] != s["format"]
+    parts = [chosen["label"]] if chosen else []
+    parts += [f"{s['width']}×{s['height']}"] if s.get("width") else []
+    parts += [f"{s['format']} → {record['format']}" if changed else s["format"]]
+    parts += [removes(chosen)] if removes(chosen) else []
+    return " · ".join(parts)
+
+
+def _reason(record: dict) -> str:
+    """Why the file is or is not written, unless the saving in the card's headline already says it."""
+    reason = record["verdict_reason"]
+    return "" if reason.startswith("saves ") else reason
 
 
 def _quality(record: dict, c: dict, ungated: str = "reported, not gated") -> str:
@@ -417,7 +440,9 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
                     for c in live_variants(record) if (folder / c["file"]).is_file()]
         entry = verdict_of(folder.parent, record)
         lossless_write = writes and chosen["kind"] == "lossless"
-        files.append({"name": record["source"]["path"], "meta": _meta(record, chosen),
+        files.append({"name": record["source"]["path"], "facts": _facts(record, chosen),
+                      "scores": _quality(record, chosen, "not gated for this image; check the crops") if chosen else "",
+                      "reason": _reason(record), "after": chosen["size"] if writes else None,
                       "before_src": url(sources[0].name) if sources else "",
                       "choice": chosen["label"] if chosen else None, "variants": variants,
                       "verdict": record["verdict"], "choice_kind": chosen["kind"] if chosen else None,
