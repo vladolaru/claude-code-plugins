@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import subprocess
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from imgopt_lib import review as RV
 from imgopt_lib import sheet as S
 from imgopt_lib.ladder import UsageError
 
@@ -28,7 +30,8 @@ def fake_out(tmp_path, factory, *, uncalibrated=False, band_gated=False, size=(1
     ref.quantize(8).convert("RGBA").save(pick)
     record = {
         "schema": 1, "source": {"path": str(src), "size": src.stat().st_size, "format": "png",
-                                "width": size[0], "height": size[1], "colors": None},
+                                "width": size[0], "height": size[1], "colors": None,
+                                "sha256": hashlib.sha256(src.read_bytes()).hexdigest()},
         "format": "webp" if uncalibrated else "png", "uncalibrated": uncalibrated, "waived": ["jpegoptim"],
         "notes": [], "candidates": [{"label": "pngquant-c8", "file": "pick.png", "kind": "lossy",
                                      "size": pick.stat().st_size, "band_gated": band_gated, "ssim": 0.95,
@@ -332,8 +335,9 @@ def test_the_page_lists_variants_and_carries_the_fingerprint(tmp_path, factory):
     [f] = data["files"]
     assert data["fingerprint"] and f["choice"] == "pngquant-c8"
     assert [v["label"] for v in f["variants"]] == ["pngquant-c8"] and f["default_verdict"] == ""
+    assert data["block_header"] == RV.BLOCK_HEADER
     # The header and the JSON are joined by a JS "\n" escape: a raw newline inside the literal breaks the script.
-    assert "'imgopt-verdicts 1\\n'+JSON.stringify(" in page.read_text()
+    assert "DATA.block_header+'\\n'+JSON.stringify(" in page.read_text()
 
 
 def test_one_page_from_two_folders_points_at_both(tmp_path, factory):
@@ -385,3 +389,28 @@ def test_the_sheet_cli_takes_several_folders(tmp_path, factory):
     assert str(first / "_sheet" / "index.html") in proc.stdout
     last = proc.stdout.splitlines()[-1]
     assert f"record {first} {second} --verdicts -" in last
+
+
+def test_a_block_made_as_the_page_makes_it_is_recorded_in_both_folders(tmp_path, factory):
+    first = fake_out(tmp_path / "one", factory, name="a--1")
+    second = fake_out(tmp_path / "two", factory, name="b--2")
+    _move_source(second, "b--2", tmp_path / "elsewhere" / "photo.jpg")
+    path = first / "a--1" / "metrics.json"
+    record = json.loads(path.read_text())
+    record["candidates"].append({**record["candidates"][0], "label": "pngquant-c16", "file": "c16.png",
+                                 "size": record["candidates"][0]["size"] + 10})
+    (first / "a--1" / "c16.png").write_bytes((first / "a--1" / "pick.png").read_bytes())
+    path.write_text(json.dumps(record))
+    _, page = S.build([first, second])
+    data = _page_data(page)
+    keep, reject = data["files"]
+    assert keep["choice"] == "pngquant-c8" and "pngquant-c16" in [v["label"] for v in keep["variants"]]
+    files = {keep["name"]: {"verdict": "keep", "variant": "pngquant-c16", "note": ""},
+             reject["name"]: {"verdict": "reject", "variant": reject["choice"], "note": "too soft"}}
+    block = data["block_header"] + "\n" + json.dumps({"fingerprint": data["fingerprint"], "files": files})
+    assert RV.record_verdicts([first, second], block) == {"keep": 1, "reject": 1}
+    one = json.loads((first / RV.VERDICTS_FILE).read_text())["files"]
+    two = json.loads((second / RV.VERDICTS_FILE).read_text())["files"]
+    assert one[keep["name"]]["verdict"] == "keep" and one[keep["name"]]["variant"] == "pngquant-c16"
+    assert two[reject["name"]]["verdict"] == "reject" and two[reject["name"]]["note"] == "too soft"
+    assert set(one) == {keep["name"]} and set(two) == {reject["name"]}

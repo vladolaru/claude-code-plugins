@@ -14,8 +14,10 @@ together, and offers a selector over every measured variant (one that fails
 the gates says so). The 1:1 crops are of the variant the page was built
 with; switching to another dims them. The human marks each file keep,
 reject, milder or stronger, with an optional note, and "Copy verdicts"
-gives one block (header line `imgopt-verdicts 1`, then JSON carrying the
-page's fingerprint) for `imgopt record`.
+gives one block (header line `review.BLOCK_HEADER`, then JSON carrying the
+page's fingerprint) for `imgopt record`. A verdict names the variant on
+screen: switching the variant clears the file's verdict (the note stays),
+and a lossless choice starts as keep only while it is shown.
 
 A file whose pixels cannot be read gets its card but no tiles; build()
 appends the reason to ``problems`` and carries on, and the command exits 1.
@@ -35,7 +37,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from .candidates import choice_of, kb
 from .imaging import READ_FAILURES, display_pixels, flatten
 from .metrics import diff_max, smooth_mask
-from .review import fingerprint, live_variants, rows_of
+from .review import BLOCK_HEADER, fingerprint, live_variants, rows_of
 
 TILE = 320
 SMALL_TILE = 160
@@ -166,7 +168,8 @@ textarea{width:100%;font:12px ui-monospace,monospace}
 <script>
 const DATA = __DATA__;
 const SELECTED = new Map(DATA.files.map(f=>[f.name, f.choice]));
-const VERDICTS = new Map(DATA.files.filter(f=>f.default_verdict).map(f=>[f.name,{verdict:f.default_verdict,variant:f.choice,note:''}]));
+const VERDICTS = new Map(DATA.files.filter(f=>f.default_verdict).map(f=>[f.name,{verdict:f.default_verdict,variant:f.choice}]));
+const NOTES = new Map();  // kept apart from VERDICTS: a note typed before a verdict, or across a variant switch, stays
 const KINDS = ['keep','reject','milder','stronger'];
 function variantOf(f){return f.variants.find(v=>v.label===SELECTED.get(f.name));}
 function pane(label, src, name){
@@ -189,7 +192,7 @@ function card(f){
   if(f.variants.length>1){
     const s=document.createElement('select');
     for(const x of f.variants){const o=document.createElement('option'); o.value=x.label; o.textContent=x.meta; o.selected=x.label===SELECTED.get(f.name); s.append(o);}
-    s.onchange=()=>{SELECTED.set(f.name,s.value); const e=VERDICTS.get(f.name); if(e) e.variant=s.value; c.replaceWith(card(f)); update();};
+    s.onchange=()=>{SELECTED.set(f.name,s.value); VERDICTS.delete(f.name); c.replaceWith(card(f)); update();};  // a verdict names the variant on screen
     const l=document.createElement('label'); l.append('Variant ',s); c.append(l);
   }
   if(f.tiles.length){
@@ -209,15 +212,15 @@ function card(f){
   if(f.variants.length){
     const row=document.createElement('div'); row.className='verdicts';
     const cur=VERDICTS.get(f.name);
+    const note=document.createElement('input'); note.type='text'; note.placeholder='note for the agent (optional)';
+    note.value=NOTES.get(f.name)||'';
+    note.oninput=()=>{NOTES.set(f.name,note.value); update();};
     for(const k of KINDS){
       const l=document.createElement('label'); const r=document.createElement('input');
       r.type='radio'; r.name='v-'+f.name; r.value=k; r.checked=!!cur&&cur.verdict===k;
-      r.onchange=()=>{VERDICTS.set(f.name,{verdict:k,variant:SELECTED.get(f.name),note:(VERDICTS.get(f.name)||{}).note||''}); update();};
+      r.onchange=()=>{NOTES.set(f.name,note.value); VERDICTS.set(f.name,{verdict:k,variant:SELECTED.get(f.name)}); update();};
       l.append(r,' '+k); row.append(l);
     }
-    const note=document.createElement('input'); note.type='text'; note.placeholder='note for the agent (optional)';
-    note.value=cur?cur.note:'';
-    note.oninput=()=>{const e=VERDICTS.get(f.name); if(e){e.note=note.value; update();}};
     row.append(note); c.append(row);
   }
   return c;
@@ -234,7 +237,8 @@ function update(){
   const counts={}; for(const e of VERDICTS.values()) counts[e.verdict]=(counts[e.verdict]||0)+1;
   const open=DATA.files.filter(f=>f.variants.length&&!VERDICTS.has(f.name)).length;
   document.getElementById('counts').textContent=KINDS.map(k=>`${counts[k]||0} ${k}`).join(', ')+`; ${open} without a verdict`;
-  document.getElementById('block').value='imgopt-verdicts 1\\n'+JSON.stringify({fingerprint:DATA.fingerprint,files:Object.fromEntries(VERDICTS)});
+  const files=Object.fromEntries([...VERDICTS].map(([name,e])=>[name,{...e,note:NOTES.get(name)||''}]));
+  document.getElementById('block').value=DATA.block_header+'\\n'+JSON.stringify({fingerprint:DATA.fingerprint,files});
 }
 document.getElementById('copy').onclick=()=>{const b=document.getElementById('block'); b.select(); if(navigator.clipboard) navigator.clipboard.writeText(b.value);};
 document.getElementById('totals').textContent=DATA.totals;
@@ -340,7 +344,7 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
                + (f" ({(total_after - total_before) / total_before:+.1%}) overall" if total_before else " overall"))
     totals = overall + (f"; {applied} to write: {kb(before)} -> {kb(after)}" if applied else "; nothing to write")
     data = {"files": files, "totals": totals, "banners": sorted(set(banners)), "fingerprint": fingerprint(rows),
-            "folders": [str(o) for o in outs]}
+            "folders": [str(o) for o in outs], "block_header": BLOCK_HEADER}
     page = sheet_dir / "index.html"
     page.write_text(PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/")))
     return tiles, page
