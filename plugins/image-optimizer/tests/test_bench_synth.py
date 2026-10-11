@@ -8,7 +8,7 @@ from PIL import Image
 BENCH = Path(__file__).resolve().parents[1] / "bench"
 sys.path.insert(0, str(BENCH))
 
-from imgbench import edge as E, synth as SY  # noqa: E402
+from imgbench import edge as E, sources as SR, synth as SY  # noqa: E402
 from imgopt_lib import imaging as I  # noqa: E402
 
 
@@ -48,6 +48,19 @@ def test_edge_cases_are_deterministic_and_complete(tmp_path):
         facts = I.read_facts(tmp_path / "a" / "edge" / f"orient-{n}.jpg")
         assert facts.orientation == n and facts.display_width == 300
     assert I.read_facts(tmp_path / "a" / "edge" / "huge-24mp.jpg").display_width == 6000
+
+
+def test_the_huge_photo_keeps_its_source_license_when_derived(tmp_path, monkeypatch):
+    original = tmp_path / "downloads" / "photo-camera" / "lake.jpg"
+    original.parent.mkdir(parents=True)
+    Image.new("RGB", (600, 400), (40, 90, 160)).save(original)
+    sources_file = tmp_path / "sources.json"
+    SR.save([SR.Source("lake.jpg", "photo-camera", "https://example/l", "CC BY-SA 4.0", "A", None, None)],
+            sources_file)
+    monkeypatch.setattr(E.paths, "downloads_dir", lambda: tmp_path / "downloads")
+    monkeypatch.setattr(E.paths, "SOURCES_FILE", sources_file)
+    [huge] = [e for e in E.build_all(tmp_path / "corpus", tools={}) if e.path.endswith("huge-24mp.jpg")]
+    assert (huge.origin, huge.license) == ("derived:photo-camera/lake.jpg", "CC BY-SA 4.0")
 
 
 def test_a_screenshot_at_scale_two_doubles_the_pixels(tmp_path):

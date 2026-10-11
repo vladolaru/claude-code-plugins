@@ -99,19 +99,20 @@ def _tiny(dest: Path) -> None:
     im.save(dest, "PNG")
 
 
-def _huge(dest: Path) -> str:
+def _huge(dest: Path) -> tuple[str, str] | None:
     """A 6000x4000 JPEG from the first downloaded photo-camera original (cropped to 3:2), else a synthetic
-    gradient photo. Returns the origin to record."""
+    gradient photo. Returns the derived file's (origin, license), the source's own license as derive.build_all
+    records it, or None for the synthetic fallback."""
     listed = sorted((s for s in sources.load(paths.SOURCES_FILE) if s.category == "photo-camera"), key=lambda s: s.key)
     for source in listed:
         original = paths.downloads_dir() / source.category / source.key
         if original.is_file():
             im = display_pixels(original).convert("RGB")
             ImageOps.fit(im, HUGE_SIZE, Image.Resampling.LANCZOS).save(dest, "JPEG", quality=92, subsampling=2)
-            return f"derived:{source.category}/{source.key}"
+            return f"derived:{source.category}/{source.key}", source.license
     small = photo((1500, 1000))
     small.resize(HUGE_SIZE, Image.Resampling.BICUBIC).save(dest, "JPEG", quality=92, subsampling=2)
-    return "synthetic"
+    return None
 
 
 def build_all(corpus: Path, tools: dict) -> list[manifest.Entry]:
@@ -122,11 +123,13 @@ def build_all(corpus: Path, tools: dict) -> list[manifest.Entry]:
     entries: list[manifest.Entry] = []
 
     def add(name: str, transform: str, make: Callable[[Path], object]) -> None:
-        """`make` writes the file; when it returns a string, that is the origin (a derived file), else synthetic."""
+        """`make` writes the file; when it returns (origin, license), the file derives from a real source and keeps
+        that source's license, else it is synthetic and ours."""
         dest = folder / name
         made = make(dest)
-        entries.append(manifest.entry_for(dest, corpus, category=CATEGORY, transform=transform, license=LICENSE,
-                                          origin=made if isinstance(made, str) else "synthetic"))
+        origin, source_license = made if isinstance(made, tuple) else ("synthetic", LICENSE)
+        entries.append(manifest.entry_for(dest, corpus, category=CATEGORY, transform=transform,
+                                          license=source_license, origin=origin))
 
     add("anim.png", "3-frame 256x256 APNG: a still-PNG pipeline would flatten it (audit G1)",
         lambda d: _animation(d, "PNG", (256, 256)))
