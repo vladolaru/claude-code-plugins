@@ -37,12 +37,18 @@ def _rows(outs) -> list[tuple[Path, dict]]:
     return RV.rows_of([Path(o) for o in ([outs] if isinstance(outs, (str, Path)) else outs)])
 
 
-def _to_write(outs, only) -> tuple[list[tuple[Path, dict]], list[str]]:
-    """(the records `only` selects or all of them that have a choice to write, a problem line per `only` name that
-    selects nothing or is ambiguous)."""
+def _selected(outs, only) -> tuple[list[tuple[Path, dict]], list[str]]:
+    """(the records `only` selects, or all of them; a problem line per `only` name that selects nothing or is
+    ambiguous)."""
     rows, problems = _rows(outs), []
     if only:
         rows, problems = SEL.resolve(only, rows)
+    return rows, problems
+
+
+def _to_write(outs, only) -> tuple[list[tuple[Path, dict]], list[str]]:
+    """(the selected records that have a choice to write, the selection's problem lines)."""
+    rows, problems = _selected(outs, only)
     return [(f, r) for f, r in rows if RV.writes(r)], problems
 
 
@@ -158,9 +164,13 @@ def _tools_changed(record: dict, tools: dict) -> str:
 
 
 def apply(outs, *, tools: dict, only=(), dest: Path | None = None, log=print) -> int:
-    rows, problems = _to_write(outs, only)
+    selected, problems = _selected(outs, only)
     for problem in problems:
         log(f"--only: {problem}")
+    rows = [(f, r) for f, r in selected if RV.writes(r)]
+    for f, r in selected:  # a keep the human made that still has nothing to write is said, not dropped
+        if not RV.writes(r) and (RV.verdict_of(f.parent, r) or {}).get("verdict") == "keep":
+            log(f"  kept, but nothing to write: {r['source']['path']} ({r['verdict_reason']})")
     if not rows:
         if not problems:
             log("Nothing to apply.")

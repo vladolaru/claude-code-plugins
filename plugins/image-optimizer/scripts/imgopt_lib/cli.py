@@ -314,8 +314,11 @@ def cmd_record(args) -> int:
     unseen = []
     for _, record in RV.rows_of(dirs):
         path, chosen = record["source"]["path"], C.choice_of(record)
-        if (data["files"].get(path, {}).get("verdict") == "keep" and S.needs_tiles(record)
-                and chosen["file"] != (shown[path] or {}).get("file")):
+        if data["files"].get(path, {}).get("verdict") != "keep":
+            continue
+        if not RV.writes(record):
+            print(f"  kept, but nothing to write: {path} ({record['verdict_reason']})")
+        elif S.needs_tiles(record) and chosen["file"] != (shown[path] or {}).get("file"):
             unseen.append((path, chosen))
     for path, chosen in unseen:
         print(f"  kept without its 1:1 crops: {path} ({chosen['label']})")

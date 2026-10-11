@@ -11,7 +11,8 @@ changed or is uncalibrated.
 One page covers the records of one or more working folders. Each card shows
 before against the chosen variant, opens at 100% with panes that scroll
 together, and offers a selector over every measured variant (one that fails
-the gates says so). The 1:1 crops are of the variant the page was built
+the gates says so). The selector always names the variant on screen: with
+no choice, the first listed is shown, and a verdict sends it. The 1:1 crops are of the variant the page was built
 with; switching to another dims them, drops the card's build-time status
 and says how to get crops of the variant on screen. The human marks each
 file keep, reject, milder or stronger, with an optional note, and "Copy
@@ -170,7 +171,8 @@ textarea{width:100%;font:12px ui-monospace,monospace}
 <textarea id="block" rows="3" readonly></textarea></footer>
 <script>
 const DATA = __DATA__;
-const SELECTED = new Map(DATA.files.map(f=>[f.name, f.choice]));
+// The variant on screen, which a verdict names: the page's choice, else the first one listed.
+const SELECTED = new Map(DATA.files.map(f=>[f.name, f.variants.some(v=>v.label===f.choice)?f.choice:(f.variants[0]||{}).label||null]));
 const VERDICTS = new Map(DATA.files.filter(f=>f.recorded||f.default_verdict).map(f=>[f.name,{verdict:f.recorded?f.recorded.verdict:f.default_verdict,variant:SELECTED.get(f.name)}]));
 const NOTES = new Map(DATA.files.filter(f=>f.recorded&&f.recorded.note).map(f=>[f.name,f.recorded.note]));  // apart from VERDICTS: a note outlives a variant switch
 const KINDS = ['keep','reject','milder','stronger'];
@@ -193,7 +195,7 @@ function card(f){
   const all=[...panes.querySelectorAll('.pane')];
   all.forEach(p=>p.addEventListener('scroll',()=>all.forEach(o=>{if(o!==p){o.scrollTop=p.scrollTop;o.scrollLeft=p.scrollLeft;}})));
   c.append(h,m,panes);
-  if(f.variants.length>1){
+  if(f.variants.length){  // even one option: the selector names the variant a verdict keeps
     const s=document.createElement('select');
     for(const x of f.variants){const o=document.createElement('option'); o.value=x.label; o.textContent=x.meta; o.selected=x.label===SELECTED.get(f.name); s.append(o);}
     s.onchange=()=>{SELECTED.set(f.name,s.value); VERDICTS.delete(f.name); c.replaceWith(card(f)); update();};  // a verdict names the variant on screen

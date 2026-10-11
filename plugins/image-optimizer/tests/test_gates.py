@@ -131,6 +131,12 @@ def test_pick_breaks_equal_sizes_in_favour_of_progressive():
     assert G.pick([prog, plain]) is prog
 
 
+def test_a_variant_chosen_by_hand_applies_under_the_floor_but_not_when_larger():
+    verdict, why = G.verdict(100_000, rec(size=99_500), min_saving=4096, by_hand=True)
+    assert verdict == "apply" and "chosen by hand" in why and "below max(1 KB, 1%, 4096 B)" in why
+    assert G.verdict(100_000, rec(size=100_000), by_hand=True)[0] == "untouched"
+
+
 def test_verdict_applies_at_exactly_the_absolute_floor():
     assert G.verdict(100_000, rec(size=100_000 - 1024))[0] == "apply"
     assert G.verdict(100_000, rec(size=100_000 - 1023))[0] == "untouched"

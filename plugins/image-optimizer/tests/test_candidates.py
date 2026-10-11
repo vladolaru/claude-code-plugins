@@ -1137,7 +1137,7 @@ def test_a_rerun_keeps_the_choice_while_its_variant_is_still_measured(factory, t
     C.run([src], opts(out, "high"), tools, log=quiet)
     [(_, rerun)] = C.load_records(out)
     assert rerun["choice"] == other["file"] and C.choice_of(rerun)["key"] == other["key"]
-    assert rerun["verdict"] == G.verdict(rerun["source"]["size"], C.choice_of(rerun))[0]
+    assert rerun["verdict"] == G.verdict(rerun["source"]["size"], C.choice_of(rerun), by_hand=True)[0]
 
 
 def test_min_saving_is_recorded_and_leaves_small_savings_untouched(factory, toolset, tmp_path):

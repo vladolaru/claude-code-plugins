@@ -65,7 +65,11 @@ def test_the_verdict_follows_the_choice(tmp_path):
     assert record["verdict"] == "apply"  # saves 5,000 B
     record["min_saving"] = 6000
     RV.choose(folder, record, "v15000")
-    assert record["verdict"] == "untouched"  # 5,000 B is below --min-saving 6000
+    assert record["verdict"] == "apply"  # 5,000 B is below --min-saving 6000, but the choice was made by hand
+    assert "chosen by hand" in record["verdict_reason"]
+    record["min_saving"] = 9000
+    RV.choose(folder, record, "default")
+    assert record["verdict"] == "untouched"  # the gates' own pick saves 8,000 B, below the floor
 
 
 def test_a_missing_file_comes_back_from_the_store(tmp_path):
@@ -303,3 +307,44 @@ def test_record_cli_warns_of_a_keep_switched_to_a_variant_without_crops(tmp_path
     out = capsys.readouterr().out
     assert f"kept without its 1:1 crops: {a} (v15000)" in out and b not in out.split("kept without")[-1]
     assert f"view them before placing: python3 {cli.SCRIPT} sheet {dirs[0]} {dirs[1]}" in out
+
+
+def test_a_keep_must_name_its_variant(tmp_path):
+    folder, record = fake_record(tmp_path)
+    fp = RV.fingerprint(RV.rows_of([folder.parent]))
+    with pytest.raises(UsageError, match="a keep must name the variant"):
+        RV.record_verdicts([folder.parent], block(fp, {record["source"]["path"]: {"verdict": "keep", "variant": None}}))
+
+
+def test_a_kept_pick_under_the_floor_is_written(tmp_path):
+    folder, record = fake_record(tmp_path)
+    record.update(min_saving=9000, verdict="untouched", verdict_reason="saving 8000 B is below the floor")
+    C.write_record(folder, record)
+    RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+        record["source"]["path"]: {"verdict": "keep", "variant": "v12000"}}))
+    [(_, kept)] = RV.rows_of([folder.parent])
+    assert kept["verdict"] == "apply" and RV.is_accepted(kept, RV.verdict_of(folder.parent, kept))
+
+
+def with_a_larger_variant(tmp_path):
+    """fake_record plus a 25,000 B variant: larger than its 20,000 B source, so keeping it writes nothing."""
+    folder, record = fake_record(tmp_path)
+    (folder / "v25000.png").write_bytes(b"v" * 25000)
+    record["candidates"].append({**record["candidates"][-1], "key": "k25000", "label": "v25000",
+                                 "file": "v25000.png", "size": 25000})
+    C.write_record(folder, record)
+    return folder, record
+
+
+def test_record_and_apply_name_a_keep_that_writes_nothing(tmp_path, capsys):
+    from imgopt_lib import applying as AP
+    from imgopt_lib import cli
+
+    folder, record = with_a_larger_variant(tmp_path)
+    pasted = tmp_path / "pasted.txt"
+    pasted.write_text(page_block([folder.parent], {record["source"]["path"]: {"verdict": "keep", "variant": "v25000"}}))
+    assert cli.main(["record", "--verdicts", str(pasted)]) == 0
+    assert f"kept, but nothing to write: {record['source']['path']}" in capsys.readouterr().out
+    lines = []
+    assert AP.apply([folder.parent], tools={}, log=lines.append) == 0
+    assert any(f"kept, but nothing to write: {record['source']['path']}" in line for line in lines), lines

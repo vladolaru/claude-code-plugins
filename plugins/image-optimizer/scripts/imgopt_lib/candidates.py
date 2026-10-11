@@ -468,7 +468,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
                  and not c.get("error") and not c.get("discarded")), None)
     choice = kept if kept is not None and kept is not chosen else None
     verdict, why = G.verdict(size, choice or chosen, in_place=in_place, replaces_source=target == src,
-                             min_saving=opts.min_saving)
+                             min_saving=opts.min_saving, by_hand=choice is not None)
     if chosen is None and choice is None:
         why = _no_pick_reason(cands, opts)
     record = {

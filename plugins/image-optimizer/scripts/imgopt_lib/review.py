@@ -45,7 +45,8 @@ def _ensure_file(folder: Path, cand: dict) -> None:
 def choose(folder: Path, record: dict, how: str) -> dict:
     """Set the file's variant: a label, "milder" (the next larger passing variant), "stronger" (the next smaller
     variant, which may fail the gates), or "default" (back to the gates' pick). Rewrites the record, verdict
-    included, and returns the chosen candidate."""
+    included, and returns the chosen candidate. Anything but "default" is a choice made by hand, which applies
+    whenever it is smaller than the source, under the saving floors too (`gates.verdict`)."""
     live = live_variants(record)
     current = choice_of(record)
     if how == "default":
@@ -80,7 +81,7 @@ def choose(folder: Path, record: dict, how: str) -> dict:
     target_is_source = record.get("target") == record["source"]["path"]
     record["verdict"], record["verdict_reason"] = G.verdict(
         record["source"]["size"], chosen, in_place=_in_place(record), replaces_source=target_is_source,
-        min_saving=record.get("min_saving", 0))
+        min_saving=record.get("min_saving", 0), by_hand=how != "default")
     write_record(Path(folder), record)
     return chosen
 
@@ -195,7 +196,12 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
         folder, record = by_path[path]
         variant = entry.get("variant")
         current = choice_of(record)
-        if entry["verdict"] != "reject" and variant and (current is None or variant != current["label"]):
+        if entry["verdict"] == "keep" and not variant:
+            raise UsageError(f"{path}: a keep must name the variant it keeps; copy the block again from the page")
+        # A keep of the variant shown also chooses it when the gates left it unwritten (a saving under the floor).
+        kept_unwritten = entry["verdict"] == "keep" and not writes(record)
+        if entry["verdict"] != "reject" and variant and (current is None or variant != current["label"]
+                                                         or kept_unwritten):
             # Validate every change before applying any: a failed `choose` midway would leave the page
             # half-applied, and the block unrecoverable (the fingerprint has moved).
             cand = next((c for c in live_variants(record) if c["label"] == variant), None)
