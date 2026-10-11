@@ -159,10 +159,20 @@ def parse_block(text: str) -> dict:
 
 
 def _load(out: Path) -> dict:
+    """The working folder's verdicts.json, or an empty book when there is none. One that cannot be read is
+    refused, not read as empty: it holds the human's work, which the next `record` would overwrite."""
+    path = Path(out) / VERDICTS_FILE
     try:
-        return json.loads((Path(out) / VERDICTS_FILE).read_text())
-    except (OSError, json.JSONDecodeError):
+        book = json.loads(path.read_text())
+    except FileNotFoundError:
         return {"files": {}}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise UsageError(f"{path} cannot be read ({error}) and holds the human's verdicts; repair or move it by "
+                         "hand, then run the command again") from None
+    if not isinstance(book, dict) or not isinstance(book.get("files"), dict):
+        raise UsageError(f"{path} is not a verdicts file (no \"files\" object) and holds the human's verdicts; "
+                         "repair or move it by hand, then run the command again")
+    return book
 
 
 def page_folders(data: dict, dirs=None) -> list[Path]:
@@ -223,8 +233,10 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
         book["files"][path] = {"verdict": entry["verdict"], "variant": chosen["label"] if chosen else None,
                                "key": chosen.get("key") if chosen else None, "note": str(entry.get("note") or ""),
                                "sha256": record["source"]["sha256"]}
-    for out, book in stored.items():
-        (out / VERDICTS_FILE).write_text(json.dumps(book, indent=1))
+    for out, book in stored.items():  # whole or not at all: a cut file would read as corrupt
+        tmp = out / (VERDICTS_FILE + ".tmp")
+        tmp.write_text(json.dumps(book, indent=1))
+        tmp.replace(out / VERDICTS_FILE)
     return dict(Counter(e["verdict"] for e in data["files"].values()))
 
 

@@ -304,7 +304,7 @@ def cmd_choose(args) -> int:
 
 
 def cmd_record(args) -> int:
-    text = sys.stdin.read() if args.verdicts == "-" else Path(args.verdicts).read_text()
+    text = SEL.read_text(args.verdicts)
     data = RV.parse_block(text)
     dirs = RV.page_folders(data, args.out)
     shown = {r["source"]["path"]: C.choice_of(r) for _, r in RV.rows_of(dirs)}  # what the page was built with

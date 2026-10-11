@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from imgopt_lib import selection as SEL
 
 
@@ -42,3 +44,16 @@ def test_read_list_takes_non_empty_lines(tmp_path):
     listing = tmp_path / "set.txt"
     listing.write_text("a.png\n\n  b.png  \n")
     assert SEL.read_list(str(listing)) == ["a.png", "b.png"]
+
+
+@pytest.mark.parametrize("argv", [
+    ["candidates", "--files", "{missing}", "--out", "{out}"],
+    ["apply", "{out}", "--files", "{missing}"],
+    ["record", "--verdicts", "{missing}"],
+])
+def test_a_missing_list_or_verdicts_file_is_a_usage_error(tmp_path, capsys, argv):
+    from imgopt_lib import cli
+
+    values = {"missing": str(tmp_path / "gone.txt"), "out": str(tmp_path / "out")}
+    assert cli.main([a.format(**values) for a in argv]) == 2
+    assert f"{tmp_path / 'gone.txt'}: no such file" in capsys.readouterr().err

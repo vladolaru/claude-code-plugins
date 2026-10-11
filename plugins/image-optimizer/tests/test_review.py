@@ -383,3 +383,28 @@ def test_record_and_apply_name_a_keep_that_writes_nothing(tmp_path, capsys):
     lines = []
     assert AP.apply([folder.parent], tools={}, log=lines.append) == 0
     assert any(f"kept, but nothing to write: {record['source']['path']}" in line for line in lines), lines
+
+
+def test_a_corrupt_verdicts_file_is_refused_not_treated_as_empty(tmp_path):
+    folder, record = fake_record(tmp_path)
+    (folder.parent / RV.VERDICTS_FILE).write_text('{"files": {"/a.png": {"verdict": "keep"')  # cut short
+    with pytest.raises(UsageError, match="holds the human's verdicts"):
+        RV.verdict_of(folder.parent, record)
+    with pytest.raises(UsageError, match="holds the human's verdicts"):
+        RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+            record["source"]["path"]: {"verdict": "reject"}}))
+
+
+def test_verdicts_are_written_whole_or_not_at_all(tmp_path, monkeypatch):
+    folder, record = fake_record(tmp_path)
+    book = folder.parent / RV.VERDICTS_FILE
+    book.write_text('{"files": {}}')
+
+    def fails(self, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", fails)
+    with pytest.raises(OSError, match="disk full"):
+        RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+            record["source"]["path"]: {"verdict": "reject"}}))
+    assert book.read_text() == '{"files": {}}'

@@ -12,11 +12,24 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from .ladder import UsageError
+
+
+def read_text(value: str) -> str:
+    """The text of the file ``value``, or stdin when ``value`` is "-"; UsageError when the file cannot be read."""
+    if value == "-":
+        return sys.stdin.read()
+    try:
+        return Path(value).read_text()
+    except FileNotFoundError:
+        raise UsageError(f"{value}: no such file; give the path of the file, or - to read stdin") from None
+    except (OSError, UnicodeDecodeError) as error:
+        raise UsageError(f"{value}: cannot be read as text ({error})") from None
+
 
 def read_list(value: str) -> list[str]:
     """The non-empty, stripped lines of the file ``value``, or of stdin when ``value`` is "-" (`--files`)."""
-    text = sys.stdin.read() if value == "-" else Path(value).read_text()
-    return [line.strip() for line in text.splitlines() if line.strip()]
+    return [line.strip() for line in read_text(value).splitlines() if line.strip()]
 
 
 def _as_path(name: str, cwd: Path) -> str | None:
