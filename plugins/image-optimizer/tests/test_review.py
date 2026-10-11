@@ -71,7 +71,7 @@ def test_the_verdict_follows_the_choice(tmp_path):
 def test_a_missing_file_comes_back_from_the_store(tmp_path):
     folder, record = fake_record(tmp_path)
     for c in record["candidates"]:
-        ST.put(c, folder)
+        ST.put(c, folder, source_sha=record["source"]["sha256"], ref_sha=record["source"]["sha256"])
     (folder / "v15000.png").unlink()
     RV.choose(folder, record, "v15000")
     assert (folder / "v15000.png").is_file()

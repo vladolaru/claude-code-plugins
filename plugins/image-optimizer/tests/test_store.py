@@ -1,6 +1,10 @@
+import json
 import os
+import shutil
 import time
 from pathlib import Path
+
+import pytest
 
 from imgopt_lib import candidates as C
 from imgopt_lib import cli
@@ -8,12 +12,15 @@ from imgopt_lib import gates as G
 from imgopt_lib import ladder
 from imgopt_lib import store as ST
 
+SRC, REF = "a" * 64, "b" * 64  # the source and reference hashes `candidates` passes to `put`
+
 
 def test_put_then_get_returns_the_record_and_keeps_the_file(tmp_path):
     folder = tmp_path / "rec"
     folder.mkdir()
     (folder / "v.png").write_bytes(b"variant")
-    ST.put({"key": "abcd1234", "label": "oxipng", "file": "v.png", "kind": "lossless", "size": 7}, folder)
+    ST.put({"key": "abcd1234", "label": "oxipng", "file": "v.png", "kind": "lossless", "size": 7}, folder,
+           source_sha=SRC, ref_sha=REF)
     got = ST.get("abcd1234")
     assert got["label"] == "oxipng"
     restored = tmp_path / "other"
@@ -26,7 +33,7 @@ def test_a_failed_hardlink_falls_back_to_a_copy(tmp_path, monkeypatch):
     folder.mkdir()
     (folder / "v.png").write_bytes(b"variant")
     monkeypatch.setattr(os, "link", lambda *a: (_ for _ in ()).throw(OSError("cross-device")))
-    ST.put({"key": "k1", "file": "v.png", "kind": "lossless"}, folder)
+    ST.put({"key": "k1", "file": "v.png", "kind": "lossless"}, folder, source_sha=SRC, ref_sha=REF)
     assert ST.get("k1") is not None
 
 
@@ -34,8 +41,37 @@ def test_lossy_variants_are_remembered_as_produced(tmp_path):
     folder = tmp_path / "rec"
     folder.mkdir()
     (folder / "v.jpg").write_bytes(b"lossy bytes")
-    ST.put({"key": "k2", "file": "v.jpg", "kind": "lossy"}, folder)
-    assert ST.produced_lossy(ST.sha256(folder / "v.jpg"))
+    ST.put({"key": "k2", "file": "v.jpg", "kind": "lossy"}, folder, source_sha=SRC, ref_sha=REF)
+    sha = ST.sha256(folder / "v.jpg")
+    assert ST.produced_lossy(sha)
+    assert json.loads(ST._produced(sha).read_text()) == {"kind": "lossy", "source": SRC}
+
+
+@pytest.mark.parametrize("bytes_of, rec", [
+    ("source", {}),  # a lossy rung that handed back the source's own bytes
+    ("reference", {}),
+    ("other", {"identical": True}),  # pixel-identical to the reference: nothing was lost
+])
+def test_a_variant_that_lost_nothing_is_not_remembered_as_produced(tmp_path, bytes_of, rec):
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    (folder / "v.png").write_bytes(b"the bytes")
+    sha = ST.sha256(folder / "v.png")
+    hashes = {"source": (sha, REF), "reference": (SRC, sha), "other": (SRC, REF)}[bytes_of]
+    ST.put({"key": "k3", "file": "v.png", "kind": "lossy", **rec}, folder, source_sha=hashes[0], ref_sha=hashes[1])
+    assert ST.get("k3") is not None and not ST.produced_lossy(sha)
+
+
+def test_prune_removes_the_legacy_produced_index(tmp_path):
+    legacy = ST.root() / "produced" / "ab" / ("ab" + "0" * 62)
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("lossy")
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    (folder / "v.jpg").write_bytes(b"lossy bytes")
+    ST.put({"key": "k4", "file": "v.jpg", "kind": "lossy"}, folder, source_sha=SRC, ref_sha=REF)
+    ST.prune()
+    assert not (ST.root() / "produced").exists() and ST.produced_lossy(ST.sha256(folder / "v.jpg"))
 
 
 def test_prune_drops_old_entries_and_keeps_the_store_under_its_cap(tmp_path):
@@ -43,7 +79,7 @@ def test_prune_drops_old_entries_and_keeps_the_store_under_its_cap(tmp_path):
         folder = tmp_path / f"r{i}"
         folder.mkdir()
         (folder / "v.png").write_bytes(b"x" * 1000)
-        ST.put({"key": f"key{i}", "file": "v.png", "kind": "lossy"}, folder)
+        ST.put({"key": f"key{i}", "file": "v.png", "kind": "lossy"}, folder, source_sha=SRC, ref_sha=REF)
         then = time.time() - age_days * 86400
         os.utime(ST._entry(f"key{i}"), (then, then))
     removed, _ = ST.prune(max_bytes=1500)
@@ -73,7 +109,27 @@ def test_a_copied_lossy_variant_is_not_measured_again(factory, toolset, tmp_path
     src.write_bytes((folder / C.pick_of(r)["file"]).read_bytes())  # an agent copies the pick into place
     lines = []
     assert C.run([src], opts(tmp_path / "two"), tools, log=lines.append) == []
-    assert any("an earlier imgopt lossy pick wrote this file" in l for l in lines)
+    assert any("its bytes match a lossy variant imgopt produced" in l for l in lines)
+
+
+def test_a_lossy_rung_that_returns_the_source_leaves_the_original_measurable(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.gradient(size=(300, 60)).resolve()
+    real = ladder.generate
+
+    def hands_back_the_source(rung, *, inputs, out_dir, tools):
+        if rung.tool == "pngquant":
+            out = Path(out_dir) / f"{rung.label}{rung.ext}"
+            shutil.copyfile(inputs["source"], out)
+            return out
+        return real(rung, inputs=inputs, out_dir=out_dir, tools=tools)
+
+    monkeypatch.setattr(ladder, "generate", hands_back_the_source)
+    opts = lambda out: C.Options(profile="high", out=out, gates=G.gates_for("high"))
+    C.run([src], opts(tmp_path / "one"), tools, log=lambda _: None)
+    assert not ST.produced_lossy(ST.sha256(src))
+    monkeypatch.setattr(ladder, "generate", real)
+    assert len(C.run([src], opts(tmp_path / "two"), tools, log=lambda _: None)) == 1
 
 
 def test_a_run_without_the_store_neither_reads_nor_writes_it(factory, toolset, tmp_path, monkeypatch):
@@ -93,7 +149,7 @@ def test_prune_and_size_survive_entries_that_vanish_or_cannot_be_read(tmp_path, 
     folder.mkdir()
     (folder / "v.png").write_bytes(b"x" * 1000)
     for key in ("aa-good", "bb-vanishes", "cc-unreadable"):
-        ST.put({"key": key, "file": "v.png", "kind": "lossless"}, folder)
+        ST.put({"key": key, "file": "v.png", "kind": "lossless"}, folder, source_sha=SRC, ref_sha=REF)
     real_stat, real_iterdir = Path.stat, Path.iterdir
 
     def stat(self, *a, **k):  # another process pruned this entry between the listing and the stat
@@ -117,7 +173,7 @@ def test_clean_store_prunes_by_age_and_needs_no_folder(tmp_path, capsys):
     folder = tmp_path / "rec"
     folder.mkdir()
     (folder / "v.png").write_bytes(b"x" * 1000)
-    ST.put({"key": "keyold", "file": "v.png", "kind": "lossless"}, folder)
+    ST.put({"key": "keyold", "file": "v.png", "kind": "lossless"}, folder, source_sha=SRC, ref_sha=REF)
     then = time.time() - 5 * 86400
     os.utime(ST._entry("keyold"), (then, then))
     assert cli.main(["clean", "--store"]) == 0 and ST._entry("keyold").is_dir()  # a get would count as a use

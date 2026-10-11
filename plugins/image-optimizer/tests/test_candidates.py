@@ -899,10 +899,10 @@ def test_an_encoder_killed_by_a_signal_is_not_cached_as_a_refusal(factory, tools
 def test_a_file_written_by_a_lossy_pick_is_not_measured_again_without_a_baseline(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"jpeg"})
     src = factory.photo(size=(200, 150))
-    ST.mark_produced(C.sha256(src), "lossy")
+    ST.mark_produced(C.sha256(src), "lossy", "0" * 64)
     lines = []
     records = C.run([src.resolve()], opts(tmp_path / "out", "high"), tools, log=lines.append)
-    assert records == [] and any("an earlier imgopt lossy pick wrote this file" in l for l in lines)
+    assert records == [] and any("its bytes match a lossy variant imgopt produced" in l for l in lines)
     original = factory.photo(name="orig.jpg", size=(200, 150), quality=98)
     lines = []
     [r] = C.run([src.resolve()], opts(tmp_path / "out2", "high", refs={src.resolve(): original.resolve()}), tools,
@@ -926,7 +926,7 @@ def test_a_file_skipped_in_a_rerun_leaves_the_last_run(factory, toolset, tmp_pat
     second = C.run([a, b], opts(out, "high"), tools, log=quiet, jobs=jobs)
     assert [r["source"]["path"] for r in second] == [str(b)]
     assert [r["source"]["path"] for _, r in C.load_records(out)] == [str(b)]
-    assert any("a.jpg" in s and "an earlier imgopt lossy pick wrote this file" in s for s in C.stale_records(out))
+    assert any("a.jpg" in s and "its bytes match a lossy variant imgopt produced" in s for s in C.stale_records(out))
     lines = []
     keep(out, b)
     assert AP.apply(out, tools=tools, log=lines.append) == 0
@@ -938,19 +938,19 @@ def test_a_baseline_an_earlier_lossy_pick_wrote_is_refused(factory, toolset, tmp
     tools = toolset("recompress", "high", {"jpeg"})
     src = factory.photo(size=(200, 150)).resolve()
     original = factory.photo(name="orig.jpg", size=(200, 150), quality=60).resolve()
-    ST.mark_produced(C.sha256(original), "lossy")
+    ST.mark_produced(C.sha256(original), "lossy", "0" * 64)
     lines = []
     records = C.run([src], opts(tmp_path / "out", "high", refs={src: original}, ref_rev=ref_rev), tools,
                     log=lines.append)
     assert records == []
-    [skip] = [l for l in lines if "is itself an earlier imgopt lossy pick" in l]
+    [skip] = [l for l in lines if "matches a lossy variant imgopt produced" in l]
     assert named in skip
 
 
 def test_a_lossless_job_may_run_on_a_file_a_lossy_pick_wrote(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo()
-    ST.mark_produced(C.sha256(src), "lossy")
+    ST.mark_produced(C.sha256(src), "lossy", "0" * 64)
     assert len(C.run([src.resolve()], opts(tmp_path / "out"), tools, log=quiet)) == 1
 
 

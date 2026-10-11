@@ -3,11 +3,12 @@
 `candidates` keys each candidate by its source and reference hashes, settings, rung and tool identities
 (`candidates._key`). The store holds, per key, the candidate's record (``rec.json``) and its file, so a run in
 any working folder reuses a candidate measured in another one: a file set measured once costs nothing to measure
-again in a folder of its own. It also remembers the sha256 of every lossy variant it ever held (``produced``):
-that is how `candidates` recognises a file an earlier lossy pass produced, however it got into place, and it is
-never pruned. Entries unused for ``MAX_AGE_DAYS`` go, and the store is kept under ``MAX_BYTES`` by dropping the
-least recently used first (`prune`). Every write is best effort: a sandbox that cannot write the cache runs
-without the store.
+again in a folder of its own. It also remembers the sha256 of every lossy variant it ever held that lost
+something (``outputs``: not one with the source's or the reference's bytes, nor a pixel-identical one), with its
+kind and the hash of the source it was made from: that is how `candidates` recognises a file an earlier lossy pass
+produced, however it got into place, and the index is never pruned. Entries unused for ``MAX_AGE_DAYS`` go, and the
+store is kept under ``MAX_BYTES`` by dropping the least recently used first (`prune`). Every write is best effort: a
+sandbox that cannot write the cache runs without the store.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ from .workdirs import cache_root
 
 MAX_AGE_DAYS = 30
 MAX_BYTES = 2_000_000_000
+# The first index (one text file per sha) also marked lossy-kind variants that kept the source's bytes, so it
+# refused untouched originals; `prune` deletes it.
+LEGACY_INDEX = "produced"
 
 
 def sha256(path: Path) -> str:
@@ -42,10 +46,13 @@ def _entry(key: str) -> Path:
 
 
 def _produced(sha: str) -> Path:
-    return root() / "produced" / sha[:2] / sha
+    return root() / "outputs" / sha[:2] / f"{sha}.json"
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
+    """Variant files are write-once: a working folder's file may be a hard link to the store's, so nothing may
+    write into one in place (`ladder.generate` and `restore` unlink a file before replacing it). Whoever places a
+    variant copies it, never moves or hard-links it."""
     try:
         os.link(src, dst)
     except OSError:  # another file system, or links not allowed
@@ -86,25 +93,31 @@ def restore(rec: dict, folder: Path) -> bool:
     return True
 
 
-def mark_produced(sha: str, kind: str) -> None:
+def mark_produced(sha: str, kind: str, source: str) -> None:
+    """Index the variant whose bytes hash to ``sha``: its ``kind`` and the hash of the ``source`` it was made from."""
     path = _produced(sha)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(kind)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"kind": kind, "source": source}))
+        tmp.replace(path)
     except OSError:
         pass
 
 
 def produced_lossy(sha: str) -> bool:
+    """Whether a file whose bytes hash to ``sha`` is a lossy variant imgopt produced."""
     try:
-        return _produced(sha).read_text() == "lossy"
-    except OSError:
+        return json.loads(_produced(sha).read_text()).get("kind") == "lossy"
+    except (OSError, json.JSONDecodeError, AttributeError):
         return False
 
 
-def put(rec: dict, folder: Path) -> None:
-    """Store ``rec`` (a `candidates` candidate record) and its file from ``folder``. Errors other than an
-    encoder's own refusal are not stored: they are retried next time."""
+def put(rec: dict, folder: Path, *, source_sha: str, ref_sha: str) -> None:
+    """Store ``rec`` (a `candidates` candidate record) and its file from ``folder``, made from the source and
+    measured against the reference whose hashes are ``source_sha`` and ``ref_sha``. Errors other than an encoder's
+    own refusal are not stored: they are retried next time. A lossy variant is indexed as produced unless it lost
+    nothing: a rung that handed back the source's or the reference's bytes, or pixel-identical output."""
     key = rec.get("key")
     if not key or ("error" in rec and rec.get("error_kind") != "refused"):
         return
@@ -115,8 +128,10 @@ def put(rec: dict, folder: Path) -> None:
             stored = entry / rec["file"]
             if not stored.is_file():
                 _link_or_copy(Path(folder) / rec["file"], stored)
-            if rec.get("kind") == "lossy":
-                mark_produced(sha256(stored), "lossy")
+            if rec.get("kind") == "lossy" and not rec.get("identical"):
+                sha = sha256(stored)
+                if sha not in (source_sha, ref_sha):
+                    mark_produced(sha, "lossy", source_sha)
         tmp = entry / "rec.json.tmp"
         tmp.write_text(json.dumps(rec))
         tmp.replace(entry / "rec.json")
@@ -152,7 +167,8 @@ def size() -> int:
 
 def prune(now: float | None = None, max_age_days: float = MAX_AGE_DAYS, max_bytes: int = MAX_BYTES) -> tuple[int, int]:
     """Drop entries unused for ``max_age_days``, then the least recently used until the store holds at most
-    ``max_bytes``; returns (entries removed, bytes freed). The ``produced`` index is kept."""
+    ``max_bytes``; returns (entries removed, bytes freed). The ``outputs`` index is kept; the legacy one goes."""
+    shutil.rmtree(root() / LEGACY_INDEX, ignore_errors=True)
     now = time.time() if now is None else now
     entries = sorted(_entries())
     total = sum(s for _, s, _ in entries)

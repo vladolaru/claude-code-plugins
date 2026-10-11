@@ -15,8 +15,8 @@ other folder out. Schema: see SCHEMA.
 
 A source that cannot be read or whose colour profile cannot be converted
 (imaging.READ_FAILURES: also 16-bit files, content that does not match its
-extension, a --resize that would upscale or keep the width, and a file an
-earlier lossy pick wrote) is skipped by run(): it logs the reason, replaces
+extension, a --resize that would upscale or keep the width, and a file whose
+bytes match a lossy variant imgopt produced) is skipped by run(): it logs the reason, replaces
 any earlier record of that file with one that names the skip (``skipped``),
 and carries on, so callers compare len(records) with len(inputs) to learn
 that files were skipped. A record whose every candidate errored
@@ -352,15 +352,16 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     src_hash, ref_hash = sha256(src), sha256(ref_path)
     lossy_run = opts.profile != "lossless"
     if lossy_run and src not in opts.refs and ST.produced_lossy(src_hash):
-        raise ImagingError(f"{src.name}: an earlier imgopt lossy pick wrote this file, so measuring it again "
-                           "would stack a second lossy pass; measure against the original with --ref-rev <commit "
-                           "before that change> or --ref <original>")
+        raise ImagingError(f"{src.name}: its bytes match a lossy variant imgopt produced, so it was compressed "
+                           "once already and measuring it again would stack a second lossy pass; measure against "
+                           "the original with --ref-rev <commit before it was placed> or --ref <original>, or "
+                           "leave it out of the set")
     # a revision after the pick was committed, or the pick itself
     if lossy_run and src in opts.refs and ST.produced_lossy(ref_hash):
         baseline = f"its content at {opts.ref_rev}" if opts.ref_rev else str(ref_path)
-        raise ImagingError(f"{src.name}: the baseline ({baseline}) is itself an earlier imgopt lossy pick, so "
+        raise ImagingError(f"{src.name}: the baseline ({baseline}) matches a lossy variant imgopt produced, so "
                            "measuring against it would stack a second lossy pass; use a baseline from before "
-                           "that change")
+                           "that variant was placed")
     fmt = format_of(src)
     notes: list[str] = []
     can_measure = all(n in tools and tools[n].ok for n in ("ffmpeg", "ssimulacra2"))
@@ -480,7 +481,7 @@ def _process(src: Path, opts: Options, tools: dict) -> dict:
     write_record(folder, record)
     if opts.use_store:
         for cand in cands:
-            ST.put(cand, folder)
+            ST.put(cand, folder, source_sha=src_hash, ref_sha=ref_hash)
     return record
 
 
