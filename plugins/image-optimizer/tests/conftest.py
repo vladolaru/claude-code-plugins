@@ -144,6 +144,18 @@ class Factory:
         path.write_bytes(data[:ihdr_end] + extra + data[ihdr_end:])
         return path
 
+    def cicp_png(self, name="cicp.png", transfer=8, size=(200, 120)) -> Path:
+        """A PNG with a cICP chunk (BT.709 primaries, ``transfer``, RGB, full range): browsers apply it ahead of
+        iCCP, sRGB and gAMA, and Pillow ignores it. Transfer 8 is linear; 13 is sRGB."""
+        path = self.root / name
+        _photo(size).save(path, "PNG")
+        data = path.read_bytes()
+        body = bytes((1, transfer, 0, 1))
+        cicp = struct.pack(">I", 4) + b"cICP" + body + struct.pack(">I", zlib.crc32(b"cICP" + body))
+        ihdr_end = 8 + 12 + 13
+        path.write_bytes(data[:ihdr_end] + cicp + data[ihdr_end:])
+        return path
+
     def accessible_svg(self, name="icon.svg") -> Path:
         """An inline-style SVG whose accessible name lives in role, aria-labelledby, title/desc and their ids."""
         path = self.root / name

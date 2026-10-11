@@ -253,7 +253,7 @@ def test_png_rungs_keep_gamma_and_chromaticity(factory):
     assert {"gAMA", "cHRM", "sBIT"} <= set(L.PNG_KEEP.split(","))
 
 
-@pytest.mark.parametrize("make", ["apng", "gamma_png"])
+@pytest.mark.parametrize("make", ["apng", "gamma_png", "cicp_png"])
 def test_animated_or_gamma_png_gets_lossless_rungs_only(factory, make):
     f = I.read_facts(getattr(factory, make)())
     p = L.plan(f, profile="high")
@@ -261,7 +261,7 @@ def test_animated_or_gamma_png_gets_lossless_rungs_only(factory, make):
     assert any("lossless rungs only" in n for n in p.notes)
 
 
-@pytest.mark.parametrize("make", ["apng", "gamma_png"])
+@pytest.mark.parametrize("make", ["apng", "gamma_png", "cicp_png"])
 def test_animated_or_gamma_png_cannot_be_resized_or_converted(factory, make):
     f = I.read_facts(getattr(factory, make)())
     with pytest.raises(I.ImagingError, match="only in-place lossless"):

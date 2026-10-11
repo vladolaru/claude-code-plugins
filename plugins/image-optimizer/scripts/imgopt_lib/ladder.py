@@ -14,9 +14,9 @@ the human's approval. ``check_job()`` is the one place a request the ladder
 cannot serve becomes a UsageError; ``tools_for()`` lists every tool a
 request's ladder can run, which is what ``tools.requirements()`` asks for.
 
-A PNG with gAMA/cHRM chunks gets lossless rungs only, because pixel encoders drop them; ``plan(assume_srgb=True)``
-is the human's word, after comparing the file in a browser, that they may be dropped. An animated PNG never gets
-lossy rungs.
+A PNG whose colour chunks (a non-sRGB cICP, or gAMA/cHRM) decide its rendering gets lossless rungs only, because
+pixel encoders drop them; ``plan(assume_srgb=True)`` is the human's word, after comparing the file in a browser,
+that they may be dropped. An animated PNG never gets lossy rungs.
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
     gamma_bound = f.png_colour and not assume_srgb
     if f.format == "png" and (f.frames > 1 or gamma_bound):
         why = (f"animated PNG ({f.frames} frames)" if f.frames > 1
-               else "PNG gAMA/cHRM chunks that browsers apply and pixel encoders drop")
+               else "PNG colour chunks (cICP, gAMA or cHRM) that browsers apply and pixel encoders drop")
         if reshaped:
             raise ImagingError(f"{f.path.name}: {why}: only in-place lossless optimization keeps it, "
                                "so it cannot be resized or converted")
@@ -142,7 +142,7 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
             notes.append(f"{why}: lossless rungs only, so it renders as before")
         lossy = False
     if f.format == "png" and f.png_colour and assume_srgb and lossy:
-        notes.append("gAMA/cHRM treated as sRGB (--assume-srgb, checked by the human): pixel candidates drop "
+        notes.append("PNG colour chunks treated as sRGB (--assume-srgb, checked by the human): pixel candidates drop "
                      "those chunks; lossless candidates keep them")
     pixel = reshaped or (lossy and f.device_profile)
     # What the encoders get: a resize scales both sides, so the encode-time caps count the encoded pixels.

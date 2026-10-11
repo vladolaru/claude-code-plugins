@@ -74,7 +74,7 @@ Measure against the original, never an already-optimized intermediate. For files
 - `candidates` measures two files at a time by default; on a machine short of memory pass `--jobs 1`.
 - `jpegoptim -m` is not the IJG quality scale: a file another tool calls "q60" may measure about q86 in `inspect`.
 - JPEG banding is reported, not gated: look hardest at dark gradients, skies and soft shadows.
-- Animated PNGs and PNGs with gAMA/cHRM chunks get lossless candidates only, so they cannot be resized or converted; only `--assume-srgb`, on a one-file set the human checked, lifts that for a gamma-tagged PNG.
+- Animated PNGs, and PNGs whose cICP (other than sRGB) or gAMA/cHRM chunks decide how browsers render them, get lossless candidates only, so they cannot be resized or converted; only `--assume-srgb`, on a one-file set the human checked, lifts that for such a PNG.
 - `inspect` reports lossless headroom only: a JPEG with none can still save half its size lossily.
 - The tool cannot know what ships or who links a file from outside the repository.
 - Font-definition SVGs cannot be render-checked, so they stay untouched.

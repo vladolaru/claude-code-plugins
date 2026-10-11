@@ -369,8 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--min-saving", type=parse_size, default=0, metavar="BYTES",
                    help="leave files that save less than this untouched (bytes, or 3KB)")
     c.add_argument("--assume-srgb", action="store_true",
-                   help="treat PNG gAMA/cHRM as sRGB so lossy candidates are tried; only for a file the human "
-                        "compared in a browser, run as its own set")
+                   help="treat PNG colour chunks (cICP, gAMA, cHRM) as sRGB so lossy candidates are tried; only "
+                        "for a file the human compared in a browser, run as its own set")
     c.add_argument("--ssim", type=float)
     c.add_argument("--ss2", type=float)
     c.add_argument("--band", type=float)

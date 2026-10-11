@@ -53,16 +53,22 @@ class Facts:
     orientation: int
     progressive: bool
     frames: int
-    # PNG gAMA / cHRM / sRGB as Pillow reads them ("gamma", "chromaticity", "srgb"), as sorted (key, repr) pairs.
-    # Pillow's decoder ignores gAMA and cHRM; browsers apply them, so they are compared, not just pixels.
+    # PNG gAMA / cHRM / sRGB as Pillow reads them ("gamma", "chromaticity", "srgb"), plus cICP read from the file
+    # ("cicp", its body in hex), as sorted (key, value) pairs. Pillow's decoder ignores gAMA, cHRM and cICP;
+    # browsers apply them, so they are compared, not just pixels.
     colour_chunks: tuple[tuple[str, str], ...] = ()
 
     @property
     def png_colour(self) -> bool:
-        """gAMA or cHRM decide how browsers render this PNG: there is no sRGB chunk or ICC profile to override
-        them. Pixels decoded by Pillow (every pixel rung's input) do not carry that rendering."""
+        """A colour chunk decides how browsers render this PNG, and pixels decoded by Pillow (every pixel rung's
+        input) do not carry that rendering: a cICP that is not sRGB (browsers apply it ahead of iCCP, sRGB and
+        gAMA), or, without cICP, gAMA or cHRM with no sRGB chunk or ICC profile to override them."""
         keys = dict(self.colour_chunks)
-        return self.format == "png" and not self.icc and "srgb" not in keys and bool({"gamma", "chromaticity"} & set(keys))
+        if self.format != "png":
+            return False
+        if "cicp" in keys:
+            return keys["cicp"] != SRGB_CICP.hex()
+        return not self.icc and "srgb" not in keys and bool({"gamma", "chromaticity"} & set(keys))
 
     @property
     def display_width(self) -> int:
@@ -110,6 +116,24 @@ def decoded_format(im: Image.Image, path: Path, *, check_name: bool = True) -> s
     return decoded
 
 
+SRGB_CICP = bytes((1, 13, 0, 1))  # BT.709 primaries, sRGB transfer, RGB, full range: renders as sRGB
+
+
+def _png_cicp(path: Path) -> bytes | None:
+    """The body of a PNG's cICP chunk, which Pillow does not read; None without one (it must precede IDAT)."""
+    with open(path, "rb") as fh:
+        if fh.read(8) != b"\x89PNG\r\n\x1a\n":
+            return None
+        while len(header := fh.read(8)) == 8:
+            length, tag = int.from_bytes(header[:4], "big"), header[4:]
+            if tag == b"cICP":
+                return fh.read(length)
+            if tag in (b"IDAT", b"IEND"):
+                return None
+            fh.seek(length + 4, 1)
+    return None
+
+
 def _open(path: Path) -> Image.Image:
     """Image.open, naming a Git LFS pointer instead of "cannot identify image file"."""
     try:
@@ -129,8 +153,9 @@ def read_facts(path: Path, *, check_name: bool = True) -> Facts:
         desc = profile_description(icc)
         colors = im.convert("RGBA").getcolors(maxcolors=4096)
         fmt = decoded_format(im, path, check_name=check_name)
-        chunks = tuple(sorted((k, repr(im.info[k])) for k in ("gamma", "chromaticity", "srgb")
-                              if fmt == "png" and k in im.info))
+        cicp = _png_cicp(path) if fmt == "png" else None
+        chunks = tuple(sorted([(k, repr(im.info[k])) for k in ("gamma", "chromaticity", "srgb")
+                               if fmt == "png" and k in im.info] + ([("cicp", cicp.hex())] if cicp else [])))
         return Facts(
             path=Path(path),
             format=fmt,

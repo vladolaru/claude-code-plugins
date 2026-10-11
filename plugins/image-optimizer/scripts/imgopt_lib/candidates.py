@@ -71,7 +71,7 @@ class Options:
     out_format: str = "keep"
     waived: tuple[str, ...] = ()
     min_saving: int = 0
-    assume_srgb: bool = False  # the human compared a gamma-tagged PNG in a browser: lossy candidates may drop gAMA
+    assume_srgb: bool = False  # the human compared a colour-tagged PNG in a browser: lossy rungs may drop its chunks
     use_store: bool = True  # False for the bench: its timings must not come from the store
 
 

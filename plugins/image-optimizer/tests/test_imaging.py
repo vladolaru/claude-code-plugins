@@ -164,6 +164,12 @@ def test_png_colour_chunks_are_facts(factory):
     assert not I.read_facts(factory.logo()).png_colour
 
 
+def test_a_cicp_chunk_decides_png_colour_unless_it_signals_srgb(factory):
+    linear = I.read_facts(factory.cicp_png())
+    assert dict(linear.colour_chunks)["cicp"] == "01080001" and linear.png_colour  # Pillow shows none of it
+    assert not I.read_facts(factory.cicp_png("srgb.png", transfer=13)).png_colour
+
+
 def test_apng_frames_are_counted(factory):
     assert I.read_facts(factory.apng(frames=3)).frames == 3
 
