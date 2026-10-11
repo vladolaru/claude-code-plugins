@@ -2,6 +2,7 @@ import json
 import re
 import subprocess
 import sys
+from urllib.parse import unquote
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,14 @@ def fake_out(tmp_path, factory, *, uncalibrated=False, band_gated=False, size=(1
     }
     (folder / "metrics.json").write_text(json.dumps(record))
     return out
+
+
+def _move_source(out, name, source):
+    """Give a record another source path: a page refuses one source path in two records."""
+    path = out / name / "metrics.json"
+    record = json.loads(path.read_text())
+    record["source"]["path"] = str(source)
+    path.write_text(json.dumps(record))
 
 
 def test_tiles_stay_under_1000px_and_mark_the_smooth_tile_required(tmp_path, factory):
@@ -95,6 +104,7 @@ def test_unreadable_pick_is_reported_and_the_other_files_still_get_tiles(tmp_pat
     (out / "a--x" / "pick.png").write_bytes(b"not an image")
     good = fake_out(tmp_path, factory, name="b--x")
     assert good == out
+    _move_source(out, "b--x", tmp_path / "other" / "photo.jpg")
     problems: list[str] = []
     tiles, page = S.build(out, problems=problems)
     assert tiles and all("b--x" in str(t.path) for t in tiles)
@@ -111,7 +121,8 @@ def test_sheet_cli_lists_required_tiles_and_the_page(tmp_path, factory):
     proc = run_sheet(out)
     assert proc.returncode == 0, proc.stderr
     assert "REQUIRED" in proc.stdout and "index.html" in proc.stdout and "tools: pillow" in proc.stdout
-    assert "apply" in proc.stdout.splitlines()[-1]
+    last = proc.stdout.splitlines()[-1]
+    assert "record" in last and "--verdicts -" in last and "apply" not in last
 
 
 def test_sheet_cli_exits_1_when_a_file_cannot_be_read(tmp_path, factory):
@@ -180,18 +191,6 @@ def test_a_missing_source_copy_is_a_problem(tmp_path, factory):
     assert len(problems) == 1 and "photo--x" in problems[0] and "source" in problems[0]
 
 
-def test_an_alt_label_that_matches_nothing_is_a_problem(tmp_path, factory):
-    out = fake_out(tmp_path, factory)
-    problems: list[str] = []
-    _, page = S.build(out, alt="pngquant-c8", problems=problems)
-    assert problems == [] and "Alternative: pngquant-c8" in page.read_text()
-    S.build(out, alt="jpegoptim-m70", problems=problems)
-    assert len(problems) == 1 and "jpegoptim-m70" in problems[0]
-    proc = run_sheet(out, "--alt", "jpegoptim-m70")
-    assert proc.returncode == 1 and "jpegoptim-m70" in proc.stderr
-    assert "Next:" not in proc.stdout
-
-
 def test_cli_counts_lossy_picks_it_could_not_tile_and_withholds_the_apply_line(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     (out / "photo--x" / "pick.png").write_bytes(b"not an image")
@@ -212,7 +211,8 @@ def test_cli_with_only_lossless_picks_points_at_apply_without_approval(tmp_path,
     proc = run_sheet(out)
     assert proc.returncode == 0
     assert "No lossy picks" in proc.stdout
-    assert "apply" in proc.stdout.splitlines()[-1] and "--approve" not in proc.stdout.splitlines()[-1]
+    last = proc.stdout.splitlines()[-1]
+    assert "apply" in last and "need no verdict" in last and "--approve" not in last
 
 
 def _edit_record(out, **changes):
@@ -263,31 +263,19 @@ def test_cards_carry_their_tiles_and_open_at_100_percent(tmp_path, factory):
     assert 'id="actual" checked' in page.read_text() and '<body class="actual">' in page.read_text()
 
 
-def test_the_page_builds_an_apply_command_from_ticked_files(tmp_path, factory):
-    out = fake_out(tmp_path, factory)
-    _, page = S.build(out, script=Path("/x/imgopt.py"))
-    data = _page_data(page)
-    assert data["apply_prefix"] == f"python3 /x/imgopt.py apply {out}"
-    assert data["files"][0]["approvable"] is True
-    assert "--approve" in page.read_text()
-
-
-def test_a_file_that_cannot_be_tiled_is_not_approvable(tmp_path, factory):
+def test_a_file_that_cannot_be_tiled_still_offers_its_variants(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     (out / "photo--x" / "pick.png").write_bytes(b"not an image")
     _, page = S.build(out, problems=[])
     [card] = _page_data(page)["files"]
-    assert card["approvable"] is False and card["tiles"] == []
+    assert card["tiles"] == [] and [v["label"] for v in card["variants"]] == ["pngquant-c8"]
 
 
-def test_same_basename_files_get_distinct_approve_values(tmp_path, factory):
+def test_same_basename_files_get_distinct_cards(tmp_path, factory):
     out = fake_out(tmp_path, factory, name="a--x")
     fake_out(tmp_path, factory, name="b--x")
     for folder, source in (("a--x", "/shop/a/photo.png"), ("b--x", "/shop/b/photo.png")):
-        path = out / folder / "metrics.json"
-        record = json.loads(path.read_text())
-        record["source"]["path"] = source
-        path.write_text(json.dumps(record))
+        _move_source(out, folder, source)
     _, page = S.build(out)
     names = [f["name"] for f in _page_data(page)["files"]]
     assert sorted(names) == ["/shop/a/photo.png", "/shop/b/photo.png"]
@@ -311,7 +299,7 @@ def test_totals_cover_the_whole_batch(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     _, page = S.build(out)
     totals = _page_data(page)["totals"]
-    assert "1 file(s)" in totals and "overall" in totals and "1 to apply" in totals
+    assert "1 file(s)" in totals and "overall" in totals and "1 to write" in totals
 
 
 def test_totals_count_an_untouched_file_at_its_original_size(tmp_path, factory):
@@ -322,7 +310,7 @@ def test_totals_count_an_untouched_file_at_its_original_size(tmp_path, factory):
     path.write_text(json.dumps(record))
     _, page = S.build(out)
     size = f"{record['source']['size'] / 1024:.1f} KB"
-    assert _page_data(page)["totals"] == f"1 file(s), {size} -> {size} (+0.0%) overall; nothing to apply"
+    assert _page_data(page)["totals"] == f"1 file(s), {size} -> {size} (+0.0%) overall; nothing to write"
 
 
 def test_totals_sign_growth_and_shrinkage(tmp_path, factory):
@@ -337,16 +325,63 @@ def test_totals_sign_growth_and_shrinkage(tmp_path, factory):
         assert re.search(rf"\({re.escape(sign)}\d+\.\d%\) overall", _page_data(page)["totals"])
 
 
-def test_a_path_with_a_comma_is_not_approvable_and_says_why(tmp_path, factory):
+def test_the_page_lists_variants_and_carries_the_fingerprint(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    _, page = S.build(out)
+    data = _page_data(page)
+    [f] = data["files"]
+    assert data["fingerprint"] and f["choice"] == "pngquant-c8"
+    assert [v["label"] for v in f["variants"]] == ["pngquant-c8"] and f["default_verdict"] == ""
+    # The header and the JSON are joined by a JS "\n" escape: a raw newline inside the literal breaks the script.
+    assert "'imgopt-verdicts 1\\n'+JSON.stringify(" in page.read_text()
+
+
+def test_one_page_from_two_folders_points_at_both(tmp_path, factory):
+    first = fake_out(tmp_path / "one", factory, name="a--1")
+    second = fake_out(tmp_path / "two", factory, name="b--2")
+    _move_source(second, "b--2", tmp_path / "elsewhere" / "photo.jpg")  # one source path per page
+    _, page = S.build([first, second])
+    data = _page_data(page)
+    assert page.parent == first / "_sheet" and data["folders"] == [str(first), str(second)]
+    assert len(data["files"]) == 2
+    for f in data["files"]:
+        assert (page.parent / unquote(f["before_src"])).resolve().is_file()
+        for v in f["variants"]:
+            assert (page.parent / unquote(v["src"])).resolve().is_file()
+
+
+def test_a_lossless_choice_starts_as_keep(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    meta = next(out.glob("*/metrics.json"))
+    record = json.loads(meta.read_text())
+    record["candidates"][0]["kind"] = "lossless"
+    meta.write_text(json.dumps(record))
+    _, page = S.build(out)
+    assert _page_data(page)["files"][0]["default_verdict"] == "keep"
+
+
+def test_a_failing_variant_is_listed_and_labelled(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     path = out / "photo--x" / "metrics.json"
     record = json.loads(path.read_text())
-    record["source"]["path"] = "/shop/a,b/photo.png"
+    smaller = out / "photo--x" / "smaller.png"
+    smaller.write_bytes((out / "photo--x" / "pick.png").read_bytes()[:-1])
+    record["candidates"].append({**record["candidates"][0], "label": "pngquant-c4", "file": "smaller.png",
+                                 "size": smaller.stat().st_size, "pass": False, "reason": "SSIM below the floor"})
     path.write_text(json.dumps(record))
-    tiles, page = S.build(out)
-    [card] = _page_data(page)["files"]
-    assert tiles and card["tiles"]  # still tiled and viewable
-    assert card["approvable"] is False and "comma" in card["approve_note"]
-    plain = fake_out(tmp_path / "plain", factory)
-    [ok] = _page_data(S.build(plain)[1])["files"]
-    assert ok["approvable"] is True and ok["approve_note"] == ""
+    _, page = S.build(out)
+    [f] = _page_data(page)["files"]
+    assert [v["label"] for v in f["variants"]] == ["pngquant-c4", "pngquant-c8"] and f["choice"] == "pngquant-c8"
+    assert [v["pass"] for v in f["variants"]] == [False, True]
+    assert "FAILS: SSIM below the floor" in f["variants"][0]["meta"]
+
+
+def test_the_sheet_cli_takes_several_folders(tmp_path, factory):
+    first = fake_out(tmp_path / "one", factory, name="a--1")
+    second = fake_out(tmp_path / "two", factory, name="b--2")
+    _move_source(second, "b--2", tmp_path / "elsewhere" / "photo.jpg")
+    proc = run_sheet(first, second)
+    assert proc.returncode == 0, proc.stderr
+    assert str(first / "_sheet" / "index.html") in proc.stdout
+    last = proc.stdout.splitlines()[-1]
+    assert f"record {first} {second} --verdicts -" in last

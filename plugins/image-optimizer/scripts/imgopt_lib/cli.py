@@ -170,19 +170,20 @@ def cmd_sheet(args) -> int:
     chk = T.check(T.Requirements(("pillow",), (), ()))
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="sheet", profile="-"))
-    out = Path(args.out).resolve()
-    _print_ignored(out)
+    outs = [Path(o).resolve() for o in args.out]
+    for out in outs:
+        _print_ignored(out)
     problems: list[str] = []
-    tiles, page = S.build(out, alt=args.alt, problems=problems, script=SCRIPT)
-    records = [r for _, r in C.load_records(out)]
+    tiles, page = S.build(outs, problems=problems)
+    records = [r for _, r in RV.rows_of(outs)]
     lossy = [r for r in records if S.needs_tiles(r)]
     untiled = len(lossy) - len({t.source for t in tiles})
     if tiles:
-        print("Tiles (open each at its natural size; view every REQUIRED one before calling a pick good):")
+        print("Tiles (open each at its natural size; view every REQUIRED one before calling a choice good):")
         for t in tiles:
             print(f"  {'REQUIRED' if t.required else 'optional':8} {t.path}   {Path(t.source).name} [{t.window}]")
     if untiled:
-        print(f"{untiled} lossy pick(s) could not be tiled (reasons on stderr); do not approve them unseen.")
+        print(f"{untiled} lossy pick(s) could not be tiled (reasons on stderr); do not keep them unseen.")
     elif not lossy:
         print("No lossy picks: no tiles to view.")
     for problem in problems:
@@ -190,13 +191,14 @@ def cmd_sheet(args) -> int:
     quoted_page = shlex.quote(str(page))
     print(f"Page for the human: {page}   (macOS: open {quoted_page}; Linux: xdg-open {quoted_page})")
     failed = bool(problems)
-    apply_command = f"python3 {shlex.quote(str(SCRIPT))} apply {shlex.quote(str(out))}"
+    script = shlex.quote(str(SCRIPT))
+    folders = " ".join(shlex.quote(str(o)) for o in outs)
     print(T.describe(chk.tools))
     if not failed and lossy:
-        print("Next: the human ticks the picks they approve on the page, which shows the apply command "
-              f"({apply_command} --approve ...).")
+        print("Next: the human marks a verdict for each file on the page and copies the block; store it with: "
+              f"python3 {script} record {folders} --verdicts -")
     elif not failed and any(r["verdict"] == "apply" for r in records):
-        print(f"Next: {apply_command}   (all picks are lossless; no approval gate)")
+        print(f"Next: python3 {script} apply {folders}   (lossless choices need no verdict)")
     return 1 if failed else 0
 
 
@@ -341,9 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--json", action="store_true")
     i.add_argument("--allow-missing")
     i.set_defaults(func=cmd_inspect)
-    s = sub.add_parser("sheet", help="1:1 tiles for the agent and a comparison page for the human")
-    s.add_argument("out")
-    s.add_argument("--alt", help="candidate label to show as a third pane, for example jpegoptim-m70")
+    s = sub.add_parser("sheet", help="1:1 tiles for the agent and a review page for the human")
+    s.add_argument("out", nargs="+", help="working folder(s); one page covers them all")
     s.set_defaults(func=cmd_sheet)
     v = sub.add_parser("variants", help="list every measured variant of one file")
     v.add_argument("out", nargs="+", help="working folder(s)")

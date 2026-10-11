@@ -98,7 +98,7 @@ def assemble_and_check(run_dir, tmp_path):
     page = RV.page_of(dest)
     text = page.read_text()
     assert page.is_file() and all(r["file"] in text for r in sampled)
-    assert "imgopt.py" in text and "--approve" in text
+    assert "imgopt-verdicts 1" in text
     assert [s["file"] for s in json.loads((dest / "sample.json").read_text())] == [r["file"] for r in sampled]
     assert json.loads((dest / "run.json").read_text())["profile"] == "high"
 

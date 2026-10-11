@@ -32,7 +32,6 @@ from . import harness, report
 
 SAMPLE = "sample.json"
 VERDICTS = "verdicts.json"
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "imgopt.py"
 
 
 def is_reviewable(row: dict) -> bool:
@@ -82,8 +81,7 @@ def page_of(dest: Path) -> Path:
     return Path(dest) / "_sheet" / "index.html"
 
 
-def assemble(run_dir: Path, sampled: list[dict], dest: Path, *, script: Path | None = None,
-             problems: list[str] | None = None) -> Path:
+def assemble(run_dir: Path, sampled: list[dict], dest: Path, *, problems: list[str] | None = None) -> Path:
     """Build ``dest`` for the rows of one job: copies of their record folders, a `run.json` of that job's settings
     naming their sources, `sample.json`, and the `sheet` page. Returns ``dest``; `page_of` names the page.
 
@@ -102,12 +100,12 @@ def assemble(run_dir: Path, sampled: list[dict], dest: Path, *, script: Path | N
     opts = C.Options(profile=profile, out=dest, gates=G.gates_for(profile), resize=resize, out_format=out_format)
     C.write_run(dest, [Path(r["file"]) for r in sampled], opts)
     (dest / SAMPLE).write_text(json.dumps([_slim(r) for r in sampled], indent=1))
-    S.build(dest, problems=problems, script=script or SCRIPT)
+    S.build(dest, problems=problems)
     return dest
 
 
-def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3, seed: int = 1,
-                 script: Path | None = None) -> tuple[dict[str, Path], list[str]]:
+def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3,
+                 seed: int = 1) -> tuple[dict[str, Path], list[str]]:
     """Sample a run's rows and build one review folder per job under ``review_dir``. Returns ({job: folder},
     problems). Refuses before writing when a folder already holds verdicts: a rebuild would erase them."""
     rows = report.load(run_dir)
@@ -124,7 +122,7 @@ def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3, seed
         dest = review_dir / job
         if dest.exists():
             W.clean(dest, keep_picks=False)
-        built[job] = assemble(run_dir, sampled, dest, script=script, problems=problems)
+        built[job] = assemble(run_dir, sampled, dest, problems=problems)
     return built, problems
 
 

@@ -1,15 +1,21 @@
-"""`imgopt sheet`: 1:1 tiles for the agent and a comparison page for the human.
+"""`imgopt sheet`: 1:1 tiles for the agent and a review page for the human.
 
 The session wrote "no banding" from contact sheets an image viewer had
 shrunk from 2400 to 1000 px. Tiles here are never wider than about 1000 px,
 are cut at 1:1 from windows the script chooses (most error on smooth areas,
 most error overall, and for alpha images an edge on dark grey), and show
-reference | pick | amplified difference. The smooth-area tile is required
+reference | choice | amplified difference. The smooth-area tile is required
 where banding is reported but not gated, and every tile when the format
-changed or is uncalibrated. The page shows before, pick and an
-optional alternative, opens at 100% with panes that scroll together, shows each
-lossy pick's 1:1 tiles on its card, and builds the `apply --approve` command from
-the picks the human ticks.
+changed or is uncalibrated.
+
+One page covers the records of one or more working folders. Each card shows
+before against the chosen variant, opens at 100% with panes that scroll
+together, and offers a selector over every measured variant (one that fails
+the gates says so). The 1:1 crops are of the variant the page was built
+with; switching to another dims them. The human marks each file keep,
+reject, milder or stronger, with an optional note, and "Copy verdicts"
+gives one block (header line `imgopt-verdicts 1`, then JSON carrying the
+page's fingerprint) for `imgopt record`.
 
 A file whose pixels cannot be read gets its card but no tiles; build()
 appends the reason to ``problems`` and carries on, and the command exits 1.
@@ -19,17 +25,17 @@ from __future__ import annotations
 
 import json
 import math
-import shlex
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from .candidates import choice_of, kb, load_records
+from .candidates import choice_of, kb
 from .imaging import READ_FAILURES, display_pixels, flatten
-from .ladder import UsageError
 from .metrics import diff_max, smooth_mask
+from .review import fingerprint, live_variants, rows_of
 
 TILE = 320
 SMALL_TILE = 160
@@ -80,18 +86,18 @@ def _compose(ref: Image.Image, new: Image.Image, box, scale: int) -> Image.Image
 
 
 def every_tile_required(record: dict) -> bool:
-    """Every tile of a lossy pick is required viewing when its metrics are uncalibrated for the output
+    """Every tile of a lossy choice is required viewing when its metrics are uncalibrated for the output
     format (WebP, AVIF) or the format changed: the spec makes the sheet review mandatory for a convert."""
     return bool(record["uncalibrated"]) or record["format"] != record["source"]["format"]
 
 
 def needs_tiles(record: dict) -> bool:
-    """A lossy pick that will be applied is the only thing a human must approve, so the only thing tiled."""
+    """A lossy choice that will be written is the only thing a human must judge at 1:1, so the only thing tiled."""
     chosen = choice_of(record)
     return bool(chosen) and chosen["kind"] == "lossy" and record["verdict"] == "apply"
 
 
-def _tiles_for(folder: Path, record: dict, tiles_dir: Path) -> list[Tile]:
+def _tiles_for(folder: Path, record: dict, tiles_dir: Path, prefix: str = "") -> list[Tile]:
     chosen = choice_of(record)
     ref_rgba = Image.open(folder / "reference.png").convert("RGBA")
     new_rgba = display_pixels(folder / chosen["file"])
@@ -112,16 +118,11 @@ def _tiles_for(folder: Path, record: dict, tiles_dir: Path) -> list[Tile]:
         for suffix, side, scale in sizes:
             w, h = min(side, ref.width), min(side, ref.height)
             box = _best_window(score, w, h)
-            path = tiles_dir / f"{name}__{window}{suffix}.png"
+            path = tiles_dir / f"{prefix}{name}__{window}{suffix}.png"
             _compose(ref, new, box, scale).save(path)
             required = every_tile_required(record) or (window == "smooth" and not chosen.get("band_gated"))
             out.append(Tile(path, record["source"]["path"], window + suffix, bool(required)))
     return out
-
-
-# `apply --approve` splits its value on commas, and a name it cannot match falls back to the basename,
-# so a path with a comma could approve a different file; the page withholds the tick instead.
-COMMA_NOTE = "The path contains a comma, which the apply command cannot carry: rename the file, then run candidates again."
 
 
 PAGE = """<!doctype html>
@@ -145,80 +146,104 @@ body.dark{--pane:#282828}
 .tiles{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .tile{overflow:auto;border:1px solid var(--line)}
 .tile img{display:block;max-width:none}
-.approve{margin:8px 0;font-weight:600}
 footer{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 0}
 code{word-break:break-all}
+.verdicts{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}
+.verdicts input[type=text]{flex:1;min-width:200px}
+.stale{opacity:.45}
+textarea{width:100%;font:12px ui-monospace,monospace}
 </style></head><body class="actual">
 <div id="banners"></div>
 <header><strong id="totals"></strong>
 <label><input type="checkbox" id="actual" checked> 100% (synced scroll)</label>
 <label><input type="checkbox" id="dark"> dark background</label>
 <label>Sort <select id="sort"><option value="bytes">bytes saved</option><option value="pct">% saved</option><option value="name">name</option></select></label>
-<label>Show <select id="filter"><option value="all">all</option><option value="apply">to apply</option><option value="lossy">lossy picks</option><option value="untouched">untouched</option></select></label>
+<label>Show <select id="filter"><option value="all">all</option><option value="apply">to write</option><option value="lossy">lossy choices</option><option value="untouched">untouched</option><option value="open">no verdict yet</option></select></label>
 </header><main id="cards"></main>
-<footer><span id="approved-count"></span> <button id="copy">Copy apply command</button>
-<div><code id="command"></code></div></footer>
+<footer><span id="counts"></span> <button id="copy">Copy verdicts</button>
+<div>Paste the copied block to the agent; it stores it with <code>imgopt record</code>.</div>
+<textarea id="block" rows="3" readonly></textarea></footer>
 <script>
 const DATA = __DATA__;
+const SELECTED = new Map(DATA.files.map(f=>[f.name, f.choice]));
+const VERDICTS = new Map(DATA.files.filter(f=>f.default_verdict).map(f=>[f.name,{verdict:f.default_verdict,variant:f.choice,note:''}]));
+const KINDS = ['keep','reject','milder','stronger'];
+function variantOf(f){return f.variants.find(v=>v.label===SELECTED.get(f.name));}
+function pane(label, src, name){
+  const w=document.createElement('div'); w.className='pane';
+  const l=document.createElement('div'); l.className='label'; l.textContent=label;
+  const i=document.createElement('img'); i.src=src; i.alt=label+': '+name;
+  w.append(l,i); return w;
+}
+function card(f){
+  const c=document.createElement('section'); c.className='card';
+  const h=document.createElement('h3'); h.textContent=f.name;
+  const m=document.createElement('div'); m.className='meta';
+  const v=variantOf(f); m.textContent=v?v.meta+' · '+f.verdict:f.meta;
+  const panes=document.createElement('div'); panes.className='panes';
+  if(f.before_src) panes.append(pane('Before', f.before_src, f.name));
+  if(v) panes.append(pane('Variant: '+v.label+(v.pass?'':' (fails the gates)'), v.src, f.name));
+  const all=[...panes.querySelectorAll('.pane')];
+  all.forEach(p=>p.addEventListener('scroll',()=>all.forEach(o=>{if(o!==p){o.scrollTop=p.scrollTop;o.scrollLeft=p.scrollLeft;}})));
+  c.append(h,m,panes);
+  if(f.variants.length>1){
+    const s=document.createElement('select');
+    for(const x of f.variants){const o=document.createElement('option'); o.value=x.label; o.textContent=x.meta; o.selected=x.label===SELECTED.get(f.name); s.append(o);}
+    s.onchange=()=>{SELECTED.set(f.name,s.value); const e=VERDICTS.get(f.name); if(e) e.variant=s.value; c.replaceWith(card(f)); update();};
+    const l=document.createElement('label'); l.append('Variant ',s); c.append(l);
+  }
+  if(f.tiles.length){
+    const t=document.createElement('div'); t.className='tiles'+(SELECTED.get(f.name)===f.choice?'':' stale');
+    const cap=document.createElement('div'); cap.className='label';
+    cap.textContent=SELECTED.get(f.name)===f.choice?'1:1 crops: reference | choice | difference x8 (required ones first)'
+      :'These 1:1 crops are of '+f.choice+'. For crops of '+SELECTED.get(f.name)+', ask the agent to choose it and rebuild the page.';
+    t.append(cap);
+    for(const tile of f.tiles){
+      const w=document.createElement('div'); w.className='tile';
+      const l=document.createElement('div'); l.className='label'; l.textContent=tile.label+(tile.required?' (required)':'');
+      const i=document.createElement('img'); i.src=tile.src; i.alt=tile.label+' crop: '+f.name;
+      w.append(l,i); t.append(w);
+    }
+    c.append(t);
+  }
+  if(f.variants.length){
+    const row=document.createElement('div'); row.className='verdicts';
+    const cur=VERDICTS.get(f.name);
+    for(const k of KINDS){
+      const l=document.createElement('label'); const r=document.createElement('input');
+      r.type='radio'; r.name='v-'+f.name; r.value=k; r.checked=!!cur&&cur.verdict===k;
+      r.onchange=()=>{VERDICTS.set(f.name,{verdict:k,variant:SELECTED.get(f.name),note:(VERDICTS.get(f.name)||{}).note||''}); update();};
+      l.append(r,' '+k); row.append(l);
+    }
+    const note=document.createElement('input'); note.type='text'; note.placeholder='note for the agent (optional)';
+    note.value=cur?cur.note:'';
+    note.oninput=()=>{const e=VERDICTS.get(f.name); if(e){e.note=note.value; update();}};
+    row.append(note); c.append(row);
+  }
+  return c;
+}
 function render(){
   const sort=document.getElementById('sort').value, filter=document.getElementById('filter').value;
-  const rows=DATA.files.filter(f=>filter==='all'||(filter==='apply'&&f.verdict==='apply')||(filter==='untouched'&&f.verdict!=='apply')||(filter==='lossy'&&f.pick_kind==='lossy'));
+  const rows=DATA.files.filter(f=>filter==='all'||(filter==='apply'&&f.verdict==='apply')||(filter==='untouched'&&f.verdict!=='apply')
+    ||(filter==='lossy'&&f.pick_kind==='lossy')||(filter==='open'&&f.variants.length&&!VERDICTS.has(f.name)));
   rows.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='pct'?(b.saved/(b.before||1))-(a.saved/(a.before||1)):b.saved-a.saved);
   const main=document.getElementById('cards'); main.textContent='';
-  for(const f of rows){
-    const card=document.createElement('section'); card.className='card';
-    const h=document.createElement('h3'); h.textContent=f.name;
-    const m=document.createElement('div'); m.className='meta'; m.textContent=f.meta;
-    const panes=document.createElement('div'); panes.className='panes';
-    for(const p of f.panes){
-      const w=document.createElement('div'); w.className='pane';
-      const l=document.createElement('div'); l.className='label'; l.textContent=p.label;
-      const i=document.createElement('img'); i.src=p.src; i.alt=p.label+': '+f.name;
-      w.append(l,i); panes.append(w);
-    }
-    const all=[...panes.querySelectorAll('.pane')];
-    all.forEach(p=>p.addEventListener('scroll',()=>all.forEach(o=>{if(o!==p){o.scrollTop=p.scrollTop;o.scrollLeft=p.scrollLeft;}})));
-    card.append(h,m,panes);
-    if(f.tiles.length){
-      const t=document.createElement('div'); t.className='tiles';
-      const cap=document.createElement('div'); cap.className='label';
-      cap.textContent='1:1 crops: reference | pick | difference x8 (required ones first)'; t.append(cap);
-      for(const tile of f.tiles){
-        const w=document.createElement('div'); w.className='tile';
-        const l=document.createElement('div'); l.className='label'; l.textContent=tile.label+(tile.required?' (required)':'');
-        const i=document.createElement('img'); i.src=tile.src; i.alt=tile.label+' crop: '+f.name;
-        w.append(l,i); t.append(w);
-      }
-      card.append(t);
-    }
-    if(f.approve_note){
-      const n=document.createElement('div'); n.className='banner'; n.textContent=f.approve_note; card.append(n);
-    }
-    if(f.approvable){
-      const a=document.createElement('label'); a.className='approve';
-      const box=document.createElement('input'); box.type='checkbox'; box.checked=APPROVED.has(f.name);
-      box.onchange=()=>{box.checked?APPROVED.add(f.name):APPROVED.delete(f.name); updateCommand();};
-      a.append(box,' Approve this pick'); card.append(a);
-    }
-    main.append(card);
-  }
+  for(const f of rows) main.append(card(f));
 }
-const APPROVED=new Set();
-function shq(s){return "'"+s.replace(/'/g,"'\\\\''")+"'";}
-function updateCommand(){
-  const n=DATA.files.filter(f=>f.approvable).length;
-  document.getElementById('approved-count').textContent=`Approved ${APPROVED.size} of ${n} lossy pick(s)`;
-  document.getElementById('command').textContent=APPROVED.size?DATA.apply_prefix+' --approve '+shq([...APPROVED].join(',')):'';
+function update(){
+  const counts={}; for(const e of VERDICTS.values()) counts[e.verdict]=(counts[e.verdict]||0)+1;
+  const open=DATA.files.filter(f=>f.variants.length&&!VERDICTS.has(f.name)).length;
+  document.getElementById('counts').textContent=KINDS.map(k=>`${counts[k]||0} ${k}`).join(', ')+`; ${open} without a verdict`;
+  document.getElementById('block').value='imgopt-verdicts 1\\n'+JSON.stringify({fingerprint:DATA.fingerprint,files:Object.fromEntries(VERDICTS)});
 }
-document.getElementById('copy').onclick=()=>{const c=document.getElementById('command').textContent;if(c&&navigator.clipboard)navigator.clipboard.writeText(c);};
+document.getElementById('copy').onclick=()=>{const b=document.getElementById('block'); b.select(); if(navigator.clipboard) navigator.clipboard.writeText(b.value);};
 document.getElementById('totals').textContent=DATA.totals;
 for(const b of DATA.banners){const d=document.createElement('div');d.className='banner';d.textContent=b;document.getElementById('banners').append(d);}
 document.getElementById('actual').onchange=e=>document.body.classList.toggle('actual',e.target.checked);
 document.getElementById('dark').onchange=e=>document.body.classList.toggle('dark',e.target.checked);
 document.getElementById('sort').onchange=render;
 document.getElementById('filter').onchange=render;
-render();
-updateCommand();
+render(); update();
 </script></body></html>
 """
 
@@ -232,82 +257,78 @@ def _meta(record: dict, chosen: dict | None) -> str:
     dims = f"{s['width']}x{s['height']} " if s.get("width") else ""
     if not chosen:
         return f"{dims}{s['format']} · {kb(s['size'])} · untouched ({record['verdict_reason']})"
-    if chosen.get("identical"):
-        quality = "pixel-identical"
-    elif "ssim" in chosen:
-        gates = record["gates"]
-        band = (f"banding {chosen['band']:.1f} (gated at ≤{gates['band']:g})"
-                if chosen.get("band_gated") and gates["band"] is not None
-                else f"banding {chosen['band']:.1f} (reported, not gated: gated only on palette PNG; view the tiles)")
-        quality = (f"SSIM {chosen['ssim']:.4f}{_floor(gates['ssim'])} · "
-                   f"ss2 {chosen['ss2']:.1f}{_floor(gates['ss2'])} · {band}")
-    else:
-        quality = "not measured"
+    quality = _quality(record, chosen, "reported, not gated: gated only on palette PNG; view the tiles")
     removes = f" · removes {', '.join(chosen['metadata_removed'])}" if chosen.get("metadata_removed") else ""
     return (f"{dims}{s['format']} -> {record['format']} · {kb(s['size'])} -> {kb(chosen['size'])} · "
             f"{chosen['label']} · {quality}{removes} · {record['verdict']} ({record['verdict_reason']})")
 
 
-def build(out: Path, *, alt: str | None = None, problems: list[str] | None = None,
-          script: Path | None = None) -> tuple[list[Tile], Path]:
-    """Write the tiles and the page under out/_sheet.
+def _quality(record: dict, c: dict, ungated: str = "reported, not gated") -> str:
+    """A candidate's scores against the record's gates; ``ungated`` qualifies a banding no gate applies to."""
+    if c.get("identical"):
+        return "pixel-identical"
+    if "ssim" not in c:
+        return "not measured"
+    gates = record["gates"]
+    gated = c.get("band_gated") and gates["band"] is not None
+    band = f"banding {c['band']:.1f} " + (f"(gated at ≤{gates['band']:g})" if gated else f"({ungated})")
+    return f"SSIM {c['ssim']:.4f}{_floor(gates['ssim'])} · ss2 {c['ss2']:.1f}{_floor(gates['ss2'])} · {band}"
 
-    The page builds its ``apply --approve`` command from ``script`` (the imgopt.py path) and the full
-    source paths of the lossy picks the human ticks.
 
-    Refuses (UsageError) an ``out`` that is not a folder of `candidates` results, before writing anything.
-    Per-file failures, and an ``alt`` label no record has, are appended to ``problems``.
-    """
-    out = Path(out)
-    records = load_records(out) if out.is_dir() else []
-    if not records:
-        raise UsageError(f"{out}: no candidates results here (expected <folder>/metrics.json from "
-                         "`imgopt candidates --out`); check the path")
-    sheet_dir = out / "_sheet"
+def _variant_meta(record: dict, c: dict) -> str:
+    """One option of a card's variant selector: label, size, scores, and whether it passes the gates."""
+    gate = "passes" if c.get("pass") else f"FAILS: {c.get('reason', '')}"
+    removes = f" · removes {', '.join(c['metadata_removed'])}" if c.get("metadata_removed") else ""
+    return f"{c['label']} · {kb(c['size'])} · {_quality(record, c)} · {gate}{removes}"
+
+
+def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]:
+    """Write the tiles and one page for every record of ``outs`` (a working folder or a list of them) under the
+    first folder's ``_sheet``. The page lets the human switch each file between its measured variants, mark a
+    verdict, and copy a verdict block that `record` stores. Refuses (UsageError) a folder without records before
+    writing anything; per-file failures go to ``problems``."""
+    outs = [Path(o) for o in ([outs] if isinstance(outs, (str, Path)) else outs)]
+    rows = rows_of(outs)
+    sheet_dir = outs[0] / "_sheet"
     tiles_dir = sheet_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
-    tiles: list[Tile] = []
-    files = []
-    before = after = applied = 0
-    total_before = total_after = 0
-    banners: list[str] = []
-    alt_found = False
-    for folder, record in records:
+    tiles, files, banners = [], [], []
+    before = after = applied = total_before = total_after = 0
+    for index, (folder, record) in enumerate(rows):
         chosen = choice_of(record)
 
         def url(name: str) -> str:
-            return quote(f"../{folder.name}/{name}")
+            return quote(os.path.relpath(folder / name, sheet_dir))
 
-        panes = [{"label": "Before", "src": url(p.name)} for p in sorted(folder.glob("source.*"))[:1]]
-        if not panes and problems is not None:
+        sources = sorted(folder.glob("source.*"))[:1]
+        if not sources and problems is not None:
             problems.append(f"{folder.name}: source copy is missing, so its card has no Before pane")
-        if chosen:
-            panes.append({"label": f"Pick: {chosen['label']}", "src": url(chosen["file"])})
-        alt_rec = next((c for c in record["candidates"] if c["label"] == alt and c.get("file")), None) if alt else None
-        if alt_rec:
-            alt_found = True
-            panes.append({"label": f"Alternative: {alt}", "src": url(alt_rec["file"])})
-        saved = record["source"]["size"] - chosen["size"] if chosen and record["verdict"] == "apply" else 0
+        writes = bool(chosen) and record["verdict"] == "apply"
+        saved = record["source"]["size"] - chosen["size"] if writes else 0
         total_before += record["source"]["size"]
-        total_after += chosen["size"] if chosen and record["verdict"] == "apply" else record["source"]["size"]
-        if record["verdict"] == "apply" and chosen:
+        total_after += chosen["size"] if writes else record["source"]["size"]
+        if writes:
             applied += 1
             before += record["source"]["size"]
             after += chosen["size"]
         record_tiles: list[Tile] = []
         if needs_tiles(record):
             try:
-                record_tiles = _tiles_for(folder, record, tiles_dir)
+                record_tiles = _tiles_for(folder, record, tiles_dir, prefix=f"{index}__")
             except READ_FAILURES as error:
                 if problems is not None:
                     problems.append(f"{folder.name}: no tiles: {error}")
         tiles += record_tiles
-        source_path = record["source"]["path"]
-        files.append({"name": source_path, "meta": _meta(record, chosen), "panes": panes,
+        variants = [{"label": c["label"], "src": url(c["file"]), "meta": _variant_meta(record, c),
+                     "pass": bool(c.get("pass"))}
+                    for c in live_variants(record) if (folder / c["file"]).is_file()]
+        lossless_write = writes and chosen["kind"] == "lossless"
+        files.append({"name": record["source"]["path"], "meta": _meta(record, chosen),
+                      "before_src": url(sources[0].name) if sources else "",
+                      "choice": chosen["label"] if chosen else None, "variants": variants,
                       "verdict": record["verdict"], "pick_kind": chosen["kind"] if chosen else None,
                       "before": record["source"]["size"], "saved": saved,
-                      "approvable": needs_tiles(record) and bool(record_tiles) and "," not in source_path,
-                      "approve_note": COMMA_NOTE if needs_tiles(record) and "," in source_path else "",
+                      "default_verdict": "keep" if lossless_write else "",
                       "tiles": [{"label": t.window, "src": quote(f"tiles/{t.path.name}"), "required": t.required}
                                 for t in sorted(record_tiles, key=lambda t: not t.required)]})
         if record["uncalibrated"]:
@@ -315,14 +336,11 @@ def build(out: Path, *, alt: str | None = None, problems: list[str] | None = Non
                            "judge every file by eye.")
         if record.get("waived"):
             banners.append("Waived tools (fewer candidates were tried): " + ", ".join(record["waived"]))
-    if alt and not alt_found and problems is not None:
-        problems.append(f"--alt {alt!r} matches no candidate in any record")
     overall = (f"{len(files)} file(s), {kb(total_before)} -> {kb(total_after)}"
                + (f" ({(total_after - total_before) / total_before:+.1%}) overall" if total_before else " overall"))
-    totals = overall + (f"; {applied} to apply: {kb(before)} -> {kb(after)}" if applied else "; nothing to apply")
-    apply_prefix = f"python3 {shlex.quote(str(script or Path('imgopt.py')))} apply {shlex.quote(str(out))}"
-    data = {"files": files, "totals": totals, "banners": sorted(set(banners)), "apply_prefix": apply_prefix}
+    totals = overall + (f"; {applied} to write: {kb(before)} -> {kb(after)}" if applied else "; nothing to write")
+    data = {"files": files, "totals": totals, "banners": sorted(set(banners)), "fingerprint": fingerprint(rows),
+            "folders": [str(o) for o in outs]}
     page = sheet_dir / "index.html"
     page.write_text(PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/")))
     return tiles, page
-
