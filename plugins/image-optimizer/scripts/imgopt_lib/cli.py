@@ -307,12 +307,14 @@ def cmd_record(args) -> int:
     text = SEL.read_text(args.verdicts)
     data = RV.parse_block(text)
     dirs = RV.page_folders(data, args.out)
-    shown = {r["source"]["path"]: C.choice_of(r) for _, r in RV.rows_of(dirs)}  # what the page was built with
+    # The variant the page built 1:1 crops of, per file: its choice, when that was a lossy file to write.
+    tiled = {r["source"]["path"]: C.choice_of(r)["file"] for _, r in RV.rows_of(dirs) if S.needs_tiles(r)}
     counts = RV.record_verdicts(dirs, text)
     print("Recorded: " + (", ".join(f"{n} {v}" for v, n in sorted(counts.items())) or "no verdicts"))
     q = shlex.quote
     folders = " ".join(q(str(d)) for d in dirs)
-    # A keep of another variant than the page's choice was judged without the 1:1 crops the page had for it.
+    # A kept lossy file to write that the page has no crops of: another variant than the page's choice, or one
+    # the page saw untouched (a keep under the saving floor).
     unseen = []
     for _, record in RV.rows_of(dirs):
         path, chosen = record["source"]["path"], C.choice_of(record)
@@ -320,7 +322,7 @@ def cmd_record(args) -> int:
             continue
         if not RV.writes(record):
             print(f"  kept, but nothing to write: {path} ({record['verdict_reason']})")
-        elif S.needs_tiles(record) and chosen["file"] != (shown[path] or {}).get("file"):
+        elif S.needs_tiles(record) and chosen["file"] != tiled.get(path):
             unseen.append((path, chosen))
     for path, chosen in unseen:
         print(f"  kept without its 1:1 crops: {path} ({chosen['label']})")

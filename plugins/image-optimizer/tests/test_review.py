@@ -370,6 +370,21 @@ def test_choosing_the_pick_by_hand_is_stored_as_a_choice(tmp_path):
     assert saved["verdict"] == "apply" and "chosen by hand" in saved["verdict_reason"]
 
 
+def test_record_cli_warns_of_a_kept_pick_the_page_built_no_crops_for(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    folder, record = fake_record(tmp_path)
+    record.update(min_saving=9000, verdict="untouched", verdict_reason="saving 8000 B is below the floor")
+    C.write_record(folder, record)  # untouched when the page was built, so it has no crops
+    path = record["source"]["path"]
+    pasted = tmp_path / "pasted.txt"
+    pasted.write_text(page_block([folder.parent], {path: {"verdict": "keep", "variant": "v12000"}}))
+    assert cli.main(["record", "--verdicts", str(pasted)]) == 0
+    out = capsys.readouterr().out
+    assert f"kept without its 1:1 crops: {path} (v12000)" in out
+    assert f"view them before placing: python3 {cli.SCRIPT} sheet {folder.parent}" in out
+
+
 def with_a_larger_variant(tmp_path):
     """fake_record plus a 25,000 B variant: larger than its 20,000 B source, so keeping it writes nothing."""
     folder, record = fake_record(tmp_path)
