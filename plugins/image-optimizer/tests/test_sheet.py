@@ -74,8 +74,17 @@ def test_uncalibrated_requires_every_tile_and_alpha_adds_an_edge_tile(tmp_path, 
     tiles, page = S.build(fake_out(tmp_path, factory, uncalibrated=True, alpha=True, size=(500, 500)))
     assert "edge" in {t.window for t in tiles}
     assert all(t.required for t in tiles)
-    text = page.read_text()
-    assert "UNCALIBRATED" in text and "jpegoptim" in text
+    assert "jpegoptim" in " ".join(_page_data(page)["banners"])  # waived tools are run-wide: a banner
+    [tags] = run_page(page, "[...cards()].map(c => c.querySelector('.facts').querySelectorAll('.tag')"
+                            ".map(t => t.textContent + ':' + (t.title || '')))")
+    assert any(t.startswith("uncalibrated:WebP/AVIF output was never calibrated") for t in tags)  # on its card
+
+
+def test_a_calibrated_card_carries_no_uncalibrated_chip(tmp_path, factory):
+    _, page = S.build(fake_out(tmp_path, factory))
+    assert "UNCALIBRATED" not in " ".join(_page_data(page)["banners"])
+    [facts] = run_page(page, "[...cards()].map(c => c.querySelector('.facts').textContent)")
+    assert "uncalibrated" not in facts
 
 
 def test_gated_palette_pick_has_no_required_tiles(tmp_path, factory):

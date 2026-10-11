@@ -241,6 +241,12 @@ function gain(f){
   return g;
 }
 function gateTag(v){return v.pass?tag('passes','ok'):tag('fails the gates','bad');}
+// The gates were calibrated on JPEG and PNG output only; for WebP or AVIF a pass says less, so the eye decides.
+function uncalibratedTag(){
+  const t=tag('uncalibrated','warn');
+  t.title='WebP/AVIF output was never calibrated against these gates: judge it by eye; every crop is required.';
+  return t;
+}
 function line(cls, ...parts){const d=document.createElement('div'); d.className=cls; d.append(...parts); return d;}
 function pane(label, src, name, ...tags){
   const w=document.createElement('div'); w.className='pane';
@@ -260,6 +266,7 @@ function card(f){
   const status=[f.verdict==='apply'?writeTag():tag('untouched','warn')];
   if(f.larger) status.push(tag('LARGER','warn'));
   if(v&&!switched) status.push(gateTag(v));
+  if(f.uncalibrated) status.push(uncalibratedTag());
   const head=document.createElement('div'); head.className='head';
   head.append(h,gain(f),line('dir',f.name.slice(0,cut)),
     line('facts',...(switched&&f.choice?["The page's choice: "]:[]),...status,f.facts),
@@ -443,6 +450,7 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
         files.append({"name": record["source"]["path"], "facts": _facts(record, chosen),
                       "scores": _quality(record, chosen, "not gated for this image; check the crops") if chosen else "",
                       "reason": _reason(record), "after": chosen["size"] if writes else None,
+                      "uncalibrated": bool(record["uncalibrated"]),
                       "before_src": url(sources[0].name) if sources else "",
                       "choice": chosen["label"] if chosen else None, "variants": variants,
                       "verdict": record["verdict"], "choice_kind": chosen["kind"] if chosen else None,
@@ -452,9 +460,6 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
                       "recorded": {"verdict": entry["verdict"], "note": entry.get("note", "")} if entry else None,
                       "tiles": [{"label": t.window, "src": quote(f"tiles/{t.path.name}"), "required": t.required}
                                 for t in sorted(record_tiles, key=lambda t: not t.required)]})
-        if record["uncalibrated"]:
-            banners.append("UNCALIBRATED FORMAT: WebP/AVIF output was never calibrated against these gates; "
-                           "judge every file by eye.")
         if record.get("waived"):
             banners.append("Waived tools (fewer candidates were tried): " + ", ".join(record["waived"]))
     overall = (f"{len(files)} file(s), {kb(total_before)} -> {kb(total_after)}"
