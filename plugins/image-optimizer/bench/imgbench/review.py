@@ -5,11 +5,11 @@ applied is worth a human's eye. Within each (job, category) of a run, `sample` t
 (the ones a gate barely let through, where a wrong floor shows first) plus one random pick from the rest, so the
 review also catches a floor that is too tight everywhere. `assemble` builds, for one job, an imgopt working
 folder holding copies of the sampled record folders and the comparison page `sheet` makes; `review-record` turns
-the page's ticks into `verdicts.json`.
+the verdict block the page's Copy verdicts gives (its `keep` entries) into `verdicts.json`.
 
 One folder per job, because a `run.json` carries one profile, resize and format and `load_records` keeps only the
 records that match it. The folders live under `paths.bench_root()/review/<run name>/<job>/`, never in the run.
-The page's `apply` command must never be run: apply would write the picks over the corpus files.
+Never run `apply` on these folders: it would write the picks over the corpus files.
 """
 
 from __future__ import annotations
@@ -17,13 +17,13 @@ from __future__ import annotations
 import json
 import math
 import random
-import shlex
 import shutil
 from collections import defaultdict
 from pathlib import Path
 
 from imgopt_lib import candidates as C
 from imgopt_lib import gates as G
+from imgopt_lib import review as V
 from imgopt_lib import sheet as S
 from imgopt_lib import workdirs as W
 from imgopt_lib.ladder import UsageError
@@ -36,7 +36,7 @@ VERDICTS = "verdicts.json"
 
 def is_reviewable(row: dict) -> bool:
     """A pick that would be applied and changes pixels (`report.changes_pixels`): what `sheet.needs_tiles`
-    offers a tick for, less the pixel-identical picks no eye can fault."""
+    offers a verdict for, less the pixel-identical picks no eye can fault."""
     return row.get("verdict") == "apply" and report.changes_pixels(row)
 
 
@@ -127,28 +127,22 @@ def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3,
 
 
 def approved_from(text: str) -> list[str]:
-    """The paths approved in ``text``: a bare comma list, or the whole `apply ... --approve '<list>'` command the
-    page prints (the value of its `--approve`)."""
-    value = text.strip()
-    if "--approve" in text:  # a pasted command is shell-quoted; a bare list is taken as it is (names may hold ')
-        tokens = shlex.split(text)
-        for i, token in enumerate(tokens):
-            if token == "--approve" and i + 1 < len(tokens):
-                value = tokens[i + 1]
-            elif token.startswith("--approve="):
-                value = token.split("=", 1)[1]
-    return [p.strip() for p in value.split(",") if p.strip()]
+    """The files the reviewer kept: the `keep` entries of a pasted verdict block (the page's Copy verdicts), or a
+    bare comma list of paths. The fingerprint is not checked: `record` validates the paths against `sample.json`."""
+    if V.BLOCK_HEADER in text:
+        return sorted(p for p, e in V.parse_block(text)["files"].items() if e["verdict"] == "keep")
+    return [p.strip() for p in text.strip().split(",") if p.strip()]
 
 
 def record(dest: Path, approved: list[str]) -> Path:
-    """Write ``dest``/verdicts.json: every sampled file with `acceptable` true when it was approved. Raises
-    UsageError for an approved path that is not in the sample (a tick from some other page)."""
+    """Write ``dest``/verdicts.json: every sampled file with `acceptable` true when it was kept. Raises
+    UsageError for an approved path that is not in the sample (a verdict from some other page)."""
     dest = Path(dest)
     sampled = json.loads((dest / SAMPLE).read_text())
     unknown = sorted(set(approved) - {s["file"] for s in sampled})
     if unknown:
-        raise UsageError(f"not in {dest / SAMPLE}: {', '.join(unknown)}; paste the command of this folder's page")
-    ticked = set(approved)
+        raise UsageError(f"not in {dest / SAMPLE}: {', '.join(unknown)}; paste the verdicts of this folder's page")
+    kept = set(approved)
     out = dest / VERDICTS
-    out.write_text(json.dumps([{**s, "acceptable": s["file"] in ticked} for s in sampled], indent=1))
+    out.write_text(json.dumps([{**s, "acceptable": s["file"] in kept} for s in sampled], indent=1))
     return out

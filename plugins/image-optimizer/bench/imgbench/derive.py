@@ -1,7 +1,7 @@
 """Derived variants of real photos: what a camera, a phone, a CMS and a designer would have made of them.
 
 Every output is named from an ASCII slug of the source key (Wikimedia titles carry spaces, commas and non-ASCII, and
-the review page cannot approve a path with a comma); the entry's origin keeps the original key. Encoders are
+a comma breaks the bare comma list `review-record` takes); the entry's origin keeps the original key. Encoders are
 deterministic, so building twice gives identical bytes."""
 
 from __future__ import annotations

@@ -11,6 +11,7 @@ from imgbench import cli, harness, manifest, paths  # noqa: E402
 from imgbench import report as R  # noqa: E402
 from imgbench import review as RV  # noqa: E402
 from imgopt_lib import candidates as C  # noqa: E402
+from imgopt_lib.review import BLOCK_HEADER  # noqa: E402
 from imgopt_lib.ladder import UsageError  # noqa: E402
 
 
@@ -62,13 +63,13 @@ def test_record_refuses_a_path_outside_the_sample(tmp_path):
     assert not (tmp_path / "verdicts.json").exists()
 
 
-def test_approved_from_takes_a_bare_list_or_the_pages_whole_command():
+def test_approved_from_takes_a_verdict_block_or_a_bare_list():
+    block = f"{BLOCK_HEADER}\n" + json.dumps({"fingerprint": "ab", "files": {
+        "/a/x.jpg": {"verdict": "keep", "variant": "v"}, "/a/y.jpg": {"verdict": "reject", "variant": "v"}}})
+    assert RV.approved_from(block) == ["/a/x.jpg"]
     assert RV.approved_from("/a/x.jpg,/a/y.jpg") == ["/a/x.jpg", "/a/y.jpg"]
     assert RV.approved_from("") == []
     assert RV.approved_from("/a/it's here/x.jpg,/a/y.jpg") == ["/a/it's here/x.jpg", "/a/y.jpg"]
-    command = "python3 '/p/my scripts/imgopt.py' apply /r/out --approve '/a/it'\\''s here/x.jpg,/a/y.jpg'"
-    assert RV.approved_from(command) == ["/a/it's here/x.jpg", "/a/y.jpg"]
-    assert RV.approved_from("python3 imgopt.py apply /r/out --approve=/a/x.jpg") == ["/a/x.jpg"]
 
 
 def tiny_run(factory, toolset, tmp_path):
@@ -114,11 +115,12 @@ def check_cli(run_dir, capsys):
     assert cli.main(["review", str(run_dir), "--per-category", "2"]) == 0
     out = capsys.readouterr().out
     dest = paths.bench_root() / "review" / run_dir.name / "recompress-high"
-    assert str(RV.page_of(dest)) in out and "Do not run it" in out
+    assert str(RV.page_of(dest)) in out and "Copy verdicts" in out and "Do not run apply" in out
     sampled = json.loads((dest / "sample.json").read_text())
     first = sampled[0]["file"]
-    pasted = f"python3 /x/imgopt.py apply {dest} --approve '{first}'"
-    assert cli.main(["review-record", str(dest), "--approve", pasted]) == 0
+    pasted = f"{BLOCK_HEADER}\n" + json.dumps({"fingerprint": "ab", "files": {
+        s["file"]: {"verdict": "keep" if s["file"] == first else "reject", "variant": "v"} for s in sampled}})
+    assert cli.main(["review-record", str(dest), "--verdicts", pasted]) == 0
     verdicts = {v["file"]: v["acceptable"] for v in json.loads((dest / "verdicts.json").read_text())}
     assert verdicts[first] is True and not any(v for f, v in verdicts.items() if f != first)
     assert cli.main(["review", str(run_dir)]) == 2  # a rebuild would erase the verdicts
@@ -132,7 +134,7 @@ def test_a_real_run_is_sampled_assembled_reviewed_and_recorded(factory, toolset,
 
 
 def test_review_record_needs_a_review_folder(tmp_path, capsys):
-    assert cli.main(["review-record", str(tmp_path), "--approve", "x"]) == 2
+    assert cli.main(["review-record", str(tmp_path), "--verdicts", "x"]) == 2
     assert cli.main(["review", str(tmp_path)]) == 2
 
 
