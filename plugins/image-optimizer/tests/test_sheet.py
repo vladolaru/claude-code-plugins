@@ -543,3 +543,21 @@ def test_changing_the_variant_keeps_keyboard_focus_on_the_selector(tmp_path, fac
       return [document.activeElement === now, now.children.find(o => o.selected).value];
     })()""")
     assert focused == [True, "pngquant-c16"]  # arrow keys keep stepping through the variants
+
+
+def test_a_card_whose_keep_would_write_a_variant_without_crops_says_so(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    record = json.loads((out / "photo--x" / "metrics.json").read_text())
+    pick = record["candidates"][0]
+    _rewrite(out, source={**record["source"], "size": pick["size"] + 500}, target=record["source"]["path"],
+             resize=None, min_saving=10**6, verdict="untouched", verdict_reason="saving 500 B is below the floor")
+    with_a_second_variant(out, size_delta=1000)  # larger than the in-place source: a keep writes nothing
+    _, page = S.build(out)
+    assert _page_data(page)["files"][0]["tiles"] == []  # untouched when built: no crops
+    texts = run_page(page, """(() => {
+      const before = cards()[0].textContent, s = cards()[0].querySelector('select');
+      s.value = 'pngquant-c16'; s.onchange();
+      return [before, cards()[0].textContent];
+    })()""")
+    assert "This page has no 1:1 crops of pngquant-c8. For them, ask the agent" in texts[0]
+    assert "1:1 crops" not in texts[1]

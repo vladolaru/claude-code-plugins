@@ -15,7 +15,8 @@ the gates says so). The selector always names the variant on screen: with
 no choice, the first listed is shown, and a verdict sends it. The 1:1 crops are of the variant the page was built
 with; switching to another dims them, labels the card's status as the
 page's choice's, shows the scores of the variant on screen, and says how to
-get crops of it. The human marks each
+get crops of it. A card whose variant a keep would write without crops
+(one the page saw untouched, under the saving floor) says so too. The human marks each
 file keep, reject, milder or stronger, with an optional note, and "Copy
 verdicts" gives one block (header line `review.BLOCK_HEADER`, then JSON
 carrying the page's fingerprint and folders) for `imgopt record`. A verdict
@@ -42,7 +43,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from .candidates import choice_of, kb, removes
 from .imaging import READ_FAILURES, display_pixels, flatten
 from .metrics import diff_max, smooth_mask
-from .review import BLOCK_HEADER, fingerprint, live_variants, rows_of, verdict_of
+from .review import BLOCK_HEADER, fingerprint, live_variants, rows_of, verdict_for, verdict_of
 
 TILE = 320
 SMALL_TILE = 160
@@ -214,13 +215,13 @@ function card(f){
     };
     const l=document.createElement('label'); l.append('Variant ',s); c.append(l);
   }
-  if(f.tiles.length||(switched&&v&&v.changes_pixels)){
+  if(f.tiles.length||(v&&v.changes_pixels&&v.keep_writes)){  // a keep would write pixels nobody saw at 1:1
     const t=document.createElement('div'); t.className='tiles'+(switched?' stale':'');
     const cap=document.createElement('div'); cap.className='label';
     const ask='ask the agent to choose it and rebuild the page.';
-    cap.textContent=!switched?'1:1 crops: reference | choice | difference x8 (required ones first)'
-      :f.tiles.length?'These 1:1 crops are of '+f.choice+'. For crops of '+v.label+', '+ask
-      :'This page has no 1:1 crops of '+v.label+'. For them, '+ask;
+    cap.textContent=!f.tiles.length?'This page has no 1:1 crops of '+v.label+'. For them, '+ask
+      :switched?'These 1:1 crops are of '+f.choice+'. For crops of '+v.label+', '+ask
+      :'1:1 crops: reference | choice | difference x8 (required ones first)';
     t.append(cap);
     for(const tile of f.tiles){
       const w=document.createElement('div'); w.className='tile';
@@ -351,7 +352,8 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
                     problems.append(f"{folder.name}: no tiles: {error}")
         tiles += record_tiles
         variants = [{"label": c["label"], "src": url(c["file"]), "meta": _variant_meta(record, c),
-                     "pass": bool(c.get("pass")), "changes_pixels": c["kind"] == "lossy" and not c.get("identical")}
+                     "pass": bool(c.get("pass")), "changes_pixels": c["kind"] == "lossy" and not c.get("identical"),
+                     "keep_writes": verdict_for(record, c, by_hand=True)[0] == "apply"}
                     for c in live_variants(record) if (folder / c["file"]).is_file()]
         entry = verdict_of(folder.parent, record)
         lossless_write = writes and chosen["kind"] == "lossless"
