@@ -5,7 +5,7 @@ applied is worth a human's eye. Within each (job, category) of a run, `sample` t
 (the ones a gate barely let through, where a wrong floor shows first) plus one random pick from the rest, so the
 review also catches a floor that is too tight everywhere. `assemble` builds, for one job, an imgopt working
 folder holding copies of the sampled record folders and the comparison page `sheet` makes; `review-record` turns
-the verdict block the page's Copy verdicts gives (its `keep` entries) into `acceptable.json`.
+the verdict block the page's Copy verdicts gives (its `keep` entries of the sampled pick) into `acceptable.json`.
 
 One folder per job, because a `run.json` carries one profile, resize and format and `load_records` keeps only the
 records that match it. The folders live under `paths.bench_root()/review/<run name>/<job>/`, never in the run.
@@ -127,11 +127,14 @@ def assemble_run(run_dir: Path, review_dir: Path, *, per_category: int = 3,
     return built, problems
 
 
-def approved_from(text: str) -> list[str]:
-    """The files the reviewer kept: the `keep` entries of a pasted verdict block (the page's Copy verdicts), or a
-    bare comma list of paths. The fingerprint is not checked: `record` validates the paths against `sample.json`."""
+def approved_from(text: str, picks: dict[str, str]) -> list[str]:
+    """The files whose sampled pick the reviewer kept: the `keep` entries of a pasted verdict block (the page's
+    Copy verdicts) that name that pick (``picks``: file -> the pick's label in `sample.json`), or a bare comma list
+    of paths. A keep of another variant says the pick was not acceptable, so it does not count. The fingerprint is
+    not checked: `record` validates the paths against `sample.json`."""
     if V.BLOCK_HEADER in text:
-        return sorted(p for p, e in V.parse_block(text)["files"].items() if e["verdict"] == "keep")
+        return sorted(p for p, e in V.parse_block(text)["files"].items()
+                      if e["verdict"] == "keep" and e.get("variant") == picks.get(p))
     return [p.strip() for p in text.strip().split(",") if p.strip()]
 
 

@@ -186,8 +186,9 @@ def cmd_review_record(args) -> int:
     if not (dest / review.SAMPLE).is_file():
         print(f"{dest}: no {review.SAMPLE}; give a review folder that `review` made")
         return 2
+    picks = {s["file"]: s["pick"] for s in json.loads((dest / review.SAMPLE).read_text())}
     try:
-        out = review.record(dest, review.approved_from(_verdicts_text(args.verdicts)))
+        out = review.record(dest, review.approved_from(_verdicts_text(args.verdicts), picks))
     except UsageError as error:
         print(error)
         return 2
@@ -230,8 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
     record = commands.add_parser("review-record", help="record the picks a human kept as acceptable.json")
     record.add_argument("dest", help="a review folder made by `review` (one per job)")
     record.add_argument("--verdicts", required=True, metavar="LIST|BLOCK|-",
-                        help="the page's pasted verdict block (its keep entries count), a comma list of kept paths, "
-                             "or - for stdin")
+                        help="the page's pasted verdict block (its keeps of the sampled pick count), a comma list "
+                             "of kept paths, or - for stdin")
     record.set_defaults(func=cmd_review_record)
     return parser
 

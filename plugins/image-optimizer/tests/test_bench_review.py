@@ -64,12 +64,14 @@ def test_record_refuses_a_path_outside_the_sample(tmp_path):
 
 
 def test_approved_from_takes_a_verdict_block_or_a_bare_list():
+    picks = {"/a/x.jpg": "v", "/a/y.jpg": "v", "/a/z.jpg": "v"}
     block = f"{BLOCK_HEADER}\n" + json.dumps({"fingerprint": "ab", "files": {
-        "/a/x.jpg": {"verdict": "keep", "variant": "v"}, "/a/y.jpg": {"verdict": "reject", "variant": "v"}}})
-    assert RV.approved_from(block) == ["/a/x.jpg"]
-    assert RV.approved_from("/a/x.jpg,/a/y.jpg") == ["/a/x.jpg", "/a/y.jpg"]
-    assert RV.approved_from("") == []
-    assert RV.approved_from("/a/it's here/x.jpg,/a/y.jpg") == ["/a/it's here/x.jpg", "/a/y.jpg"]
+        "/a/x.jpg": {"verdict": "keep", "variant": "v"}, "/a/y.jpg": {"verdict": "reject", "variant": "v"},
+        "/a/z.jpg": {"verdict": "keep", "variant": "milder-one"}}})  # kept another variant: the pick was not
+    assert RV.approved_from(block, picks) == ["/a/x.jpg"]
+    assert RV.approved_from("/a/x.jpg,/a/y.jpg", picks) == ["/a/x.jpg", "/a/y.jpg"]
+    assert RV.approved_from("", picks) == []
+    assert RV.approved_from("/a/it's here/x.jpg,/a/y.jpg", picks) == ["/a/it's here/x.jpg", "/a/y.jpg"]
 
 
 def tiny_run(factory, toolset, tmp_path):
@@ -119,7 +121,7 @@ def check_cli(run_dir, capsys):
     sampled = json.loads((dest / "sample.json").read_text())
     first = sampled[0]["file"]
     pasted = f"{BLOCK_HEADER}\n" + json.dumps({"fingerprint": "ab", "files": {
-        s["file"]: {"verdict": "keep" if s["file"] == first else "reject", "variant": "v"} for s in sampled}})
+        s["file"]: {"verdict": "keep" if s["file"] == first else "reject", "variant": s["pick"]} for s in sampled}})
     page_store = dest / "verdicts.json"  # imgopt's own file in the same folder: the page's verdict store
     page_store.write_text("page store")
     assert cli.main(["review-record", str(dest), "--verdicts", pasted]) == 0
