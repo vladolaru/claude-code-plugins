@@ -551,7 +551,7 @@ def test_the_chip_says_a_lossy_choice_is_written_only_once_kept(tmp_path, factor
       reject.checked = true; reject.onchange(); seen.push(chip());
       return seen;
     })()""")
-    assert chips == ["written if kept", "will be written", "written if kept"]
+    assert chips == ["written if kept", "will be written", "not written"]
 
 
 def test_the_headline_gives_the_saving_and_both_sizes(tmp_path, factory):
@@ -570,8 +570,27 @@ def test_the_chip_says_a_lossless_choice_is_written(tmp_path, factory):
     record["candidates"][0]["kind"] = "lossless"
     (out / "photo--x" / "metrics.json").write_text(json.dumps(record))
     _, page = S.build(out)
-    [chip] = run_page(page, "[...cards()].map(c => c.querySelector('.tag').textContent)")
-    assert chip == "will be written"  # no keep needed
+    chips = run_page(page, """(() => {
+      const chip = () => cards()[0].querySelector('.tag').textContent, seen = [chip()];
+      for (const k of ['reject', 'milder', 'keep']) {
+        const r = cards()[0].querySelectorAll('input').find(i => i.value === k);
+        r.checked = true; r.onchange(); seen.push(chip());
+      }
+      return seen;
+    })()""")
+    assert chips == ["will be written", "not written", "not written", "will be written"]  # no keep needed
+
+
+def test_a_rebuilt_page_shows_a_recorded_reject_as_not_written(tmp_path, factory):
+    out = fake_out(tmp_path, factory)
+    record = json.loads((out / "photo--x" / "metrics.json").read_text())
+    record["candidates"][0]["kind"] = "lossless"
+    (out / "photo--x" / "metrics.json").write_text(json.dumps(record))
+    rows = RV.rows_of([out])
+    RV.record_verdicts([out], RV.BLOCK_HEADER + "\n" + json.dumps({"fingerprint": RV.fingerprint(rows), "files": {
+        record["source"]["path"]: {"verdict": "reject", "variant": "pngquant-c8"}}}))
+    _, page = S.build(out)
+    assert run_page(page, "[...cards()].map(c => c.querySelector('.tag').textContent)") == ["not written"]
 
 
 def with_a_second_variant(out, *, size_delta=10, **extra):
