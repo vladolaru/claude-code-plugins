@@ -13,6 +13,7 @@ sandbox that cannot write the cache runs without the store.
 
 from __future__ import annotations
 
+import filecmp
 import hashlib
 import json
 import os
@@ -76,17 +77,20 @@ def get(key: str) -> dict | None:
 
 
 def restore(rec: dict, folder: Path) -> bool:
-    """Put ``rec``'s file into ``folder`` from the store; True when ``folder`` then has it."""
+    """Put ``rec``'s file into ``folder`` from the store; True when ``folder`` then has it. A file of that name
+    already there counts only when it is the stored one: a run with other settings or tools in the same folder
+    leaves files of the same names with other content, and those are replaced."""
     name = rec.get("file")
     if not name:
         return True
     target = Path(folder) / name
-    if target.is_file():
-        return True
     stored = _entry(rec["key"]) / name
     if not stored.is_file():
         return False
     try:
+        if target.is_file() and (target.samefile(stored) or filecmp.cmp(target, stored, shallow=False)):
+            return True
+        target.unlink(missing_ok=True)
         _link_or_copy(stored, target)
     except OSError:
         return False

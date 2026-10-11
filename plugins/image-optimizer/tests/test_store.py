@@ -28,6 +28,32 @@ def test_put_then_get_returns_the_record_and_keeps_the_file(tmp_path):
     assert ST.restore(got, restored) and (restored / "v.png").read_bytes() == b"variant"
 
 
+def test_restore_replaces_a_stale_file_of_the_same_name(tmp_path):
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    (folder / "v.jpg").write_bytes(b"this variant")
+    ST.put({"key": "k5", "file": "v.jpg", "kind": "lossless"}, folder, source_sha=SRC, ref_sha=REF)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "v.jpg").write_bytes(b"a variant of another run (other settings)")
+    assert ST.restore(ST.get("k5"), other) and (other / "v.jpg").read_bytes() == b"this variant"
+    assert ST.restore(ST.get("k5"), folder) and (folder / "v.jpg").read_bytes() == b"this variant"
+
+
+def test_a_rerun_with_other_settings_in_the_same_folder_gets_the_stored_files(factory, toolset, tmp_path):
+    tools = {**toolset("prepare", "high", {"jpeg"}), **toolset("recompress", "high", {"jpeg"})}
+    src = factory.photo(size=(400, 300), quality=95).resolve()
+    opts = lambda out, **kw: C.Options(profile="high", out=out, gates=G.gates_for("high"), **kw)
+    C.run([src], opts(tmp_path / "F", resize=200), tools, log=lambda _: None)
+    C.run([src], opts(tmp_path / "G"), tools, log=lambda _: None)  # the store now holds the full-size variants
+    C.run([src], opts(tmp_path / "F"), tools, log=lambda _: None)  # F still holds the resized files of those names
+    [(f, record)] = C.load_records(tmp_path / "F")
+    [(g, _)] = C.load_records(tmp_path / "G")
+    for c in (c for c in record["candidates"] if c.get("file")):
+        assert (f / c["file"]).read_bytes() == (g / c["file"]).read_bytes(), c["label"]
+        assert (f / c["file"]).stat().st_size == c["size"]
+
+
 def test_a_failed_hardlink_falls_back_to_a_copy(tmp_path, monkeypatch):
     folder = tmp_path / "rec"
     folder.mkdir()
