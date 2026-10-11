@@ -419,6 +419,18 @@ def test_a_corrupt_verdicts_file_is_refused_not_treated_as_empty(tmp_path):
             record["source"]["path"]: {"verdict": "reject"}}))
 
 
+def test_a_corrupt_verdicts_file_refuses_before_any_choice_changes(tmp_path):
+    folder, record = fake_record(tmp_path)
+    fp = RV.fingerprint(RV.rows_of([folder.parent]))
+    text = block(fp, {record["source"]["path"]: {"verdict": "keep", "variant": "v15000"}})
+    (folder.parent / RV.VERDICTS_FILE).write_text("not json")
+    with pytest.raises(UsageError, match="holds the human's verdicts"):
+        RV.record_verdicts([folder.parent], text)
+    assert "choice" not in json.loads((folder / "metrics.json").read_text())  # the page's results are as they were
+    (folder.parent / RV.VERDICTS_FILE).unlink()  # repaired by hand: the same block is still good
+    assert RV.record_verdicts([folder.parent], text) == {"keep": 1}
+
+
 def test_verdicts_are_written_whole_or_not_at_all(tmp_path, monkeypatch):
     folder, record = fake_record(tmp_path)
     book = folder.parent / RV.VERDICTS_FILE

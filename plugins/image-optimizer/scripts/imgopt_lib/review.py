@@ -225,14 +225,15 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
                                  f"{', '.join(c['label'] for c in live_variants(record))}")
             _ensure_file(folder, cand)
             changes.append((folder, record, variant))
+    # Read every verdict store before changing any choice: one `_load` refuses must leave the page's results,
+    # and so the block's fingerprint, as they were.
+    stored = {out: _load(out) for out in dict.fromkeys(by_path[path][0].parent for path in data["files"])}
     for folder, record, variant in changes:
         choose(folder, record, variant)
-    stored: dict[Path, dict] = {}
     for path, entry in data["files"].items():
         folder, record = by_path[path]
         chosen = choice_of(record)
-        out = folder.parent
-        book = stored.setdefault(out, _load(out))
+        book = stored[folder.parent]
         book["files"][path] = {"verdict": entry["verdict"], "variant": chosen["label"] if chosen else None,
                                "key": chosen.get("key") if chosen else None, "note": str(entry.get("note") or ""),
                                "sha256": record["source"]["sha256"]}
