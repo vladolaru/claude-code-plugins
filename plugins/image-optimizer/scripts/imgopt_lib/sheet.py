@@ -137,8 +137,11 @@ PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Image comparison</title>
 <style>
-:root{--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--pane:#fff}
+:root{color-scheme:light dark;--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--pane:#fff}
 @media (prefers-color-scheme: dark){:root{--bg:#161617;--fg:#f5f5f7;--muted:#a1a1a6;--line:#3a3a3c}}
+*,*::before,*::after{box-sizing:border-box}
+button,input,select,textarea{font:inherit}
+input[type=text],button{min-height:32px;padding:0 8px}
 body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,system-ui,sans-serif}
 header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:12px}
 .banner{background:#fff4ce;color:#5c4400;padding:8px 12px;border-radius:6px;margin-bottom:8px}
@@ -152,7 +155,9 @@ body.actual .pane img{max-width:none}
 body.dark{--pane:#282828}
 .label{font-size:12px;color:var(--muted);padding:2px 4px}
 .tiles{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-.tile{overflow:auto;border:1px solid var(--line)}
+.card > label{display:flex;align-items:center;gap:8px}
+.card select{min-width:0;max-width:100%;flex:0 1 auto}
+.tile{overflow:auto;border:1px solid var(--line);width:fit-content;max-width:100%}
 .tile img{display:block;max-width:none}
 footer{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 0}
 code{word-break:break-all}
@@ -160,6 +165,7 @@ code{word-break:break-all}
 .verdicts input[type=text]{flex:1;min-width:200px}
 .stale{opacity:.45}
 textarea{width:100%;font:12px ui-monospace,monospace}
+@media (max-width:600px){.pane{max-height:40vh}}
 </style></head><body class="actual">
 <div id="banners"></div>
 <header><strong id="totals"></strong>
