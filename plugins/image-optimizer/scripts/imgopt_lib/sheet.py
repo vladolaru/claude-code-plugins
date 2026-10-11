@@ -137,33 +137,50 @@ PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Image comparison</title>
 <style>
-:root{color-scheme:light dark;--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--pane:#fff}
-@media (prefers-color-scheme: dark){:root{--bg:#161617;--fg:#f5f5f7;--muted:#a1a1a6;--line:#3a3a3c}}
+:root{color-scheme:light dark;--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--pane:#fff;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--tag-bg:#ececf0;
+  --ok:#1a7f37;--ok-bg:#e6f4ea;--bad:#b42318;--bad-bg:#fdecea;--warn:#8a5a00;--warn-bg:#fff4ce;
+  --accent:#0a66d8;--accent-bg:#e8f0fe}
+@media (prefers-color-scheme: dark){:root{--bg:#161617;--fg:#f5f5f7;--muted:#a1a1a6;--line:#3a3a3c;--tag-bg:#2c2c2e;
+  --ok:#6fd38a;--ok-bg:#16301f;--bad:#ff8a80;--bad-bg:#3a1a18;--warn:#f5c451;--warn-bg:#3a2e10;
+  --accent:#6aa8ff;--accent-bg:#14263f}}
 *,*::before,*::after{box-sizing:border-box}
 button,input,select,textarea{font:inherit}
-input[type=text],button{min-height:32px;padding:0 8px}
-body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,system-ui,sans-serif}
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:12px}
-.banner{background:#fff4ce;color:#5c4400;padding:8px 12px;border-radius:6px;margin-bottom:8px}
-.card{border:1px solid var(--line);border-radius:8px;margin-bottom:16px;padding:12px}
-.card h3{margin:0;font-size:15px;word-break:break-all}
-.meta{color:var(--muted);font-size:13px;margin:4px 0 8px}
-.panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px}
+input[type=text],button,select{min-height:32px}
+input[type=text],button{padding:0 var(--s2)}
+body{margin:0;padding:var(--s4);background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s4);margin-bottom:var(--s4)}
+#totals{flex-basis:100%;font-variant-numeric:tabular-nums}
+header label{display:inline-flex;align-items:center;gap:var(--s1)}
+.banner{background:var(--warn-bg);color:var(--warn);padding:var(--s2) var(--s3);border-radius:6px;margin-bottom:var(--s2)}
+.card{display:flex;flex-direction:column;gap:var(--s3);border:1px solid var(--line);border-radius:8px;
+  margin-bottom:var(--s5);padding:var(--s4)}
+.card h3{margin:0;font-size:15px;font-weight:600;overflow-wrap:anywhere}
+.card h3 .dir{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+.meta{color:var(--muted);font-size:12px;margin:var(--s1) 0 0;font-variant-numeric:tabular-nums}
+.panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--s2)}
 .pane{overflow:auto;max-height:70vh;border:1px solid var(--line);background:var(--pane)}
 .pane img{display:block;max-width:100%}
 body.actual .pane img{max-width:none}
 body.dark{--pane:#282828}
-.label{font-size:12px;color:var(--muted);padding:2px 4px}
-.tiles{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-.card > label{display:flex;align-items:center;gap:8px}
+.label{font-size:12px;color:var(--muted);padding:2px var(--s1)}
+.label.warn{color:var(--warn);font-weight:600}
+.pane .label{position:sticky;top:0;left:0;z-index:1;background:var(--bg);border-bottom:1px solid var(--line)}
+.card > label{display:flex;align-items:center;gap:var(--s2)}
 .card select{min-width:0;max-width:100%;flex:0 1 auto}
+.tiles{display:flex;flex-direction:column;gap:var(--s3)}
+.tiles.stale > .tile{opacity:.45}
 .tile{overflow:auto;border:1px solid var(--line);width:fit-content;max-width:100%}
 .tile img{display:block;max-width:none}
+.tag{display:inline-block;padding:0 var(--s1);margin-right:var(--s1);border-radius:4px;font-size:12px;font-weight:600;
+  line-height:18px;color:var(--fg);background:var(--tag-bg)}
+.tag.ok{color:var(--ok);background:var(--ok-bg)}
+.tag.bad{color:var(--bad);background:var(--bad-bg)}
+.tag.warn{color:var(--warn);background:var(--warn-bg)}
 footer{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 0}
 code{word-break:break-all}
-.verdicts{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:8px 0}
+.verdicts{display:flex;flex-wrap:wrap;gap:var(--s3);align-items:center}
 .verdicts input[type=text]{flex:1;min-width:200px}
-.stale{opacity:.45}
 textarea{width:100%;font:12px ui-monospace,monospace}
 @media (max-width:600px){.pane{max-height:40vh}}
 </style></head><body class="actual">
@@ -189,26 +206,35 @@ const VERDICTS = new Map(DATA.files.filter(f=>f.recorded||f.default_verdict).map
 const NOTES = new Map(DATA.files.filter(f=>f.recorded&&f.recorded.note).map(f=>[f.name,f.recorded.note]));
 const KINDS = ['keep','reject','milder','stronger'];
 function variantOf(f){return f.variants.find(v=>v.label===SELECTED.get(f.name));}
-function pane(label, src, name){
+// Status words get a colored chip as well; the words stay, so color is never the only channel.
+function tag(text, kind){
+  const t=document.createElement('span'); t.className='tag'+(kind?' '+kind:''); t.textContent=text; return t;
+}
+function gateTag(v){return v.pass?tag('passes','ok'):tag('fails the gates','bad');}
+function line(cls, ...parts){const d=document.createElement('div'); d.className=cls; d.append(...parts); return d;}
+function pane(label, src, name, ...tags){
   const w=document.createElement('div'); w.className='pane';
-  const l=document.createElement('div'); l.className='label'; l.textContent=label;
+  const l=line('label', label+' ', ...tags);
   const i=document.createElement('img'); i.src=src; i.alt=label+': '+name;
   w.append(l,i); return w;
 }
 function card(f){
   const c=document.createElement('section'); c.className='card';
-  const h=document.createElement('h3'); h.textContent=f.name;
+  const cut=f.name.lastIndexOf('/')+1;  // the file name leads; its folder sits above it
+  const h=document.createElement('h3'), dir=document.createElement('span');
+  dir.className='dir'; dir.textContent=f.name.slice(0,cut); h.append(dir,f.name.slice(cut));
   const v=variantOf(f), switched=SELECTED.get(f.name)!==f.choice;
   // The status worked out for the page's choice: sizes, format change, LARGER, why it is or is not written.
-  const m=document.createElement('div'); m.className='meta';
-  m.textContent=(switched&&f.choice?"The page's choice: ":'')+f.meta;
-  c.append(h,m);
-  if(v&&switched){
-    const o=document.createElement('div'); o.className='meta'; o.textContent='On screen: '+v.meta; c.append(o);
-  }
+  const status=[f.verdict==='apply'?tag('will be written'):tag('untouched','warn')];
+  if(f.larger) status.push(tag('LARGER','warn'));
+  if(v&&!switched) status.push(gateTag(v));
+  const head=document.createElement('div');
+  head.append(h,line('meta',...(switched&&f.choice?["The page's choice: "]:[]),...status,f.meta));
+  if(v&&switched) head.append(line('meta','On screen: ',gateTag(v),v.meta));
+  c.append(head);
   const panes=document.createElement('div'); panes.className='panes';
   if(f.before_src) panes.append(pane('Before', f.before_src, f.name));
-  if(v) panes.append(pane('Variant: '+v.label+(v.pass?'':' (fails the gates)'), v.src, f.name));
+  if(v) panes.append(pane('Variant: '+v.label, v.src, f.name, ...(v.pass?[]:[tag('fails the gates','bad')])));
   const all=[...panes.querySelectorAll('.pane')];
   all.forEach(p=>p.addEventListener('scroll',()=>all.forEach(o=>{if(o!==p){o.scrollTop=p.scrollTop;o.scrollLeft=p.scrollLeft;}})));
   c.append(panes);
@@ -223,7 +249,7 @@ function card(f){
   }
   if(f.tiles.length||(v&&v.changes_pixels&&v.keep_writes)){  // a keep would write pixels nobody saw at 1:1
     const t=document.createElement('div'); t.className='tiles'+(switched?' stale':'');
-    const cap=document.createElement('div'); cap.className='label';
+    const cap=document.createElement('div'); cap.className='label'+(switched||!f.tiles.length?' warn':'');
     const ask='ask the agent to choose it and rebuild the page.';
     cap.textContent=!f.tiles.length?'This page has no 1:1 crops of '+v.label+'. For them, '+ask
       :switched?'These 1:1 crops are of '+f.choice+'. For crops of '+v.label+', '+ask
@@ -231,7 +257,7 @@ function card(f){
     t.append(cap);
     for(const tile of f.tiles){
       const w=document.createElement('div'); w.className='tile';
-      const l=document.createElement('div'); l.className='label'; l.textContent=tile.label+(tile.required?' (required)':'');
+      const l=line('label',tile.label+' ',...(tile.required?[tag('required','warn')]:[]));
       const i=document.createElement('img'); i.src=tile.src; i.alt=tile.label+' crop: '+f.name;
       w.append(l,i); t.append(w);
     }
@@ -368,6 +394,7 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
                       "choice": chosen["label"] if chosen else None, "variants": variants,
                       "verdict": record["verdict"], "choice_kind": chosen["kind"] if chosen else None,
                       "before": record["source"]["size"], "saved": saved,
+                      "larger": writes and chosen["size"] > record["source"]["size"],
                       "default_verdict": "keep" if lossless_write else "",
                       "recorded": {"verdict": entry["verdict"], "note": entry.get("note", "")} if entry else None,
                       "tiles": [{"label": t.window, "src": quote(f"tiles/{t.path.name}"), "required": t.required}

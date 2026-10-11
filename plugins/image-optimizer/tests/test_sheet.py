@@ -509,8 +509,10 @@ def test_a_card_shows_the_status_line_with_larger_sizes_and_the_format_change(tm
     _rewrite(out, source=source, target=str(Path(source["path"]).with_suffix(".png")), verdict=verdict,
              verdict_reason=why)
     _, page = S.build(out)
-    [text] = run_page(page, "[...cards()].map(c => c.textContent)")
+    [[text, tags]] = run_page(page, "[...cards()].map(c => [c.textContent, c.querySelectorAll('.tag')"
+                                    ".map(t => t.className + ':' + t.textContent)])")
     assert "LARGER than the original" in text and "jpeg -> png" in text
+    assert tags[:3] == ["tag:will be written", "tag warn:LARGER", "tag ok:passes"]  # a chip as well as the words
     assert f"{C.kb(source['size'])} -> {C.kb(pick['size'])}" in text
     assert "SSIM 0.9500 (floor 0.98)" in text  # the variant's scores stay beside the status
 
