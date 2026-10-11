@@ -203,20 +203,35 @@ def cmd_sheet(args) -> int:
 
 
 def cmd_apply(args) -> int:
-    out = Path(args.out).resolve()
-    _print_ignored(out)
+    outs = [Path(o).resolve() for o in args.out]
+    for out in outs:
+        _print_ignored(out)
     only = split_csv(args.only) + tuple(SEL.read_list(args.files) if args.files else ())
     needed = ["pillow"]
-    if AP.needs_metrics(out, only):  # also refuses an `out` that is not a folder of candidates results
+    if AP.needs_metrics(outs, only):  # also refuses an `out` that is not a folder of candidates results
         needed += ["ffmpeg", "ssimulacra2"]
-    if AP.needs_rsvg(out, only):
+    if AP.needs_rsvg(outs, only):
         needed.append("rsvg-convert")
     chk = T.check(T.Requirements(tuple(needed), (), ()))
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="apply", profile="-"))
     print(T.describe(chk.tools))
-    return AP.apply(out, tools=chk.tools, only=only, approve=split_csv(args.approve),
-                    dest=Path(args.dest).resolve() if args.dest else None)
+    return AP.apply(outs, tools=chk.tools, only=only, dest=Path(args.dest).resolve() if args.dest else None)
+
+
+def cmd_manifest(args) -> int:
+    rows = RV.manifest_rows(RV.rows_of([Path(o).resolve() for o in args.out]), accepted=args.accepted)
+    if args.json:
+        print(json.dumps(rows, indent=1))
+        return 0
+    total = sum(r["saved"] for r in rows) or 1
+    running = 0
+    for r in rows:
+        running += r["saved"]
+        state = "" if r["exists"] else "  (file gone: run choose to restore it)"
+        print(f"{C.kb(r['saved']):>9} {running / total:>4.0%}  {r['verdict'] or '-':8} {r['label'] or '-':20} "
+              f"{r['source']} -> {r['variant']}{state}")
+    return 0
 
 
 def cmd_compare(args) -> int:
@@ -363,13 +378,17 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("out", nargs="+", help="the working folder(s) the page was built from")
     rc.add_argument("--verdicts", required=True, metavar="FILE|-", help="the pasted block, in a file or on stdin")
     rc.set_defaults(func=cmd_record)
-    a = sub.add_parser("apply", help="write approved picks and re-verify them")
-    a.add_argument("out")
+    a = sub.add_parser("apply", help="write the choices the verdicts keep and re-verify them")
+    a.add_argument("out", nargs="+")
     a.add_argument("--only", help="comma list of file names or paths")
     a.add_argument("--files", metavar="LIST", help="like --only, one path per line (- for stdin)")
-    a.add_argument("--approve", help="comma list of lossy picks the human approved on the page (file names or paths)")
     a.add_argument("--dest", help="folder for prepare/convert outputs instead of next to the source")
     a.set_defaults(func=cmd_apply)
+    mf = sub.add_parser("manifest", help="each file's chosen variant and target: paths an agent can copy")
+    mf.add_argument("out", nargs="+")
+    mf.add_argument("--json", action="store_true")
+    mf.add_argument("--accepted", action="store_true", help="only lossless choices not rejected and lossy ones kept")
+    mf.set_defaults(func=cmd_manifest)
     m = sub.add_parser("compare", help="measure a pair and print a reviewer-runnable check")
     m.add_argument("ref", help="path, git:<rev>:<path>, or URL")
     m.add_argument("new", help="path, git:<rev>:<path>, or URL")

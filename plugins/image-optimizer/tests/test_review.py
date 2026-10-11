@@ -159,3 +159,27 @@ def test_the_same_source_in_two_working_folders_is_refused(tmp_path):
     with pytest.raises(UsageError, match="separate pages") as error:
         RV.rows_of([folder.parent, other])
     assert record["source"]["path"] in str(error.value) and str(other) in str(error.value)
+
+
+def test_manifest_lists_paths_and_filters_accepted(tmp_path):
+    folder, record = fake_record(tmp_path)
+    rows = RV.rows_of([folder.parent])
+    [row] = RV.manifest_rows(rows)
+    assert row["variant"] == str(folder / "v12000.png") and row["exists"] and row["verdict"] is None
+    assert RV.manifest_rows(rows, accepted=True) == []
+    RV.record_verdicts([folder.parent], RV.BLOCK_HEADER + "\n" + json.dumps(
+        {"fingerprint": RV.fingerprint(rows),
+         "files": {record["source"]["path"]: {"verdict": "keep", "variant": "v12000"}}}))
+    assert [r["label"] for r in RV.manifest_rows(RV.rows_of([folder.parent]), accepted=True)] == ["v12000"]
+
+
+def test_manifest_command_prints_the_rows_as_json_and_as_text(tmp_path, capsys):
+    from imgopt_lib import cli
+
+    folder, record = fake_record(tmp_path)
+    assert cli.main(["manifest", str(folder.parent), "--json"]) == 0
+    [row] = json.loads(capsys.readouterr().out)
+    assert row["source"] == record["source"]["path"] and row["saved"] == 8000
+    assert cli.main(["manifest", str(folder.parent)]) == 0
+    assert f"{record['source']['path']} -> {folder / 'v12000.png'}" in capsys.readouterr().out
+

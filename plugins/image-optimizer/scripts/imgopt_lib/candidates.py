@@ -582,9 +582,9 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
         f"{command} clean {q(str(out))}")
     if lossy:
         log(f"Next: {command} sheet {q(str(out))}   (view the required tiles, show the page; "
-            f"{len(lossy)} lossy pick(s) need the human's approval before apply --approve)")
+            f"{len(lossy)} lossy choice(s) need the human's verdict, which `record` stores)")
     elif applied:
-        log(f"Next: {command} apply {q(str(out))}   (all picks are lossless; no approval gate)")
+        log(f"Next: {command} apply {q(str(out))}   (all choices are lossless; no verdict needed)")
     else:
         log("Next: nothing to apply.")
 

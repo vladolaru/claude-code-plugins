@@ -1,11 +1,11 @@
-"""`imgopt apply`: write approved picks, then re-measure what was written.
+"""`imgopt apply`: write what the human's verdicts keep, then re-measure what was written.
 
-Lossy picks are written only when named in --approve, which the page builds
-from the human's ticks; with none named they are refused, and any left
-unnamed are left as they were. A source that changed
-since `candidates` ran is refused, and so is a selection where two picks
-would land on one path or a pick would replace an existing file other than
-its own source (both before anything is written). Each pick is staged beside
+A lossy choice is written only when its stored verdict (`record`) is keep; reject leaves the file as it was,
+milder or stronger waits for a new choice, and with no verdict at all the lossy choices are refused. A lossless
+choice is written unless rejected. Several working folders apply in one call. A source that changed
+since `candidates` ran is refused, and so is a selection where two choices
+would land on one path or a choice would replace an existing file other than
+its own source (both before anything is written). Each choice is staged beside
 its target and re-measured against the recorded reference there; only a
 staged file that matches the recorded numbers replaces the target. A mismatch
 deletes the staged file and leaves the target's bytes and mtime as they were.
@@ -21,49 +21,43 @@ from pathlib import Path
 from PIL import Image
 
 from . import ladder, metrics
+from . import review as RV
 from . import selection as SEL
-from .candidates import choice_of, kb, load_records, sha256
+from .candidates import choice_of, kb, sha256
 from .imaging import READ_FAILURES, display_pixels, read_facts
 from .ladder import UsageError
 from .sheet import needs_tiles
 
+SUFFIX = " (fails the profile; kept by the human's verdict)"
 TOLERANCE = {"ssim": 1e-6, "ss2": 1e-3, "band": 1e-6}
 
 
-def _records(out: Path) -> list[tuple[Path, dict]]:
-    out = Path(out)
-    rows = load_records(out) if out.is_dir() else []
-    if not rows:
-        raise UsageError(f"{out}: no candidates results here (expected <folder>/metrics.json from "
-                         "`imgopt candidates --out`); check the path")
-    return rows
+def _rows(outs) -> list[tuple[Path, dict]]:
+    """Every record of the last run in the working folder(s) ``outs`` (a path or a list of them)."""
+    return RV.rows_of([Path(o) for o in ([outs] if isinstance(outs, (str, Path)) else outs)])
 
 
-def _selected(out: Path, only) -> tuple[list[tuple[Path, dict]], list[str]]:
-    """(the records `only` selects or all of them, a problem line per `only` name that selects nothing or is
-    ambiguous)."""
-    rows = _records(out)
-    if not only:
-        return rows, []
-    return SEL.resolve(only, rows)
+def _to_write(outs, only) -> tuple[list[tuple[Path, dict]], list[str]]:
+    """(the records `only` selects or all of them that have a choice to write, a problem line per `only` name that
+    selects nothing or is ambiguous)."""
+    rows, problems = _rows(outs), []
+    if only:
+        rows, problems = SEL.resolve(only, rows)
+    return [(f, r) for f, r in rows if r["verdict"] == "apply" and choice_of(r)], problems
 
 
-def _to_apply(out: Path, only) -> list[tuple[Path, dict]]:
-    return [(f, r) for f, r in _selected(out, only)[0] if r["verdict"] == "apply"]
+def needs_metrics(outs, only=()) -> bool:
+    """True when a selected choice is lossy, so verifying it needs ffmpeg and ssimulacra2."""
+    return any(needs_tiles(r) for _, r in _to_write(outs, only)[0])
 
 
-def needs_metrics(out: Path, only=()) -> bool:
-    """True when a selected pick is lossy, so verifying it needs ffmpeg and ssimulacra2."""
-    return any(needs_tiles(r) for _, r in _to_apply(out, only))
-
-
-def needs_rsvg(out: Path, only=()) -> bool:
-    """True when a selected pick is an SVG, so verifying it needs rsvg-convert."""
-    return any(r["format"] == "svg" for _, r in _to_apply(out, only))
+def needs_rsvg(outs, only=()) -> bool:
+    """True when a selected choice is an SVG, so verifying it needs rsvg-convert."""
+    return any(r["format"] == "svg" for _, r in _to_write(outs, only)[0])
 
 
 def _took_source(record: dict, chosen: dict, facts) -> bool:
-    """Whether the pick was made from the source file itself, which is what the metadata check covers.
+    """Whether the choice was made from the source file itself, which is what the metadata check covers.
 
     Pixel-input rungs bake orientation and convert device profiles by design, so only the plan
     (the one place that knows each rung's input) can say; a rung it cannot find is checked. The test
@@ -110,7 +104,7 @@ def _drift(key: str, tol: float, recorded, now) -> str:
 
 
 def _write(folder: Path, record: dict, chosen: dict, target: Path, tools: dict) -> str:
-    """Stage the pick beside ``target``, verify it there, and move it over the target only if it passed."""
+    """Stage the choice beside ``target``, verify it there, and move it over the target only if it passed."""
     # Hidden, unique (never a user's file, safe beside a concurrent run), and keeps the extension for the decoders.
     fd, name = tempfile.mkstemp(dir=target.parent, prefix=".imgopt-", suffix=target.suffix)
     os.close(fd)
@@ -127,13 +121,13 @@ def _write(folder: Path, record: dict, chosen: dict, target: Path, tools: dict) 
 
 
 def target_of(record: dict, dest: Path | None) -> Path:
-    """Where ``record``'s pick is written: its recorded target, or that name inside ``dest``."""
+    """Where ``record``'s choice is written: its recorded target, or that name inside ``dest``."""
     target = Path(record["target"])
     return Path(dest) / target.name if dest else target
 
 
 def _refuse_clashes(rows: list[tuple[Path, dict]], dest: Path | None) -> None:
-    """UsageError, before anything is written, when two picks would land on one path or a pick would
+    """UsageError, before anything is written, when two choices would land on one path or a choice would
     replace an existing file that is not its own source (a convert output, an unrelated file)."""
     targets = [(target_of(r, dest).resolve(), r) for _, r in rows]
     shared = sorted({str(t) for t, _ in targets if sum(t == other for other, _ in targets) > 1})
@@ -158,32 +152,34 @@ def _tools_changed(record: dict, tools: dict) -> str:
     return ""
 
 
-def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = None, log=print) -> int:
-    selected, unmatched = _selected(Path(out), only)
-    for problem in unmatched:
+def apply(outs, *, tools: dict, only=(), dest: Path | None = None, log=print) -> int:
+    rows, problems = _to_write(outs, only)
+    for problem in problems:
         log(f"--only: {problem}")
-    rows = [(f, r) for f, r in selected if r["verdict"] == "apply"]
     if not rows:
-        if not unmatched:
+        if not problems:
             log("Nothing to apply.")
-        return 1 if unmatched else 0
+        return 1 if problems else 0
     _refuse_clashes(rows, dest)
-    lossy_rows = [(f, r) for f, r in rows if needs_tiles(r)]
-    lossy = [r for _, r in lossy_rows]
-    approved_rows, unknown = SEL.resolve(approve, lossy_rows) if approve else ([], [])
-    for problem in unknown:
-        log(f"--approve: {problem}")
-    if lossy and not approve:
-        log("REFUSED: these picks are lossy and need the human's approval on the comparison page first:")
-        for r in lossy:
+    verdicts = {id(r): RV.verdict_of(f.parent, r) for f, r in rows}
+    lossy = [(f, r) for f, r in rows if needs_tiles(r)]
+    if lossy and not any(verdicts[id(r)] for _, r in lossy):
+        log("REFUSED: these choices are lossy; record the human's verdicts first (sheet, then record):")
+        for _, r in lossy:
             log(f"  {r['source']['path']}  ({choice_of(r)['label']})")
-        log("Show the page (imgopt sheet); it gives the apply command with --approve for the files the human ticks.")
         return 1
-    approved_ids = {id(r) for _, r in approved_rows}
-    held = [r for r in lossy if id(r) not in approved_ids]
-    for r in held:
-        log(f"  not approved, left as it was: {r['source']['path']}")
-    rows = [(f, r) for f, r in rows if not any(r is h for h in held)]
+    chosen_rows = []
+    for folder, record in rows:
+        entry = verdicts[id(record)]
+        if entry and entry["verdict"] == "reject":
+            log(f"  rejected, left as it was: {record['source']['path']}")
+        elif entry and entry["verdict"] in ("milder", "stronger"):
+            log(f"  asked {entry['verdict']}, left as it was: {record['source']['path']} (choose, then review again)")
+        elif needs_tiles(record) and not (entry and entry["verdict"] == "keep"):
+            log(f"  no verdict yet, left as it was: {record['source']['path']}")
+        else:
+            chosen_rows.append((folder, record))
+    rows = chosen_rows
     stale = [r for _, r in rows if not Path(r["source"]["path"]).is_file()
              or sha256(Path(r["source"]["path"])) != r["source"]["sha256"]]
     if stale:
@@ -191,7 +187,7 @@ def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = No
         for r in stale:
             log(f"  {r['source']['path']}")
         return 1
-    failures = len(unmatched) + len(unknown)
+    failures = len(problems)
     written = before = after = 0
     for folder, record in rows:
         chosen = choice_of(record)
@@ -211,7 +207,7 @@ def apply(out: Path, *, tools: dict, only=(), approve=(), dest: Path | None = No
         before += record["source"]["size"]
         after += target.stat().st_size
         log(f"  re-measured {target}  {kb(record['source']['size'])} -> {kb(target.stat().st_size)}  "
-            f"({chosen['label']})")
+            f"({chosen['label']}){'' if chosen.get('pass') else SUFFIX}")
     log(f"\nWrote {written} of {len(rows)} file(s): {kb(before)} -> {kb(after)}."
         + (f" {failures} problem(s): investigate before committing." if failures else ""))
     return 1 if failures else 0

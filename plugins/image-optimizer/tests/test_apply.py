@@ -13,9 +13,21 @@ from imgopt_lib import applying as AP
 from imgopt_lib import candidates as C
 from imgopt_lib import gates as G
 from imgopt_lib import imaging, metrics
+from imgopt_lib import review as RV
 from imgopt_lib.ladder import UsageError
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
+
+
+def keep(out, *paths, verdict="keep"):
+    """Store a verdict for ``paths`` the way `record` would, against each record's current choice."""
+    book_path = Path(out) / RV.VERDICTS_FILE
+    book = json.loads(book_path.read_text()) if book_path.is_file() else {"files": {}}
+    for folder, record in C.load_records(Path(out)):
+        if record["source"]["path"] in map(str, paths) or Path(record["source"]["path"]).name in map(str, paths):
+            book["files"][record["source"]["path"]] = {"verdict": verdict, "variant": C.choice_of(record)["label"],
+                                                       "note": "", "sha256": record["source"]["sha256"]}
+    book_path.write_text(json.dumps(book))
 
 
 def run_candidates(src, out, tools, profile="lossless"):
@@ -69,13 +81,13 @@ def test_lossless_pick_is_copied_and_remeasured(factory, toolset, tmp_path):
     assert staged_files(src.parent) == []
 
 
-def test_lossy_picks_need_approval(factory, tmp_path):
+def test_lossy_choices_need_a_verdict(factory, tmp_path):
     out = tmp_path / "out"
     src, _ = _lossy_record(out, factory)
     before = src.read_bytes()
     logs = []
     assert AP.apply(out, tools={}, log=logs.append) == 1
-    assert "--approve" in "\n".join(logs)
+    assert "record the human's verdicts" in "\n".join(logs)
     assert src.read_bytes() == before
 
 
@@ -85,7 +97,8 @@ def test_refuses_when_the_source_changed_since_candidates(factory, tmp_path):
     src.write_bytes(src.read_bytes() + b"\0")
     changed = src.read_bytes()
     logs = []
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=logs.append) == 1
     assert "changed since candidates ran" in "\n".join(logs)
     assert src.read_bytes() == changed
 
@@ -98,7 +111,8 @@ def test_untouched_files_are_skipped(factory, tmp_path):
     (folder / "metrics.json").write_text(json.dumps(rec))
     before = src.read_bytes()
     logs = []
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=logs.append) == 0
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=logs.append) == 0
     assert "Nothing to apply." in logs
     assert src.read_bytes() == before
 
@@ -111,7 +125,8 @@ def test_a_matching_lossy_pick_replaces_the_target(factory, toolset, tmp_path):
     record["candidates"][0].update(_measured(folder, tools))
     (folder / "metrics.json").write_text(json.dumps(record))
     logs = []
-    assert AP.apply(out, tools=tools, approve=("photo.jpg",), log=logs.append) == 0
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools=tools, log=logs.append) == 0
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
     assert any("re-measured" in line for line in logs)
     assert staged_files(src.parent) == []
@@ -123,7 +138,8 @@ def test_remeasure_mismatch_fails_loudly_and_leaves_the_target_alone(factory, to
     src, _ = _lossy_record(out, factory)  # claims ssim 0.5, which the real pick does not have
     before, mtime = src.read_bytes(), src.stat().st_mtime_ns
     logs = []
-    assert AP.apply(out, tools=tools, approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools=tools, log=logs.append) == 1
     assert "MISMATCH" in "\n".join(logs)
     assert src.read_bytes() == before and src.stat().st_mtime_ns == mtime
     assert staged_files(src.parent) == []
@@ -139,7 +155,8 @@ def test_a_pick_tampered_with_after_candidates_is_not_written(factory, toolset, 
     Image.open(src).save(folder / "pick.jpg", "JPEG", quality=20)  # not the file that was measured
     before, mtime = src.read_bytes(), src.stat().st_mtime_ns
     logs = []
-    assert AP.apply(out, tools=tools, approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools=tools, log=logs.append) == 1
     assert "MISMATCH" in "\n".join(logs)
     assert src.read_bytes() == before and src.stat().st_mtime_ns == mtime
     assert staged_files(src.parent) == []
@@ -151,7 +168,8 @@ def test_a_failed_verification_does_not_replace_the_target(factory, tmp_path, mo
     monkeypatch.setattr(AP, "_verify", lambda *a: "forced")
     before, mtime = src.read_bytes(), src.stat().st_mtime_ns
     logs = []
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=logs.append) == 1
     assert "MISMATCH" in "\n".join(logs) and "forced" in "\n".join(logs)
     assert src.read_bytes() == before and src.stat().st_mtime_ns == mtime
     assert staged_files(src.parent) == []
@@ -175,7 +193,8 @@ def test_a_verification_failure_is_that_files_mismatch_and_the_run_continues(fac
     monkeypatch.setattr(AP, "_verify", verify)
     first_before = first.read_bytes()
     logs = []
-    assert AP.apply(out, tools={}, approve=("a.jpg", "b.jpg"), log=logs.append) == 1
+    keep(out, "a.jpg", "b.jpg")
+    assert AP.apply(out, tools={}, log=logs.append) == 1
     assert calls == ["a--1", "b--1"]
     assert first.read_bytes() == first_before
     assert second.read_bytes() == (out / "b--1" / "pick.jpg").read_bytes()
@@ -199,7 +218,8 @@ def test_only_names_that_match_nothing_are_reported_and_fail_the_run(factory, tm
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory)
     logs = []
-    assert AP.apply(out, tools={}, only=("nope.jpg",), approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, only=("nope.jpg",), log=logs.append) == 1
     assert sum("nope.jpg" in line for line in logs) == 1
     assert any("matches no file of this run" in line for line in logs)
     assert "Nothing to apply." not in logs
@@ -211,7 +231,8 @@ def test_a_matched_only_name_is_applied_even_when_another_matches_nothing(factor
     src, folder = _lossy_record(out, factory)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
     logs = []
-    assert AP.apply(out, tools={}, only=("photo.jpg", "nope.jpg"), approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, only=("photo.jpg", "nope.jpg"), log=logs.append) == 1
     assert sum("nope.jpg" in line for line in logs) == 1
     assert any("matches no file of this run" in line for line in logs)
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
@@ -222,7 +243,8 @@ def test_dest_receives_the_file_and_the_source_is_untouched(factory, tmp_path, m
     src, folder = _lossy_record(out, factory)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
     before = src.read_bytes()
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), dest=tmp_path / "dest" / "deep", log=lambda _: None) == 0
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, dest=tmp_path / "dest" / "deep", log=lambda _: None) == 0
     assert (tmp_path / "dest" / "deep" / "photo.jpg").read_bytes() == (folder / "pick.jpg").read_bytes()
     assert src.read_bytes() == before
 
@@ -278,7 +300,8 @@ def test_unusable_recorded_scores_fail_closed_before_anything_is_replaced(factor
     _scores(monkeypatch)
     before, mtime = src.read_bytes(), src.stat().st_mtime_ns
     logs = []
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=logs.append) == 1
     assert "MISMATCH" in "\n".join(logs) and "band" in "\n".join(logs)
     assert src.read_bytes() == before and src.stat().st_mtime_ns == mtime
     assert staged_files(src.parent) == []
@@ -291,7 +314,8 @@ def test_unusable_remeasured_scores_fail_closed(factory, tmp_path, monkeypatch, 
     _scores(monkeypatch, **remeasured)
     before = src.read_bytes()
     logs = []
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=logs.append) == 1
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=logs.append) == 1
     assert "MISMATCH" in "\n".join(logs)
     assert src.read_bytes() == before
 
@@ -303,7 +327,8 @@ def test_the_tolerance_boundary(factory, tmp_path, monkeypatch, key, tol):
         out = tmp_path / f"out-{expected}"
         src, folder = _lossy_record(out, factory, scores=recorded)
         _scores(monkeypatch, **{key: recorded[key] + shift})
-        assert AP.apply(out, tools={}, approve=("photo.jpg",), log=lambda _: None) == expected
+        keep(out, "photo.jpg")
+        assert AP.apply(out, tools={}, log=lambda _: None) == expected
         wrote = src.read_bytes() == (folder / "pick.jpg").read_bytes()
         assert wrote == (expected == 0)
 
@@ -314,7 +339,8 @@ def test_a_user_file_named_like_the_old_staging_name_survives(factory, tmp_path,
     bystander = src.with_name(f".imgopt-{src.name}")
     bystander.write_bytes(b"mine")
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=lambda _: None) == 0
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=lambda _: None) == 0
     assert bystander.read_bytes() == b"mine"
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
     assert [p.name for p in src.parent.glob(".imgopt-*")] == [bystander.name]
@@ -325,7 +351,8 @@ def test_a_staged_file_keeps_the_targets_permissions(factory, tmp_path, monkeypa
     src, _ = _lossy_record(out, factory)
     src.chmod(0o640)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=lambda _: None) == 0
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=lambda _: None) == 0
     assert src.stat().st_mode & 0o777 == 0o640
 
 
@@ -340,8 +367,9 @@ def test_dest_refuses_two_records_that_share_a_basename_before_writing(factory, 
     second, _ = _lossy_record(out, other, name="photo.jpg", folder_name="b--1")
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
     dest = tmp_path / "dest"
+    keep(out, "photo.jpg")
     with pytest.raises(UsageError, match="photo.jpg"):
-        AP.apply(out, tools={}, approve=("photo.jpg",), dest=dest, log=lambda _: None)
+        AP.apply(out, tools={}, dest=dest, log=lambda _: None)
     assert not dest.exists()
 
 
@@ -379,8 +407,9 @@ def test_cli_prints_the_tools_line_and_applies(factory, toolset, tmp_path):
     record["candidates"][0].update(_measured(folder, tools))
     (folder / "metrics.json").write_text(json.dumps(record))
     refused = run_cli(out)
-    assert refused.returncode == 1 and "--approve" in refused.stdout
-    proc = run_cli(out, "--approve", "photo.jpg")
+    assert refused.returncode == 1 and "record the human's verdicts" in refused.stdout
+    keep(out, "photo.jpg")
+    proc = run_cli(out)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ffmpeg" in proc.stdout and "re-measured" in proc.stdout
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
@@ -391,8 +420,9 @@ def test_two_records_that_write_one_target_are_refused_before_writing(factory, t
     a, _ = _lossy_record(out, factory, name="a.png", folder_name="a--1", target=factory.root / "a.webp")
     b, _ = _lossy_record(out, factory, name="a.jpg", folder_name="b--1", target=factory.root / "a.webp")
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    keep(out, "a.png", "a.jpg")
     with pytest.raises(UsageError, match=re.escape(str(factory.root / "a.webp"))):
-        AP.apply(out, tools={}, approve=("a.png", "a.jpg"), log=lambda _: None)
+        AP.apply(out, tools={}, log=lambda _: None)
     assert not (factory.root / "a.webp").exists()
 
 
@@ -405,8 +435,9 @@ def test_an_existing_file_that_is_not_the_source_is_never_overwritten(factory, t
     existing.write_bytes(b"someone else's file")
     src, _ = _lossy_record(out, factory, target=factory.root / "photo.webp")
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    keep(out, "photo.jpg")
     with pytest.raises(UsageError, match=re.escape(str(existing))) as info:
-        AP.apply(out, tools={}, approve=("photo.jpg",), dest=dest if with_dest else None, log=lambda _: None)
+        AP.apply(out, tools={}, dest=dest if with_dest else None, log=lambda _: None)
     assert "--dest" in str(info.value)
     assert existing.read_bytes() == b"someone else's file"
 
@@ -415,11 +446,12 @@ def test_a_same_format_resize_may_write_over_its_own_source(factory, tmp_path, m
     out = tmp_path / "out"
     src, folder = _lossy_record(out, factory, resize=80)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
-    assert AP.apply(out, tools={}, approve=("photo.jpg",), log=lambda _: None) == 0
+    keep(out, "photo.jpg")
+    assert AP.apply(out, tools={}, log=lambda _: None) == 0
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
 
 
-def test_only_approved_lossy_picks_are_written(factory, tmp_path, monkeypatch):
+def test_only_kept_lossy_choices_are_written(factory, tmp_path, monkeypatch):
     out = tmp_path / "out"
     first, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
     second, _ = _lossy_record(out, factory, name="b.jpg", folder_name="b--2")
@@ -427,18 +459,11 @@ def test_only_approved_lossy_picks_are_written(factory, tmp_path, monkeypatch):
     monkeypatch.setattr(AP, "_verify", lambda folder, *a: verified.append(folder.name) or "")
     before = second.read_bytes()
     lines = []
-    assert AP.apply(out, tools={}, approve=("a.jpg",), log=lines.append) == 0
-    assert any("not approved, left as it was" in l and "b.jpg" in l for l in lines)
+    keep(out, "a.jpg")
+    assert AP.apply(out, tools={}, log=lines.append) == 0
+    assert any("no verdict yet, left as it was" in l and "b.jpg" in l for l in lines)
     assert verified == ["a--1"] and second.read_bytes() == before
     assert first.read_bytes() == (out / "a--1" / "pick.jpg").read_bytes()
-
-
-def test_an_approval_naming_no_lossy_pick_fails(factory, tmp_path):
-    out = tmp_path / "out"
-    _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
-    lines = []
-    assert AP.apply(out, tools={}, approve=("zzz.jpg",), log=lines.append) == 1
-    assert any("--approve: 'zzz.jpg' matches no file of this run" in l for l in lines)
 
 
 def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolset, tmp_path):
@@ -452,7 +477,8 @@ def test_apply_stops_when_a_metric_tool_changed_since_candidates(factory, toolse
                                     "id": tools["ssimulacra2"].cache_id}}
     meta.write_text(json.dumps(rec))
     lines = []
-    assert AP.apply(out, tools=tools, approve=("a.jpg",), log=lines.append) == 1
+    keep(out, "a.jpg")
+    assert AP.apply(out, tools=tools, log=lines.append) == 1
     assert any("ffmpeg changed since candidates ran" in l for l in lines)
 
 
@@ -466,7 +492,8 @@ def test_a_record_without_tool_ids_is_not_called_changed(factory, toolset, tmp_p
     rec["tools"] = {n: {"path": tools[n].path, "version": "unknown"} for n in ("ffmpeg", "ssimulacra2")}
     meta.write_text(json.dumps(rec))
     lines = []
-    AP.apply(out, tools=tools, approve=("a.jpg",), log=lines.append)
+    keep(out, "a.jpg")
+    AP.apply(out, tools=tools, log=lines.append)
     assert not any("changed since candidates ran" in l for l in lines)
 
 
@@ -488,5 +515,63 @@ def test_only_accepts_a_path_relative_to_the_current_folder(factory, tmp_path, m
     monkeypatch.chdir(src.parent.parent)
     monkeypatch.setattr(AP, "_verify", lambda *a: "")
     rel = f"{src.parent.name}/{src.name}"
-    assert AP.apply(out, tools={}, only=(rel,), approve=(rel,), log=lambda _: None) == 0
+    keep(out, "a.jpg")
+    assert AP.apply(out, tools={}, only=(rel,), log=lambda _: None) == 0
     assert src.read_bytes() == (folder / "pick.jpg").read_bytes()
+
+
+def test_a_rejected_file_is_left_as_it_was(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    src, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
+    keep(out, "a.jpg", verdict="reject")
+    before = src.read_bytes()
+    lines = []
+    assert AP.apply(out, tools={}, log=lines.append) == 0
+    assert src.read_bytes() == before and any("rejected, left as it was" in l for l in lines)
+
+
+def test_lossy_choices_without_any_verdict_are_refused(factory, tmp_path):
+    out = tmp_path / "out"
+    _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
+    lines = []
+    assert AP.apply(out, tools={}, log=lines.append) == 1
+    assert any("record the human's verdicts first" in l for l in lines)
+
+
+def test_two_folders_apply_in_one_call(factory, tmp_path, monkeypatch):
+    one, two = tmp_path / "one", tmp_path / "two"
+    a, _ = _lossy_record(one, factory, name="a.jpg", folder_name="a--1")
+    sub = factory.root / "s"
+    sub.mkdir()
+    b, _ = _lossy_record(two, type(factory)(sub), name="b.jpg", folder_name="b--2")
+    keep(one, "a.jpg")
+    keep(two, "b.jpg")
+    monkeypatch.setattr(AP, "_verify", lambda *x: "")
+    assert AP.apply([one, two], tools={}, log=lambda _: None) == 0
+    assert a.read_bytes() == (one / "a--1" / "pick.jpg").read_bytes()
+    assert b.read_bytes() == (two / "b--2" / "pick.jpg").read_bytes()
+
+
+@pytest.mark.parametrize("verdict, said", [("milder", "asked milder"), ("stronger", "asked stronger")])
+def test_a_file_asked_milder_or_stronger_waits_for_a_new_choice(factory, tmp_path, verdict, said):
+    out = tmp_path / "out"
+    src, _ = _lossy_record(out, factory, name="a.jpg", folder_name="a--1")
+    keep(out, "a.jpg", verdict=verdict)
+    before = src.read_bytes()
+    lines = []
+    assert AP.apply(out, tools={}, log=lines.append) == 0
+    assert src.read_bytes() == before and any(said in l and "left as it was" in l for l in lines)
+
+
+def test_a_kept_choice_that_fails_the_profile_says_so(factory, tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    _, folder = _lossy_record(out, factory)
+    record = json.loads((folder / "metrics.json").read_text())
+    record["candidates"][0]["pass"] = False
+    (folder / "metrics.json").write_text(json.dumps(record))
+    keep(out, "photo.jpg")
+    monkeypatch.setattr(AP, "_verify", lambda *a: "")
+    lines = []
+    assert AP.apply(out, tools={}, log=lines.append) == 0
+    assert any("fails the profile; kept by the human's verdict" in l for l in lines)
+

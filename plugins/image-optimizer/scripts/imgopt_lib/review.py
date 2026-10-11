@@ -205,3 +205,27 @@ def verdict_of(out: Path, record: dict) -> dict | None:
     if entry["verdict"] in ("keep", "milder", "stronger") and entry.get("variant") != (chosen or {}).get("label"):
         return None
     return entry
+
+
+def manifest_rows(rows, *, accepted: bool = False) -> list[dict]:
+    """Per file, where its chosen variant is and where it goes: the contract for an agent that places files
+    itself. ``accepted`` keeps lossless choices nobody rejected and lossy ones the human kept. Largest saving first."""
+    out = []
+    for folder, record in rows:
+        chosen = choice_of(record)
+        entry = verdict_of(folder.parent, record)
+        writes = bool(chosen) and record["verdict"] == "apply"
+        lossy = writes and chosen["kind"] == "lossy"
+        if accepted and not (writes and ((lossy and entry and entry["verdict"] == "keep")
+                                         or (not lossy and not (entry and entry["verdict"] == "reject")))):
+            continue
+        variant = (Path(folder) / chosen["file"]) if chosen else None
+        out.append({"source": record["source"]["path"], "target": record.get("target"),
+                    "variant": str(variant) if variant else None, "exists": bool(variant and variant.is_file()),
+                    "label": chosen["label"] if chosen else None, "kind": chosen["kind"] if chosen else None,
+                    "size": chosen["size"] if chosen else None,
+                    "saved": record["source"]["size"] - chosen["size"] if writes else 0,
+                    "gate": ("pass" if chosen.get("pass") else chosen.get("reason", "")) if chosen else None,
+                    "scores": {k: chosen.get(k) for k in ("ssim", "ss2", "band")} if chosen else {},
+                    "status": record["verdict"], "verdict": entry["verdict"] if entry else None})
+    return sorted(out, key=lambda r: -r["saved"])
