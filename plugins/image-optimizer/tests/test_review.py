@@ -325,7 +325,10 @@ def test_choose_cli_rebuilds_the_page_of_every_folder(tmp_path, capsys):
 
     dirs, a, _ = two_folders(tmp_path)
     assert cli.main(["choose", *map(str, dirs), "--file", a, "--label", "v15000"]) == 0
-    assert f"sheet {dirs[0]} {dirs[1]}" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"sheet {dirs[0]} {dirs[1]}" in out
+    assert "now v15000 (14.6 KB), passes the gates; status: apply (saves 5000 B (25%))" in out
+    assert "verdict:" not in out  # the human's verdicts are keep, reject, milder and stronger
 
 
 def test_record_cli_warns_of_a_keep_switched_to_a_variant_without_crops(tmp_path, capsys):

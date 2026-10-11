@@ -199,8 +199,8 @@ def test_cli_counts_lossy_picks_it_could_not_tile_and_withholds_the_apply_line(t
     (out / "photo--x" / "pick.png").write_bytes(b"not an image")
     proc = run_sheet(out)
     assert proc.returncode == 1
-    assert "No lossy picks" not in proc.stdout
-    assert "1 lossy pick(s) could not be tiled" in proc.stdout
+    assert "No lossy choices" not in proc.stdout
+    assert "1 lossy choice(s) could not be tiled" in proc.stdout
     assert "Next:" not in proc.stdout
     assert "photo--x" in proc.stderr
 
@@ -213,7 +213,7 @@ def test_cli_with_only_lossless_picks_points_at_apply_without_approval(tmp_path,
     path.write_text(json.dumps(record))
     proc = run_sheet(out)
     assert proc.returncode == 0
-    assert "No lossy picks" in proc.stdout
+    assert "No lossy choices" in proc.stdout
     last = proc.stdout.splitlines()[-1]
     assert "apply" in last and "need no verdict" in last and "--approve" not in last
 
@@ -335,6 +335,7 @@ def test_the_page_lists_variants_and_carries_the_fingerprint(tmp_path, factory):
     [f] = data["files"]
     assert data["fingerprint"] and f["choice"] == "pngquant-c8"
     assert [v["label"] for v in f["variants"]] == ["pngquant-c8"] and f["default_verdict"] == ""
+    assert f["choice_kind"] == "lossy" and "pick_kind" not in f
     assert data["block_header"] == RV.BLOCK_HEADER
     # The header and the JSON are joined by a JS "\n" escape: a raw newline inside the literal breaks the script.
     assert "DATA.block_header+'\\n'+JSON.stringify(" in page.read_text()

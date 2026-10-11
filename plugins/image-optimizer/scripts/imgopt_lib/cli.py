@@ -183,9 +183,9 @@ def cmd_sheet(args) -> int:
         for t in tiles:
             print(f"  {'REQUIRED' if t.required else 'optional':8} {t.path}   {Path(t.source).name} [{t.window}]")
     if untiled:
-        print(f"{untiled} lossy pick(s) could not be tiled (reasons on stderr); do not keep them unseen.")
+        print(f"{untiled} lossy choice(s) could not be tiled (reasons on stderr); do not keep them unseen.")
     elif not lossy:
-        print("No lossy picks: no tiles to view.")
+        print("No lossy choices: no tiles to view.")
     for problem in problems:
         print(f"  problem: {problem}", file=sys.stderr)
     quoted_page = shlex.quote(str(page))
@@ -297,7 +297,7 @@ def cmd_choose(args) -> int:
         gate = "passes the gates" if chosen.get("pass") else f"FAILS the gates ({chosen.get('reason', '')})"
         note = f"; {C.removes(chosen)} (tell the human)" if C.removes(chosen) else ""
         print(f"{record['source']['path']}: now {chosen['label']} ({C.kb(chosen['size'])}), {gate}; "
-              f"verdict: {record['verdict']} ({record['verdict_reason']}){note}")
+              f"status: {record['verdict']} ({record['verdict_reason']}){note}")
     folders = " ".join(shlex.quote(str(Path(o).resolve())) for o in args.out)
     print(f"Next: rebuild the page: python3 {shlex.quote(str(SCRIPT))} sheet {folders}")
     return 0

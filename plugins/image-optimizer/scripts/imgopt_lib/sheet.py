@@ -238,7 +238,7 @@ function card(f){
 function render(){
   const sort=document.getElementById('sort').value, filter=document.getElementById('filter').value;
   const rows=DATA.files.filter(f=>filter==='all'||(filter==='apply'&&f.verdict==='apply')||(filter==='untouched'&&f.verdict!=='apply')
-    ||(filter==='lossy'&&f.pick_kind==='lossy')||(filter==='open'&&f.variants.length&&!VERDICTS.has(f.name)));
+    ||(filter==='lossy'&&f.choice_kind==='lossy')||(filter==='open'&&f.variants.length&&!VERDICTS.has(f.name)));
   rows.sort((a,b)=>sort==='name'?a.name.localeCompare(b.name):sort==='pct'?(b.saved/(b.before||1))-(a.saved/(a.before||1)):b.saved-a.saved);
   const main=document.getElementById('cards'); main.textContent='';
   for(const f of rows) main.append(card(f));
@@ -341,7 +341,7 @@ def build(outs, *, problems: list[str] | None = None) -> tuple[list[Tile], Path]
         files.append({"name": record["source"]["path"], "meta": _meta(record, chosen),
                       "before_src": url(sources[0].name) if sources else "",
                       "choice": chosen["label"] if chosen else None, "variants": variants,
-                      "verdict": record["verdict"], "pick_kind": chosen["kind"] if chosen else None,
+                      "verdict": record["verdict"], "choice_kind": chosen["kind"] if chosen else None,
                       "before": record["source"]["size"], "saved": saved,
                       "default_verdict": "keep" if lossless_write else "",
                       "recorded": {"verdict": entry["verdict"], "note": entry.get("note", "")} if entry else None,
