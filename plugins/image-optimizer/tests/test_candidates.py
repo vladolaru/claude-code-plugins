@@ -1144,7 +1144,7 @@ def test_rungs_measured_at_once_give_the_records_of_one_at_a_time(factory, tools
 def _scripted_rungs(script: dict, default: str):
     """A stand-in for candidates._run_rung: each rung label passes (an identical copy), fails on measured scores,
     errors, or is discarded as not smaller, as ``script`` says; every other rung does ``default``."""
-    def run(rung, key, inputs, folder, *rest):
+    def run(rung, key, folder, *rest):
         rec = {"key": key, "label": rung.label, "tool": rung.tool, "kind": rung.kind, "band_gated": rung.palette}
         how = script.get(rung.label, default)
         if how == "error":

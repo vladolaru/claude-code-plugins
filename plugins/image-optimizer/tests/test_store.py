@@ -232,7 +232,7 @@ def test_a_lossy_rung_that_returns_the_source_leaves_the_original_measurable(fac
     def hands_back_the_source(rung, *, inputs, out_dir, tools):
         if rung.tool == "pngquant":
             out = Path(out_dir) / f"{rung.label}{rung.ext}"
-            shutil.copyfile(inputs["source"], out)
+            shutil.copyfile(src, out)  # the source's own bytes, whatever the rung reads
             return out
         return real(rung, inputs=inputs, out_dir=out_dir, tools=tools)
 

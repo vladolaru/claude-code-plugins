@@ -203,8 +203,10 @@ class _Pixels:
     first: decoding, the sRGB conversion and a resize cost seconds on a large photo, and a run whose candidates
     all come from the working folder or the store needs none of them."""
 
-    def __init__(self, src: Path, ref_path: Path, resize: int | None, flatten_ref: bool, folder: Path):
+    def __init__(self, src: Path, ref_path: Path, resize: int | None, flatten_ref: bool, folder: Path,
+                 ref_is_source: bool):
         self.src, self.ref_path, self.resize, self.flatten_ref, self.folder = src, ref_path, resize, flatten_ref, folder
+        self.ref_is_source = ref_is_source  # the reference has the source's bytes (no --ref, or the same file)
         self._made: dict = {}
         self._lock = threading.RLock()  # a preparation may ask for another one (the reference is the source)
 
@@ -231,32 +233,24 @@ class _Pixels:
         """The reference as stored, which the reviewer one-liner compares: the prepared one unless resized."""
         return self._once("shown", lambda: display_pixels(self.ref_path) if self.resize else self.reference())
 
-    def cache(self, measure_dir: Path) -> metrics.ReferenceCache:
-        return self._once("cache", lambda: metrics.ReferenceCache(self.measured(), measure_dir))
+    def reference_cache(self, measure_dir: Path) -> metrics.ReferenceCache:
+        """The reference prepared for measuring, made in the first caller's measurement folder (one per run)."""
+        return self._once("reference_cache", lambda: metrics.ReferenceCache(self.measured(), measure_dir))
 
-    def input(self, name: str) -> Path:
-        """An encoder input file, written the first time a rung that reads it encodes."""
-        def make():
-            path = self.folder / PIXEL_FILES[name]
-            flat = None if name == "pixels" else self._once("flat", lambda: flatten(self.source(), "white"))
-            image = {"pixels": self.source() if name == "pixels" else None, "pixels_flat": flat,
-                     "pixels_gray": flat.convert("L") if name == "pixels_gray" else None, "pixels_ppm": flat}[name]
-            image.save(path)
-            return path
-        return self._once(name, make)
+    def path(self, name: str) -> Path:
+        """The file a rung's encoder reads (``Rung.input``): the source itself, or a pixel file written the first
+        time a rung that reads it encodes."""
+        if name == "source":
+            return self.src
+        flat = lambda: self._once("flat", lambda: flatten(self.source(), "white"))
+        image = {"pixels": self.source, "pixels_flat": flat, "pixels_gray": lambda: flat().convert("L"),
+                 "pixels_ppm": flat}[name]
 
-
-class _Inputs(dict):
-    """`ladder.generate`'s inputs: the source and its flags as given, each pixel file made when first read."""
-
-    def __init__(self, pixels: _Pixels | None, **given):
-        super().__init__(**given)
-        self.pixels = pixels
-
-    def __missing__(self, name: str) -> Path:
-        if self.pixels is None or name not in PIXEL_FILES:
-            raise KeyError(name)
-        return self.pixels.input(name)
+        def write() -> Path:
+            target = self.folder / PIXEL_FILES[name]
+            image().save(target)
+            return target
+        return self._once(name, write)
 
 
 def keyed_tools(rung: ladder.Rung) -> list[str]:
@@ -302,11 +296,10 @@ def _perfect(rec: dict) -> dict:
     return rec
 
 
-def _run_rung(rung, key, inputs, folder, facts, source_kinds, pixels, tools, can_measure, size_limit,
-              measure_dir) -> dict:
+def _run_rung(rung, key, folder, facts, source_kinds, pixels, tools, can_measure, size_limit, measure_dir) -> dict:
     rec = {"key": key, "label": rung.label, "tool": rung.tool, "kind": rung.kind, "band_gated": rung.palette}
     try:
-        out = ladder.generate(rung, inputs=inputs, out_dir=folder, tools=tools)
+        out = ladder.generate(rung, inputs={rung.input: pixels.path(rung.input)}, out_dir=folder, tools=tools)
     except ladder.EncodeError as error:
         rec["error"] = str(error)
         if isinstance(error, ladder.EncoderRefused):
@@ -314,14 +307,13 @@ def _run_rung(rung, key, inputs, folder, facts, source_kinds, pixels, tools, can
         return rec
     rec["file"], rec["size"] = out.name, out.stat().st_size
     try:
-        return _judge(rec, rung, out, inputs, facts, source_kinds, pixels, tools, can_measure, size_limit,
-                      measure_dir)
+        return _judge(rec, rung, out, facts, source_kinds, pixels, tools, can_measure, size_limit, measure_dir)
     except READ_FAILURES as error:
         rec["error"] = str(error)
         return rec
 
 
-def _judge(rec, rung, out, inputs, facts, source_kinds, pixels, tools, can_measure, size_limit, measure_dir) -> dict:
+def _judge(rec, rung, out, facts, source_kinds, pixels, tools, can_measure, size_limit, measure_dir) -> dict:
     """Read the encoded file and fill in its metadata verdict and scores. ``size_limit`` is the source size of
     an in-place job: a lossy candidate that is not smaller cannot be picked, so it is not measured."""
     ofacts = read_facts(out)
@@ -335,9 +327,9 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, pixels, tools, can_measu
             rec["discarded"] = why
             return rec
     if facts.format == "gif" or facts.frames > 1:
-        if not metrics.frames_identical(inputs["source"], out):
+        if not metrics.frames_identical(pixels.src, out):
             rec["discarded"] = f"{rung.tool} changed the frames"
-        elif not inputs["ref_is_source"]:
+        elif not pixels.ref_is_source:
             rec["discarded"] = "the reference is not the source; GIFs and other animated images support only lossless identity"
         else:
             _perfect(rec)
@@ -355,7 +347,7 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, pixels, tools, can_measu
         rec["discarded"] = "pixels differ and the metric tools are absent (lossless profile)"
         return rec
     try:
-        s = metrics.measure(ref_img, cand, tools, measure_dir, ref_cache=pixels.cache(measure_dir))
+        s = metrics.measure(ref_img, cand, tools, measure_dir, ref_cache=pixels.reference_cache(measure_dir))
     except metrics.MetricError as error:
         rec["error"] = str(error)
         return rec
@@ -363,10 +355,10 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, pixels, tools, can_measu
     return rec
 
 
-def _svg_rung(rung, key, inputs, folder, src, tools) -> dict:
+def _svg_rung(rung, key, folder, src, tools) -> dict:
     rec = {"key": key, "label": rung.label, "tool": rung.tool, "kind": "lossless", "band_gated": False}
     try:
-        out = ladder.generate(rung, inputs=inputs, out_dir=folder, tools=tools)
+        out = ladder.generate(rung, inputs={"source": src}, out_dir=folder, tools=tools)
         rec["file"], rec["size"], rec["progressive"] = out.name, out.stat().st_size, False
         if not metrics.svg_identical(tools["rsvg-convert"].path, src, out, folder):
             rec["discarded"] = "svgo changed the rendering"
@@ -498,7 +490,8 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         rungs, target_fmt = plan.rungs, plan.out_format
         source_info = {"format": facts.format, "width": facts.width, "height": facts.height, "colors": facts.colors,
                        "frames": facts.frames}
-        pixels = _Pixels(src, ref_path, opts.resize, target_fmt == "jpeg" and facts.has_alpha, folder)
+        pixels = _Pixels(src, ref_path, opts.resize, target_fmt == "jpeg" and facts.has_alpha, folder,
+                         ref_is_source=ref_hash == src_hash)
         if not known:
             pixels.measured()  # before the folder exists: an unconvertible profile skips the file cleanly
         folder.mkdir(parents=True, exist_ok=True)
@@ -535,7 +528,6 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
     if waived_here:
         n_waived = sum(1 for r in skipped if set(r.tools) & set(waived_here))
         notes.append(f"skipped {n_waived} rung(s), tools waived: {', '.join(waived_here)}")
-    inputs = _Inputs(pixels, source=src, ref_is_source=ref_hash == src_hash)
     # A same-format job rewrites the source itself (a resize too); only a new format gets a new name.
     target = src if target_fmt == fmt else src.with_suffix(EXT_BY_FORMAT[target_fmt])
     size = src.stat().st_size
@@ -552,8 +544,8 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
             if stored is not None and ST.restore(stored, folder):
                 return _reuse(stored), "store"
             if fmt == "svg":
-                return _svg_rung(rung, key, inputs, folder, src, tools), "encoded"
-            return _run_rung(rung, key, inputs, folder, facts, source_kinds, pixels, tools, can_measure,
+                return _svg_rung(rung, key, folder, src, tools), "encoded"
+            return _run_rung(rung, key, folder, facts, source_kinds, pixels, tools, can_measure,
                              size if in_place else None, Path(measure_dir)), "encoded"
 
         done: dict[str, tuple[dict, str]] = {}
