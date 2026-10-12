@@ -408,8 +408,9 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         source_info = {"format": facts.format, "width": facts.width, "height": facts.height, "colors": facts.colors,
                        "frames": facts.frames}
         # Prepared before the folder exists: an unconvertible profile skips the file cleanly.
-        ref_img = display_pixels(ref_path, width=opts.resize)
         pix = display_pixels(src, width=opts.resize)
+        # Without --ref the reference is the source: its pixels are prepared once (decode, sRGB, resize).
+        ref_img = display_pixels(ref_path, width=opts.resize) if src in opts.refs else pix
         folder.mkdir(parents=True, exist_ok=True)
         if target_fmt == "jpeg" and facts.has_alpha:
             ref_img = flatten(ref_img, "white").convert("RGBA")
@@ -426,7 +427,7 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         if "pixels_ppm" in needed:
             flat.save(folder / "pixels.ppm")
         if facts.device_profile:
-            mean, peak = srgb_shift(src)
+            mean, peak = srgb_shift(src, pix)
             notes.append(f"device colour profile '{facts.icc_desc}': pixel candidates are converted to sRGB "
                          f"(the conversion alone shifts mean {mean:.1f}, max {peak} of 255)")
         if facts.orientation != 1:

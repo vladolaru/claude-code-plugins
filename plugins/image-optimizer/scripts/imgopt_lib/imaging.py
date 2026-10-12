@@ -259,13 +259,6 @@ def _oriented(path: Path) -> tuple[Image.Image, bytes | None]:
         return ImageOps.exif_transpose(im), icc
 
 
-def _display(path: Path) -> tuple[Image.Image, Image.Image | None]:
-    """(oriented RGBA as stored, the same converted to sRGB or None without a profile)."""
-    im, icc = _oriented(path)
-    raw = im.convert("RGBA")
-    return raw, (_convert(im, icc, Path(path).name) if icc else None)
-
-
 def resize_width(img: Image.Image, width: int) -> Image.Image:
     height = max(1, round(img.height * width / img.width))
     return img.resize((width, height), Image.LANCZOS)
@@ -291,12 +284,13 @@ def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:
     return rgba
 
 
-def srgb_shift(path: Path) -> tuple[float, int]:
-    """How far converting the device profile to sRGB moves pixels (mean, max of 255)."""
-    raw, converted = _display(path)
-    if converted is None:
-        return 0.0, 0
-    diff = ImageChops.difference(raw.convert("RGB"), converted.convert("RGB"))
+def srgb_shift(path: Path, shown: Image.Image) -> tuple[float, int]:
+    """How far converting the device profile to sRGB moves pixels (mean, max of 255): ``path`` as stored against
+    ``shown``, its display_pixels at any width, so the conversion is not run again for a note."""
+    raw = _oriented(path)[0].convert("RGBA")
+    if raw.size != shown.size:
+        raw = resize_width(raw, shown.width)
+    diff = ImageChops.difference(raw.convert("RGB"), shown.convert("RGB"))
     mean = sum(ImageStat.Stat(diff).mean) / 3
     peak = max(high for _, high in diff.getextrema())
     return mean, peak

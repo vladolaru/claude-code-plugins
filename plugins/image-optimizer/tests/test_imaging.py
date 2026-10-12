@@ -33,7 +33,7 @@ def test_display_pixels_converts_a_device_profile_to_srgb(factory, device_icc):
     facts = I.read_facts(tagged)
     assert facts.device_profile and not I.is_srgb(facts.icc_desc)
     assert I.display_pixels(tagged).tobytes() != I.display_pixels(plain).tobytes()
-    mean, peak = I.srgb_shift(tagged)
+    mean, peak = I.srgb_shift(tagged, I.display_pixels(tagged))
     assert mean > 0 and peak > 0
 
 
@@ -81,7 +81,7 @@ def test_display_pixels_converts_a_grey_profile_in_its_native_mode(tmp_path):
     path = tmp_path / "grey.png"
     Image.new("L", (4, 4), 100).save(path, icc_profile=icc)
     assert I.display_pixels(path).getpixel((0, 0)) == (119, 119, 119, 255)
-    assert I.srgb_shift(path)[1] > 0
+    assert I.srgb_shift(path, I.display_pixels(path))[1] > 0
 
 
 def test_display_pixels_keeps_alpha_out_of_a_grey_profile_transform(tmp_path):
@@ -104,8 +104,6 @@ def test_display_pixels_names_the_file_when_the_profile_is_unreadable(tmp_path):
     Image.new("RGB", (4, 4), (10, 20, 30)).save(path, icc_profile=b"not a profile")
     with pytest.raises(I.ImagingError, match="garbage-icc.png"):
         I.display_pixels(path)
-    with pytest.raises(I.ImagingError, match="garbage-icc.png"):
-        I.srgb_shift(path)
 
 
 def test_display_pixels_converts_a_palette_image_tagged_with_a_grey_profile(tmp_path):

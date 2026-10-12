@@ -1190,6 +1190,16 @@ def test_a_choice_survives_an_interrupted_rerun(factory, toolset, tmp_path, monk
     assert r["choice"] == "jpegoptim-m50.jpg"
 
 
+def test_a_source_is_converted_to_srgb_once_per_run(factory, toolset, device_icc, tmp_path, monkeypatch):
+    # without --ref the reference is the source; the colour note reuses the converted pixels too
+    tools = toolset("recompress", "lossless", {"png"})
+    src = factory.photo(name="p3.png", icc=device_icc).resolve()
+    converted, real = [], I._convert
+    monkeypatch.setattr(I, "_convert", lambda im, icc, label: (converted.append(label), real(im, icc, label))[1])
+    [r] = C.run([src], opts(tmp_path / "out", use_store=False), tools, log=quiet)
+    assert converted.count("p3.png") == 1 and any("device colour profile" in n for n in r["notes"])
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]
