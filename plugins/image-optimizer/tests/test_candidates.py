@@ -147,7 +147,8 @@ def test_cache_reuses_unchanged_candidates_and_invalidates_on_tool_version(facto
 
 
 def counting_generate(monkeypatch):
-    """Wrap ladder.generate; the returned list records the label of every rung actually encoded."""
+    """Wrap ladder.generate; the returned list records the label of every rung actually encoded, in the order
+    they started, which a file's parallel rungs make arbitrary: compare it sorted when it holds more than one."""
     real, calls = ladder.generate, []
 
     def spy(rung, **kw):
@@ -172,7 +173,7 @@ def test_cache_invalidates_when_pillow_changes(factory, toolset, tmp_path, monke
     C.run([src], opts(tmp_path / "out"), tools, log=quiet)
     assert calls == []
     C.run([src], opts(tmp_path / "out"), with_version(tools, "pillow", "99.0"), log=quiet)
-    assert calls == ["oxipng", "oxipng-zopfli"]
+    assert sorted(calls) == ["oxipng", "oxipng-zopfli"]  # in parallel, so in either order
 
 
 def test_cache_invalidates_when_rsvg_convert_changes(tmp_path, toolset, monkeypatch):
