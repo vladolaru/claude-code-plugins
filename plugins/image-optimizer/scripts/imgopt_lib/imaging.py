@@ -82,6 +82,10 @@ class Facts:
         """The width a viewer sees: orientations 5 to 8 turn the image a quarter."""
         return self.height if self.orientation in (5, 6, 7, 8) else self.width
 
+    @property
+    def display_height(self) -> int:
+        return self.width if self.orientation in (5, 6, 7, 8) else self.height
+
 
 def is_srgb(desc: str | None) -> bool:
     return bool(desc) and "srgb" in desc.lower().replace(" ", "").replace("-", "")
@@ -263,9 +267,13 @@ def _oriented(path: Path) -> tuple[Image.Image, bytes | None]:
         return ImageOps.exif_transpose(im), icc
 
 
+def resized_size(size: tuple[int, int], width: int) -> tuple[int, int]:
+    """``size`` scaled to ``width``, keeping its proportions: the one rule for every resize and its report."""
+    return width, max(1, round(size[1] * width / size[0]))
+
+
 def resize_width(img: Image.Image, width: int) -> Image.Image:
-    height = max(1, round(img.height * width / img.width))
-    return img.resize((width, height), Image.LANCZOS)
+    return img.resize(resized_size(img.size, width), Image.LANCZOS)
 
 
 def display_pixels(path: Path, *, width: int | None = None) -> Image.Image:

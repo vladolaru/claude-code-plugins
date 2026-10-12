@@ -48,7 +48,7 @@ from . import ladder, metrics
 from . import store as ST
 from .formats import EXT_BY_FORMAT, format_of, subdir_name
 from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
-                      srgb_shift)
+                      resized_size, srgb_shift)
 from .store import sha256  # also `candidates.sha256`, which `apply` and the tests import
 from .tools import describe
 from .workdirs import folder_size, mark, replace_with
@@ -511,10 +511,8 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         notes.append(f"EXIF orientation {facts.orientation}: lossless candidates keep the tag, "
                      "pixel candidates have it applied")
     if facts and opts.resize:
-        shown_w, shown_h = (facts.height, facts.width) if facts.orientation in (5, 6, 7, 8) else (facts.width,
-                                                                                                 facts.height)
-        notes.append(f"resized {facts.width}x{facts.height} -> {opts.resize}x"
-                     f"{max(1, round(shown_h * opts.resize / shown_w))} (Lanczos); "
+        width, height = resized_size((facts.display_width, facts.display_height), opts.resize)
+        notes.append(f"resized {facts.width}x{facts.height} -> {width}x{height} (Lanczos); "
                      "the reference is scaled the same way")
     if src in opts.refs:
         notes.append(f"measured against {ref_path}")

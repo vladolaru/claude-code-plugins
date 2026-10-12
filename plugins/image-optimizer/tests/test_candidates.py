@@ -1344,6 +1344,15 @@ def test_a_new_pillow_build_prepares_the_reference_again(factory, toolset, tmp_p
     assert reference.read_bytes() != b"made by the old build"
 
 
+def test_the_resize_note_names_the_size_the_reference_has(factory, toolset, tmp_path):
+    tools = toolset("prepare", "high", {"jpeg"})
+    src = factory.photo(size=(160, 80), orientation=6).resolve()  # shown 80 wide, 160 tall
+    [r] = C.run([src], opts(tmp_path / "out", "high", resize=40), tools, log=quiet)
+    [reference] = list((tmp_path / "out").glob("*/reference.png"))
+    width, height = Image.open(reference).size
+    assert f"resized 160x80 -> {width}x{height} (Lanczos)" in " ".join(r["notes"]) and (width, height) == (40, 80)
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]
