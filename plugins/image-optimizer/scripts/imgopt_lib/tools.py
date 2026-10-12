@@ -60,7 +60,7 @@ ADDS = {
     "avifenc": "AVIF encoder",
 }
 
-BREW = {"jpegoptim": "jpegoptim", "jpegtran": "mozjpeg", "cjpeg": "mozjpeg", "oxipng": "oxipng",
+BREW = {"jpegtran": "mozjpeg", "cjpeg": "mozjpeg", "oxipng": "oxipng",
         "pngquant": "pngquant", "gifsicle": "gifsicle", "rsvg-convert": "librsvg", "ffmpeg": "ffmpeg",
         "ssimulacra2": "jpeg-xl",
         "butteraugli_main": "jpeg-xl", "cwebp": "webp", "avifenc": "libavif"}
@@ -80,6 +80,13 @@ OTHER = {"pillow": "python3 -m pip install --user pillow", "svgo": "npm install 
                     "-DJPEGLI_ENABLE_OPENEXR=OFF -DJPEGLI_BUNDLE_LIBPNG=ON -DCMAKE_DISABLE_FIND_PACKAGE_GIF=ON "
                     "-DCMAKE_DISABLE_FIND_PACKAGE_JPEG=ON && cmake --build build --target cjpegli --parallel, "
                     "then put build/tools/cjpegli on PATH",
+         # Homebrew's jpegoptim links libjpeg-turbo, so a missing one is built against Homebrew's keg-only
+         # mozjpeg instead, statically, so it loads only system libraries (see MOZJPEG_MARK).
+         "jpegoptim": "build jpegoptim against mozjpeg (needs a C compiler): brew install mozjpeg && "
+                      "curl -fsSL https://github.com/tjko/jpegoptim/archive/refs/tags/v1.5.6.tar.gz | tar xz && "
+                      "cd jpegoptim-1.5.6 && ./configure --with-libjpeg=$(brew --prefix mozjpeg) && "
+                      "make LIBS=\"$(brew --prefix mozjpeg)/lib/libjpeg.a -lm\", then put jpegoptim on PATH "
+                      "ahead of any other copy (for example ~/.local/bin)",
          "oxipng": "cargo install oxipng"}
 
 # Encoders required whenever the ladder runs them, with no waiver: removing jpegli cost 4.6-15 points under
@@ -98,6 +105,12 @@ MOZJPEG_ONLY = frozenset({"jpegtran", "cjpeg"})
 # suggests the Homebrew install when one of these resolves to the bundle; it never blocks. The bundled
 # oxipng 9.0.0 is refused (MIN_MAJOR).
 FRESHER_ON_BREW = frozenset({"pngquant", "gifsicle"})
+# How a jpegoptim shows it encodes with mozjpeg: no version output names the library, but mozjpeg's version
+# string sits in a static build's binary or in the library ImageOptim ships beside its copy. jpegoptim linked
+# to libjpeg-turbo (Homebrew's, and apt's) still works: on 12 benchmark JPEGs under `high` it lost 4 of the 5
+# picks the mozjpeg build won and the picks came out 1% larger in all (2026-10-12), so doctor only suggests
+# the build. jpegoptim 1.5.6 and ImageOptim's 1.4.4, both on mozjpeg 4.1.5, made the same picks.
+MOZJPEG_MARK = b"mozjpeg version"
 # svgo 3's preset-default removes viewBox and <title>, which the bundled config (written for 4) does not stop.
 # oxipng 9 (the ImageOptim bundle's) ran the zopfli rung about 10x slower than oxipng 10 on 1.6 MP
 # illustrations (79 s against 8.5 s per file) and saved 0.2 points there against 1.1 (benchmark corpus,
@@ -201,6 +214,20 @@ def _locations(name: str, env: Env, source: str) -> list[Path]:
         return [k / name for k in env.kegs]
     found = shutil.which(name, path=env.path)
     return [Path(found)] if found else []
+
+
+def links_mozjpeg(path: Path) -> bool:
+    """Whether the binary at ``path`` encodes with mozjpeg: its own bytes, or a JPEG library beside it, carry
+    MOZJPEG_MARK."""
+    path = Path(path)
+    beside = [p for p in path.parent.glob("*jpeg*") if p.suffix in (".dylib", ".so") or ".so." in p.name]
+    for candidate in (path, *beside):
+        try:
+            if MOZJPEG_MARK in candidate.read_bytes():
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def probe_version(path: Path, name: str) -> str:
@@ -364,6 +391,11 @@ def report(chk: Check, *, job: str, profile: str, platform: str | None = None) -
         lines.append("Older copies from the ImageOptim bundle (it updates only with ImageOptim): "
                      + ", ".join(stale) + ". Suggest to the human; this does not block:")
         lines += ["  " + line for line in install_lines(stale, platform)]
+    jpegoptim = chk.tools.get("jpegoptim")
+    if "jpegoptim" in req.all and jpegoptim and jpegoptim.ok and not links_mozjpeg(Path(jpegoptim.path)):
+        lines.append(f"jpegoptim at {jpegoptim.path} is not linked against mozjpeg, so its lossy levels lose most "
+                     "picks to the other encoders. Suggest to the human; this does not block:")
+        lines.append("  " + OTHER["jpegoptim"])
     blockers = chk.missing_required + chk.missing_quality
     for name in blockers:
         lines.append(f"  - {name}: {ADDS[name]}")

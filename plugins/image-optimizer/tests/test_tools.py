@@ -112,7 +112,7 @@ def test_report_names_what_each_missing_tool_adds_and_one_install_line():
     req = T.Requirements(("pillow",), ("jpegoptim", "pngquant"), ())
     text = T.report(T.check(req, env()), job="recompress", profile="high", platform="darwin")
     assert "jpegoptim -m quality ladder" in text
-    assert "brew install jpegoptim pngquant" in text
+    assert "brew install pngquant" in text and T.OTHER["jpegoptim"] in text
     assert "BLOCKED" in text
 
 
@@ -251,6 +251,31 @@ def test_doctor_suggests_homebrew_for_tools_found_only_in_the_bundle(tmp_path):
     text = T.report(T.check(req, env([tmp_path / "bin"], bundle=tmp_path / "bundle")), job="recompress",
                     profile="lossless", platform="darwin")
     assert "Older copies" not in text and "Ready." in text
+
+
+def test_a_jpegoptim_carries_mozjpeg_in_its_binary_or_a_library_beside_it(tmp_path):
+    turbo = fake(tmp_path / "brew", "jpegoptim", "jpegoptim v1.5.6")
+    static = fake(tmp_path / "built", "jpegoptim", "jpegoptim v1.5.6")
+    static.write_text(static.read_text() + "# mozjpeg version 4.1.5 (build 20231012)\n")
+    bundled = fake(tmp_path / "bundle", "jpegoptim", "jpegoptim v1.4.4")
+    (tmp_path / "bundle" / "libimageoptimjpeg.dylib").write_bytes(b"\0mozjpeg version 4.1.5\0")
+    assert not T.links_mozjpeg(turbo) and T.links_mozjpeg(static) and T.links_mozjpeg(bundled)
+
+
+def test_doctor_suggests_the_mozjpeg_build_for_a_jpegoptim_linked_to_libjpeg_turbo(tmp_path):
+    fake(tmp_path / "bin", "jpegoptim", "jpegoptim v1.5.6")
+    req = T.Requirements(("pillow",), ("jpegoptim",), ())
+    text = T.report(T.check(req, env([tmp_path / "bin"])), job="recompress", profile="high", platform="darwin")
+    assert "not linked against mozjpeg" in text and "Ready." in text  # a suggestion; it does not block
+    assert T.OTHER["jpegoptim"] in text and "--with-libjpeg" in T.OTHER["jpegoptim"]
+    (tmp_path / "bin" / "jpegoptim").write_text("#!/bin/sh\necho 'jpegoptim v1.5.6' >&2\n# mozjpeg version 4.1.5\n")
+    text = T.report(T.check(req, env([tmp_path / "bin"])), job="recompress", profile="high", platform="darwin")
+    assert "mozjpeg" not in text
+
+
+def test_a_missing_jpegoptim_is_built_against_mozjpeg_not_installed_from_homebrew():
+    lines = T.install_lines(["jpegoptim", "pngquant"], platform="darwin")
+    assert lines[0] == "brew install pngquant" and T.OTHER["jpegoptim"] in lines
 
 
 def test_a_cjpegli_that_cannot_start_is_reported_missing(tmp_path):
