@@ -1144,6 +1144,34 @@ def test_a_variant_chosen_by_hand_is_measured_past_the_stop(factory, toolset, tm
     assert labels == ["jpegoptim-m95", "jpegoptim-m90", "jpegoptim-m50"] and r["choice"] == "jpegoptim-m50.jpg"
 
 
+def test_a_choice_survives_an_interrupted_rerun(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src, out = factory.photo().resolve(), tmp_path / "out"
+    monkeypatch.setattr(C, "_run_rung", _scripted_rungs({}, "pass"))
+    C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
+    [meta] = list(out.glob("*/metrics.json"))
+    record = json.loads(meta.read_text())
+    record["choice"] = "jpegoptim-m50.jpg"
+    meta.write_text(json.dumps(record))
+    for f in meta.parent.glob("*.jpg"):  # nothing reusable: the re-run measures every rung again
+        f.unlink()
+    scripted, calls = _scripted_rungs({}, "pass"), []
+
+    def interrupted(rung, *args):
+        calls.append(rung.label)
+        if len(calls) == 3:
+            raise KeyboardInterrupt
+        return scripted(rung, *args)
+
+    monkeypatch.setattr(C, "_run_rung", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
+    assert json.loads(meta.read_text())["complete"] is False  # m50 was not measured again before the stop
+    monkeypatch.setattr(C, "_run_rung", _scripted_rungs({"lossless-jpegoptim": "pass"}, "fail"))
+    [r] = C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
+    assert r["choice"] == "jpegoptim-m50.jpg"
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]

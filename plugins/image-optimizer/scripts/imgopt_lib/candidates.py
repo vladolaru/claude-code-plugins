@@ -172,13 +172,16 @@ def _record_skip(folder: Path, why: str) -> None:
 
 
 def _previous(path: Path) -> tuple[dict, str | None]:
-    """(the last record's candidates by key, the key of the variant someone chose by hand, if any)."""
+    """(the last record's candidates by key, the key of the variant someone chose by hand, if any). A complete
+    record names the choice by file (``choice``); a partial one, written while a run measures, carries its key
+    (``choice_key``), because the chosen variant may not be measured again yet when the run is interrupted."""
     if not path.is_file():
         return {}, None
     try:
         record = json.loads(path.read_text())
         chosen = choice_of(record) if record.get("choice") else None
-        return {c["key"]: c for c in record.get("candidates", []) if "key" in c}, (chosen or {}).get("key")
+        return ({c["key"]: c for c in record.get("candidates", []) if "key" in c},
+                record.get("choice_key") or (chosen or {}).get("key"))
     except (json.JSONDecodeError, KeyError):
         return {}, None
 
@@ -489,7 +492,7 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
                 streak = 0 if rec["pass"] else streak + ("ssim" in rec)
                 with lock:  # the partial record lets an interrupted run resume (it is read by key, not order)
                     done[rung.label] = (rec, origin)
-                    write_record(folder, {"schema": SCHEMA, "complete": False,
+                    write_record(folder, {"schema": SCHEMA, "complete": False, "choice_key": chosen_key,
                                           "candidates": [r for r, _ in done.values()]})
             return skipped
 
