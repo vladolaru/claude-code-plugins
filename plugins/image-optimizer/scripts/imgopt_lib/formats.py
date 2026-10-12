@@ -24,19 +24,54 @@ def format_of(path: Path) -> str | None:
     return FORMAT_BY_EXT.get(Path(path).suffix.lower())
 
 
-def _ignored(folder: Path, files: list[Path]) -> set[Path]:
-    """The files git ignores under ``folder``; empty outside a work tree or without git."""
-    if not files:
-        return set()
-    rel = "\0".join(str(f.relative_to(folder)) for f in files)
+def _git(folder: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess | None:
+    """``git -C folder <args>``, or None when git cannot run."""
     try:
-        proc = subprocess.run(["git", "-C", str(folder), "check-ignore", "--stdin", "-z"], input=rel,
-                              capture_output=True, text=True, timeout=60)
+        return subprocess.run(["git", "-C", str(folder), *args], input=stdin, capture_output=True, text=True,
+                              timeout=60)
     except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _repo_root(folder: Path) -> Path | None:
+    proc = _git(folder, "rev-parse", "--show-toplevel")
+    return Path(proc.stdout.strip()).resolve() if proc and proc.returncode == 0 else None
+
+
+def _check_ignore(top: Path, files: list[Path]) -> set[Path] | None:
+    """The ``files`` that the repository at ``top`` ignores, or None when git refuses the batch."""
+    # the folder resolved, not the file: a symlinked image may point outside the repository
+    rel = {str((f.parent.resolve() / f.name).relative_to(top)): f for f in files}
+    proc = _git(top, "check-ignore", "--stdin", "-z", stdin="\0".join(rel))
+    if proc is None or proc.returncode not in (0, 1):
+        return None
+    return {rel[p] for p in proc.stdout.split("\0") if p in rel}
+
+
+def _ignored(folder: Path, files: list[Path], skipped: list[str]) -> set[Path]:
+    """The files git ignores under ``folder``; empty outside a work tree or without git. git refuses a whole
+    batch when one path is inside a submodule (exit 128), so then each repository is asked about its own files,
+    by its own .gitignore; one that still refuses is named in ``skipped``, its files left in."""
+    top = _repo_root(folder) if files else None
+    if top is None:
         return set()
-    if proc.returncode not in (0, 1):
-        return set()
-    return {folder / p for p in proc.stdout.split("\0") if p}
+    ignored = _check_ignore(top, files)
+    if ignored is not None:
+        return ignored
+    ignored, roots, by_repo = set(), {}, {}
+    for f in files:
+        if f.parent not in roots:
+            roots[f.parent] = _repo_root(f.parent)
+        if roots[f.parent] is not None:
+            by_repo.setdefault(roots[f.parent], []).append(f)
+    for repo, members in by_repo.items():
+        found = _check_ignore(repo, members)
+        if found is None:
+            skipped.append(f"{repo}: git check-ignore failed, so its {len(members)} file(s) were not checked "
+                           "against .gitignore")
+        else:
+            ignored |= found
+    return ignored
 
 
 def _walk(folder: Path, skipped: list[str]) -> list[Path]:
@@ -53,7 +88,7 @@ def _walk(folder: Path, skipped: list[str]) -> list[Path]:
             skipped.append(f"{f}: inside an imgopt working folder")
             continue
         found.append(f)
-    ignored = _ignored(folder, found)
+    ignored = _ignored(folder, found, skipped)
     skipped += [f"{f}: git-ignored" for f in found if f in ignored]
     return [f for f in found if f not in ignored]
 

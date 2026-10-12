@@ -79,6 +79,46 @@ def test_folder_inputs_skip_a_folder_carrying_the_workdir_marker(tmp_path):
     assert any("imgopt working folder" in s for s in skipped)
 
 
+def _git(*args, cwd):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@e", "-c", "protocol.file.allow=always", *args],
+                   cwd=cwd, check=True, capture_output=True)
+
+
+def test_an_image_in_a_submodule_does_not_turn_the_ignore_filter_off(tmp_path):
+    # git check-ignore fails the whole batch (exit 128) when one path is inside a submodule
+    lib = tmp_path / "lib"
+    (lib / "gen").mkdir(parents=True)
+    (lib / "a.png").write_bytes(b"x")
+    (lib / "gen" / "y.png").write_bytes(b"x")
+    (lib / ".gitignore").write_text("gen/\n")
+    _git("init", "-q", cwd=lib)
+    _git("add", "a.png", ".gitignore", cwd=lib)
+    _git("commit", "-q", "-m", "lib", cwd=lib)
+    site = tmp_path / "site"
+    (site / "build").mkdir(parents=True)
+    (site / "img.png").write_bytes(b"x")
+    (site / "build" / "x.png").write_bytes(b"x")
+    (site / ".gitignore").write_text("build/\n")
+    _git("init", "-q", cwd=site)
+    _git("submodule", "add", "-q", str(lib), "sub", cwd=site)
+    (site / "sub" / "gen").mkdir()
+    (site / "sub" / "gen" / "y.png").write_bytes(b"x")
+    skipped: list[str] = []
+    found = [p.relative_to(site.resolve()).as_posix() for p in expand_inputs([site], skipped=skipped)]
+    assert found == ["img.png", "sub/a.png"], skipped
+    assert sum("git-ignored" in s for s in skipped) == 2
+
+
+def test_a_symlinked_image_pointing_outside_the_repository_is_walked(tmp_path):
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"x")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-q", cwd=repo)
+    (repo / "link.png").symlink_to(outside)
+    assert [p.name for p in expand_inputs([repo])] == ["outside.png"]  # inputs are resolved
+
+
 def test_a_project_folder_holding_run_or_metrics_json_is_walked(tmp_path):
     for rel in ("data/run.json", "data/a.png", "stats/sub/b.png", "stats/metrics.json"):
         p = tmp_path / rel
