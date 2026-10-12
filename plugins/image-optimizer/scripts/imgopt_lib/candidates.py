@@ -30,7 +30,6 @@ that files were skipped. A record whose every candidate errored
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import shlex

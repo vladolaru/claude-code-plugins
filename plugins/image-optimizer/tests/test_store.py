@@ -12,6 +12,11 @@ from imgopt_lib import gates as G
 from imgopt_lib import ladder
 from imgopt_lib import store as ST
 
+
+def stored_bytes() -> int:
+    return sum(size for _, size, _ in ST._entries())
+
+
 SRC, REF = "a" * 64, "b" * 64  # the source and reference hashes `candidates` passes to `put`
 
 
@@ -178,7 +183,7 @@ def test_prune_drops_old_entries_and_keeps_the_store_under_its_cap(tmp_path):
         then = time.time() - age_days * 86400
         os.utime(ST._entry(f"key{i}"), (then, then))
     removed, _, left = ST.prune(max_bytes=1500)
-    assert left == ST.size() <= 1500
+    assert left == stored_bytes() <= 1500
     assert removed == 2 and ST.get("key2") is not None and ST.get("key0") is None
     assert ST.produced_lossy(ST.sha256(tmp_path / "r0" / "v.png"))  # the index outlives the variant
 
@@ -249,11 +254,11 @@ def test_a_run_without_the_store_neither_reads_nor_writes_it(factory, toolset, t
     src = factory.logo().resolve()
     opts = lambda out, **kw: C.Options(profile="lossless", out=out, gates=G.gates_for("lossless"), **kw)
     C.run([src], opts(tmp_path / "one"), tools, log=lambda _: None)  # seeds the store
-    seeded = ST.size()
+    seeded = stored_bytes()
     calls, real = [], ladder.generate
     monkeypatch.setattr(ladder, "generate", lambda *a, **k: calls.append(1) or real(*a, **k))
     C.run([src], opts(tmp_path / "two", use_store=False), tools, log=lambda _: None)
-    assert calls and ST.size() == seeded  # it encoded despite the seeded store, and added nothing to it
+    assert calls and stored_bytes() == seeded  # it encoded despite the seeded store, and added nothing to it
 
 
 def test_prune_and_size_survive_entries_that_vanish_or_cannot_be_read(tmp_path, monkeypatch):
@@ -276,7 +281,7 @@ def test_prune_and_size_survive_entries_that_vanish_or_cannot_be_read(tmp_path, 
 
     monkeypatch.setattr(Path, "stat", stat)
     monkeypatch.setattr(Path, "iterdir", iterdir)
-    good = ST.size()
+    good = stored_bytes()
     assert good >= 1000
     assert ST.prune(max_age_days=0, now=time.time() + 1) == (1, good, 0)
 

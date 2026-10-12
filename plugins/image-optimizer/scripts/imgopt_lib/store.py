@@ -177,10 +177,6 @@ def _entries() -> list[tuple[float, int, Path]]:
     return found
 
 
-def size() -> int:
-    return sum(s for _, s, _ in _entries())
-
-
 def prune(now: float | None = None, max_age_days: float = MAX_AGE_DAYS,
           max_bytes: int = MAX_BYTES) -> tuple[int, int, int]:
     """Drop entries unused for ``max_age_days``, then the least recently used until the store holds at most
