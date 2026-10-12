@@ -11,7 +11,12 @@ false, so an interrupted run resumes from its last finished candidate and
 is not applied; the finished record says ``complete`` true. run.json names
 the inputs and settings of the last run: `load_records` keeps only the
 complete records that match it, and `stale_records` says why it left each
-other folder out. Schema: see SCHEMA.
+other folder out. Schema: see SCHEMA. prepared.json keys what a run
+prepares before any rung (reference.png, the source copy, the source's
+colour count and sRGB shift) by everything they depend on
+(_preparation_key): while it matches, a re-run reuses them instead of
+decoding again. It is removed before they are rewritten and written last,
+so a run stopped in between leaves no key and the next one prepares again.
 
 A source that cannot be read or whose colour profile cannot be converted
 (imaging.READ_FAILURES: also 16-bit files, content that does not match its
@@ -54,6 +59,7 @@ SCHEMA = 1
 # 5: every raster rung records metadata_removed; 3: svgo keeps ids, roles and classes; 2: a rung's kind
 # follows its input.
 CACHE_VERSION = 7
+PREPARED_FILE = "prepared.json"
 RUN_FILE = "run.json"  # the last `candidates` run in this --out: which inputs, which settings
 UNCALIBRATED = ("webp", "avif")
 NOT_SMALLER = "not smaller than the original, so not measured (an in-place pick must be smaller)"
@@ -267,6 +273,16 @@ def _key(src_hash: str, ref_hash: str, opts: Options, rung: ladder.Rung, tools: 
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def _preparation_key(src_hash: str, ref_hash: str, opts: Options, tools: dict) -> str:
+    """What the files a run prepares before any rung depend on: the source and reference bytes, the resize, the
+    requested format (it decides a flatten onto white), the Pillow build that decodes and converts, and
+    CACHE_VERSION."""
+    pillow = tools.get("pillow")
+    payload = {"v": CACHE_VERSION, "src": src_hash, "ref": ref_hash, "resize": opts.resize,
+               "format": opts.out_format, "pillow": pillow.cache_id if pillow is not None and pillow.ok else None}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def _available(rung: ladder.Rung, tools: dict) -> bool:
     return all(n in tools and tools[n].ok for n in rung.tools)
 
@@ -453,10 +469,12 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
     fmt = format_of(src)
     notes: list[str] = []
     can_measure = all(n in tools and tools[n].ok for n in ("ffmpeg", "ssimulacra2"))
-    prev = _read_record(folder / "metrics.json")
-    previous, chosen_key = _previous(prev)
-    # What the last complete record already knows about these bytes need not be worked out again.
-    same_source = prev.get("complete") is True and (prev.get("source") or {}).get("sha256") == src_hash
+    previous, chosen_key = _previous(_read_record(folder / "metrics.json"))
+    copy = folder / f"source{src.suffix.lower()}"
+    key = _preparation_key(src_hash, ref_hash, opts, tools)
+    known = _read_record(folder / PREPARED_FILE)
+    if known.get("key") != key or not copy.is_file() or (fmt != "svg" and not (folder / "reference.png").is_file()):
+        known = {}
     pixels = None
     if fmt == "svg":
         if opts.profile != "lossless":
@@ -465,10 +483,10 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         source_info = {"format": "svg", "width": None, "height": None, "colors": None, "frames": 1}
         folder.mkdir(parents=True, exist_ok=True)
     else:
-        # Counting colours decodes every pixel; the last record of these bytes has the count.
-        facts = read_facts(src, count_colours=not same_source)
-        if same_source:
-            facts = replace(facts, colors=prev["source"].get("colors"))
+        # Counting colours decodes every pixel; prepared.json keeps the count while its key holds.
+        facts = read_facts(src, count_colours="colors" not in known)
+        if "colors" in known:
+            facts = replace(facts, colors=known["colors"])
         source_kinds = metadata_kinds(src)
         ref_facts = read_facts(ref_path) if src in opts.refs else facts
         if opts.resize and opts.resize == facts.display_width == ref_facts.display_width:
@@ -481,35 +499,30 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         source_info = {"format": facts.format, "width": facts.width, "height": facts.height, "colors": facts.colors,
                        "frames": facts.frames}
         pixels = _Pixels(src, ref_path, opts.resize, target_fmt == "jpeg" and facts.has_alpha, folder)
-        # reference.png (what `sheet` and `apply` compare with) stands while the inputs and settings that made it do.
-        unchanged = (same_source and (prev.get("ref") or {}).get("sha256") == ref_hash
-                     and prev.get("resize") == opts.resize and prev.get("format") == target_fmt
-                     and (folder / "reference.png").is_file())
-        if not unchanged:
+        if not known:
             pixels.measured()  # before the folder exists: an unconvertible profile skips the file cleanly
         folder.mkdir(parents=True, exist_ok=True)
-        if not unchanged:
+    if not known:
+        (folder / PREPARED_FILE).unlink(missing_ok=True)  # a run stopped from here on leaves no key
+        if pixels is not None:
             pixels.measured().save(folder / "reference.png")
-        if facts.device_profile:
-            known = next((n for n in prev.get("notes", []) if n.startswith("device colour profile")), None)
-            if unchanged and known:
-                notes.append(known)
-            else:
-                mean, peak = srgb_shift(src, pixels.source())
-                notes.append(f"device colour profile '{facts.icc_desc}': pixel candidates are converted to sRGB "
-                             f"(the conversion alone shifts mean {mean:.1f}, max {peak} of 255)")
-        if facts.orientation != 1:
-            notes.append(f"EXIF orientation {facts.orientation}: lossless candidates keep the tag, "
-                         "pixel candidates have it applied")
-        if opts.resize:
-            shown_w, shown_h = (facts.height, facts.width) if facts.orientation in (5, 6, 7, 8) else (facts.width,
-                                                                                                     facts.height)
-            notes.append(f"resized {facts.width}x{facts.height} -> {opts.resize}x"
-                         f"{max(1, round(shown_h * opts.resize / shown_w))} (Lanczos); "
-                         "the reference is scaled the same way")
-    copy = folder / f"source{src.suffix.lower()}"
-    if not (same_source and copy.is_file()):
         shutil.copyfile(src, copy)
+        known = {"key": key, "colors": facts.colors if facts else None,
+                 "srgb_shift": list(srgb_shift(src, pixels.source())) if facts and facts.device_profile else None}
+        replace_with(folder / PREPARED_FILE, lambda tmp: tmp.write_text(json.dumps(known)))
+    if facts and facts.device_profile:
+        mean, peak = known["srgb_shift"]
+        notes.append(f"device colour profile '{facts.icc_desc}': pixel candidates are converted to sRGB "
+                     f"(the conversion alone shifts mean {mean:.1f}, max {peak} of 255)")
+    if facts and facts.orientation != 1:
+        notes.append(f"EXIF orientation {facts.orientation}: lossless candidates keep the tag, "
+                     "pixel candidates have it applied")
+    if facts and opts.resize:
+        shown_w, shown_h = (facts.height, facts.width) if facts.orientation in (5, 6, 7, 8) else (facts.width,
+                                                                                                 facts.height)
+        notes.append(f"resized {facts.width}x{facts.height} -> {opts.resize}x"
+                     f"{max(1, round(shown_h * opts.resize / shown_w))} (Lanczos); "
+                     "the reference is scaled the same way")
     if src in opts.refs:
         notes.append(f"measured against {ref_path}")
     skipped = [r for r in rungs if not _available(r, tools)]

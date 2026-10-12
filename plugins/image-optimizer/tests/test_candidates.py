@@ -1314,6 +1314,36 @@ def test_an_unchanged_rerun_prepares_and_writes_nothing(factory, toolset, device
     assert work == [] and again["notes"] == first["notes"] and again["source"] == first["source"]
 
 
+def test_an_interrupted_rerun_with_other_settings_leaves_no_reference_the_next_run_trusts(
+        factory, toolset, tmp_path, monkeypatch):
+    # reference.png is rewritten before the run's first record; a stop in between must not leave it "unchanged"
+    tools = {**toolset("prepare", "high", {"jpeg"}), **toolset("recompress", "high", {"jpeg"})}
+    src, out = factory.photo(size=(400, 300), quality=95).resolve(), tmp_path / "out"
+    C.run([src], opts(out, "high"), tools, log=quiet)
+    real = ladder.generate
+
+    def stop(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ladder, "generate", stop)
+    with pytest.raises(KeyboardInterrupt):
+        C.run([src], opts(out, "high", resize=200), tools, log=quiet)
+    monkeypatch.setattr(ladder, "generate", real)
+    C.run([src], opts(out, "high"), tools, log=quiet)
+    [reference] = list(out.glob("*/reference.png"))
+    assert Image.open(reference).size == (400, 300)
+
+
+def test_a_new_pillow_build_prepares_the_reference_again(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"png"})
+    src, out = factory.gradient().resolve(), tmp_path / "out"
+    C.run([src], opts(out, "high"), tools, log=quiet)
+    [reference] = list(out.glob("*/reference.png"))
+    reference.write_bytes(b"made by the old build")  # stands in for pixels another Pillow decoded differently
+    C.run([src], opts(out, "high"), with_version(tools, "pillow", "99.0"), log=quiet)
+    assert reference.read_bytes() != b"made by the old build"
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]

@@ -116,7 +116,8 @@ def clean(out: Path, *, keep_picks: bool) -> int:
             continue
         from .candidates import choice_of  # candidates imports this module
 
-        keep = {"metrics.json", "reference.png", record.get("pick") or "", (choice_of(record) or {}).get("file", "")}
+        keep = {"metrics.json", "reference.png", "prepared.json", record.get("pick") or "",
+                (choice_of(record) or {}).get("file", "")}
         for p in meta.parent.iterdir():
             if p.name in keep or p.name.startswith("source."):
                 continue

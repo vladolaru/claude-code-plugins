@@ -80,12 +80,13 @@ def test_clean_keep_picks_keeps_the_choice_too(tmp_path):
     f = out / "a--1"
     f.mkdir(parents=True)
     (out / WORKDIR_MARKER).write_text("")
-    for name in ("source.png", "reference.png", "b.png", "c.png", "d.png"):
+    for name in ("source.png", "reference.png", "prepared.json", "b.png", "c.png", "d.png"):
         (f / name).write_bytes(b"x" * 100)
     (f / "metrics.json").write_text(json.dumps({"pick": "b.png", "choice": "kc", "candidates": [
         {"key": "kb", "file": "b.png"}, {"key": "kc", "file": "c.png"}, {"key": "kd", "file": "d.png"}]}))
     W.clean(out, keep_picks=True)
-    assert sorted(p.name for p in f.iterdir()) == ["b.png", "c.png", "metrics.json", "reference.png", "source.png"]
+    assert sorted(p.name for p in f.iterdir()) == ["b.png", "c.png", "metrics.json", "prepared.json", "reference.png",
+                                                   "source.png"]
 
 
 def test_clean_keep_picks_skips_a_record_that_does_not_parse(tmp_path):
