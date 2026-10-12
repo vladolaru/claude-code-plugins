@@ -9,7 +9,7 @@ Scripts do the mechanics (encoding, measuring, gating, crops, writing); you do t
 
 ## The tool
 
-Every command is `python3 "$SKILL_DIR/../../scripts/imgopt.py" <command>`; call it `IMGOPT` below. Use plain `python3`, never `python3 -I` (Pillow may live in user site-packages). `IMGOPT <command> --help` lists every flag.
+Every command is `python3 "$SKILL_DIR/../../scripts/imgopt.py" <command>`, written `IMGOPT <command>` below. Spell it out in each shell command, or define a function in that same command: `imgopt() { python3 "$SKILL_DIR/../../scripts/imgopt.py" "$@"; }`. Never keep it in a variable and run `$IMGOPT`: zsh, the macOS default shell, does not split an unquoted variable into words, so the command is not found. Use plain `python3`, never `python3 -I` (Pillow may live in user site-packages). `IMGOPT <command> --help` lists every flag.
 
 | Command | Use it to |
 |---|---|
