@@ -59,6 +59,9 @@ METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
 # Rung families (and single rungs) of one file measured at once. A file's rungs otherwise run one after
 # another, so the largest file in a set decides how long the whole run takes, however many files run in parallel.
 RUNG_THREADS = 3
+# A family stops descending after this many measured gate failures in a row. On 809 benchmark files (2026-10-12)
+# it skipped 45% of the rungs and changed 3 picks by 18 KB in all; stopping after one failure changed 21 by 608 KB.
+EARLY_STOP = 2
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
 RASTER_VERDICT_TOOLS = frozenset({"pillow", *METRIC_TOOLS})
 SVG_VERDICT_TOOLS = frozenset({"pillow", "rsvg-convert"})
@@ -470,15 +473,24 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         done: dict[str, tuple[dict, str]] = {}
         lock = threading.Lock()
 
-        def descend(unit: list[ladder.Rung]) -> None:
-            """Measure a family top-down, or one single rung."""
+        def descend(unit: list[ladder.Rung]) -> int:
+            """Measure a family top-down (or one single rung). After EARLY_STOP measured gate failures in a row
+            the lower levels are not measured, except the variant someone chose by hand. Errors and unmeasured
+            discards neither count nor reset. Returns how many levels were not measured."""
+            streak = skipped = 0
             for rung in unit:
-                rec, origin = candidate(rung, _key(src_hash, ref_hash, opts, rung, tools))
+                key = _key(src_hash, ref_hash, opts, rung, tools)
+                if streak >= EARLY_STOP and key != chosen_key:
+                    skipped += 1
+                    continue
+                rec, origin = candidate(rung, key)
                 rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
+                streak = 0 if rec["pass"] else streak + ("ssim" in rec)
                 with lock:  # the partial record lets an interrupted run resume (it is read by key, not order)
                     done[rung.label] = (rec, origin)
                     write_record(folder, {"schema": SCHEMA, "complete": False,
                                           "candidates": [r for r, _ in done.values()]})
+            return skipped
 
         live = [r for r in rungs if _available(r, tools)]
         units: dict[str, list[ladder.Rung]] = {}
@@ -487,9 +499,13 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         # On an error or an interrupt the units not yet started are cancelled rather than run to the end.
         pool = ThreadPoolExecutor(max_workers=RUNG_THREADS)
         try:
-            list(pool.map(descend, units.values()))
+            skipped = dict(zip(units, pool.map(descend, units.values())))
         finally:
             pool.shutdown(cancel_futures=True)
+        for name, n in skipped.items():
+            if n:
+                notes.append(f"{name}: stopped after {EARLY_STOP} levels in a row failed the gates; {n} lower "
+                             "level(s) not measured")
         for rung in (r for r in live if r.label in done):  # in ladder order, whatever order they finished in
             rec, origin = done[rung.label]
             cands.append(rec)

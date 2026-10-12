@@ -1087,6 +1087,60 @@ def test_rungs_measured_at_once_give_the_records_of_one_at_a_time(factory, tools
     assert strip(one) == strip(many) and len(one[1]["candidates"]) > 4
 
 
+def _scripted_rungs(script: dict, default: str):
+    """A stand-in for candidates._run_rung: each rung label passes (an identical copy), fails on measured scores,
+    errors, or is discarded as not smaller, as ``script`` says; every other rung does ``default``."""
+    def run(rung, key, inputs, folder, *rest):
+        rec = {"key": key, "label": rung.label, "tool": rung.tool, "kind": rung.kind, "band_gated": rung.palette}
+        how = script.get(rung.label, default)
+        if how == "error":
+            rec["error"] = "pngquant could not reach this quality range"
+            return rec
+        out = folder / f"{rung.label}{rung.ext}"
+        out.write_bytes(b"x" * (100 + len(rung.label)))
+        rec["file"], rec["size"] = out.name, out.stat().st_size
+        if how == "discard":
+            rec["discarded"] = C.NOT_SMALLER
+        elif how == "pass":
+            C._perfect(rec)
+        else:
+            rec.update(ssim=0.5, ssim_white=0.5, ss2=10.0, band=0.0, butteraugli=None)
+        return rec
+    return run
+
+
+def test_a_family_stops_after_two_measured_failures_in_a_row(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"jpeg"})
+    script = {"jpegoptim-m95": "pass", "jpegoptim-m90": "error", "jpegoptim-m85": "discard",
+              "jpegoptim-m80": "fail", "jpegoptim-m75": "fail", "jpegoptim-m70": "pass",
+              "lossless-jpegoptim": "pass", "lossless-jpegtran": "pass"}
+    monkeypatch.setattr(C, "_run_rung", _scripted_rungs(script, "fail"))
+    [r] = C.run([factory.photo().resolve()], opts(tmp_path / "out", "high", use_store=False), tools, log=quiet)
+    labels = [c["label"] for c in r["candidates"]]
+    # an error and an unmeasured discard neither count nor reset; m70 would pass but is never measured
+    assert labels == ["lossless-jpegoptim", "lossless-jpegtran", "jpegoptim-m95", "jpegoptim-m90", "jpegoptim-m85",
+                      "jpegoptim-m80", "jpegoptim-m75", "cjpegli-q90", "cjpegli-q85"]
+    assert "jpegoptim: stopped after 2 levels in a row failed the gates; 7 lower level(s) not measured" in r["notes"]
+    assert "cjpegli: stopped after 2 levels in a row failed the gates; 12 lower level(s) not measured" in r["notes"]
+
+
+def test_a_variant_chosen_by_hand_is_measured_past_the_stop(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src, out = factory.photo().resolve(), tmp_path / "out"
+    monkeypatch.setattr(C, "_run_rung", _scripted_rungs({}, "pass"))
+    C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
+    [meta] = list(out.glob("*/metrics.json"))
+    record = json.loads(meta.read_text())
+    record["choice"] = "jpegoptim-m50.jpg"
+    meta.write_text(json.dumps(record))
+    for f in meta.parent.glob("*.jpg"):  # nothing reusable: every rung is measured again
+        f.unlink()
+    monkeypatch.setattr(C, "_run_rung", _scripted_rungs({"lossless-jpegoptim": "pass"}, "fail"))
+    [r] = C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
+    labels = [c["label"] for c in r["candidates"] if c["label"].startswith("jpegoptim-")]
+    assert labels == ["jpegoptim-m95", "jpegoptim-m90", "jpegoptim-m50"] and r["choice"] == "jpegoptim-m50.jpg"
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]
