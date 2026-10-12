@@ -1134,14 +1134,14 @@ def test_a_variant_chosen_by_hand_is_measured_past_the_stop(factory, toolset, tm
     C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
     [meta] = list(out.glob("*/metrics.json"))
     record = json.loads(meta.read_text())
-    record["choice"] = "jpegoptim-m50.jpg"
+    record["choice"] = next(c["key"] for c in record["candidates"] if c["label"] == "jpegoptim-m50")
     meta.write_text(json.dumps(record))
     for f in meta.parent.glob("*.jpg"):  # nothing reusable: every rung is measured again
         f.unlink()
     monkeypatch.setattr(C, "_run_rung", _scripted_rungs({"lossless-jpegoptim": "pass"}, "fail"))
     [r] = C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
     labels = [c["label"] for c in r["candidates"] if c["label"].startswith("jpegoptim-")]
-    assert labels == ["jpegoptim-m95", "jpegoptim-m90", "jpegoptim-m50"] and r["choice"] == "jpegoptim-m50.jpg"
+    assert labels == ["jpegoptim-m95", "jpegoptim-m90", "jpegoptim-m50"] and C.choice_of(r)["label"] == "jpegoptim-m50"
 
 
 def test_a_passing_choice_past_the_stop_does_not_restart_the_descent(factory, toolset, tmp_path, monkeypatch):
@@ -1151,7 +1151,7 @@ def test_a_passing_choice_past_the_stop_does_not_restart_the_descent(factory, to
     C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
     [meta] = list(out.glob("*/metrics.json"))
     record = json.loads(meta.read_text())
-    record["choice"] = "jpegoptim-m50.jpg"
+    record["choice"] = next(c["key"] for c in record["candidates"] if c["label"] == "jpegoptim-m50")
     meta.write_text(json.dumps(record))
     for f in meta.parent.glob("*.jpg"):
         f.unlink()
@@ -1169,7 +1169,7 @@ def test_a_choice_survives_an_interrupted_rerun(factory, toolset, tmp_path, monk
     C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
     [meta] = list(out.glob("*/metrics.json"))
     record = json.loads(meta.read_text())
-    record["choice"] = "jpegoptim-m50.jpg"
+    record["choice"] = next(c["key"] for c in record["candidates"] if c["label"] == "jpegoptim-m50")
     meta.write_text(json.dumps(record))
     for f in meta.parent.glob("*.jpg"):  # nothing reusable: the re-run measures every rung again
         f.unlink()
@@ -1187,7 +1187,7 @@ def test_a_choice_survives_an_interrupted_rerun(factory, toolset, tmp_path, monk
     assert json.loads(meta.read_text())["complete"] is False  # m50 was not measured again before the stop
     monkeypatch.setattr(C, "_run_rung", _scripted_rungs({"lossless-jpegoptim": "pass"}, "fail"))
     [r] = C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
-    assert r["choice"] == "jpegoptim-m50.jpg"
+    assert C.choice_of(r)["label"] == "jpegoptim-m50"
 
 
 def test_a_source_is_converted_to_srgb_once_per_run(factory, toolset, device_icc, tmp_path, monkeypatch):
@@ -1290,11 +1290,11 @@ def test_a_rerun_keeps_the_choice_while_its_variant_is_still_measured(factory, t
     [(folder, record)] = C.load_records(out)
     other = next(c for c in record["candidates"] if c.get("file") and "size" in c and c["file"] != record["pick"]
                  and not c.get("error") and not c.get("discarded"))
-    record["choice"] = other["file"]
+    record["choice"] = other["key"]
     C.write_record(folder, record)
     C.run([src], opts(out, "high"), tools, log=quiet)
     [(_, rerun)] = C.load_records(out)
-    assert rerun["choice"] == other["file"] and C.choice_of(rerun)["key"] == other["key"]
+    assert rerun["choice"] == other["key"] and C.choice_of(rerun)["file"] == other["file"]
     assert rerun["verdict"] == G.verdict(rerun["source"]["size"], C.choice_of(rerun), by_hand=True)[0]
 
 

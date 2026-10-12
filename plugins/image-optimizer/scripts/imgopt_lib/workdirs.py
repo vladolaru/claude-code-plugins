@@ -113,7 +113,9 @@ def clean(out: Path, *, keep_picks: bool) -> int:
             record = json.loads(meta.read_text())
         except json.JSONDecodeError:  # not a record imgopt wrote (it replaces records whole): leave the folder
             continue
-        keep = {"metrics.json", "reference.png", record.get("pick") or "", record.get("choice") or ""}
+        from .candidates import choice_of  # candidates imports this module
+
+        keep = {"metrics.json", "reference.png", record.get("pick") or "", (choice_of(record) or {}).get("file", "")}
         for p in meta.parent.iterdir():
             if p.name in keep or p.name.startswith("source."):
                 continue

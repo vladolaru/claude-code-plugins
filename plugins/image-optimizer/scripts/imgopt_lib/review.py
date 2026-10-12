@@ -77,7 +77,7 @@ def choose(folder: Path, record: dict, how: str) -> dict:
     if chosen is not None:
         _ensure_file(Path(folder), chosen)
         if how != "default":
-            record["choice"] = chosen["file"]
+            record["choice"] = chosen["key"]
     record["verdict"], record["verdict_reason"] = verdict_for(record, chosen, by_hand=how != "default")
     write_record(Path(folder), record)
     return chosen

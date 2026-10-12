@@ -37,7 +37,7 @@ def test_milder_takes_the_next_larger_passing_variant(tmp_path):
     folder, record = fake_record(tmp_path)
     assert RV.choose(folder, record, "milder")["label"] == "v15000"
     saved = json.loads((folder / "metrics.json").read_text())
-    assert saved["choice"] == "v15000.png" and C.choice_of(saved)["label"] == "v15000"
+    assert saved["choice"] == "k15000" and C.choice_of(saved)["label"] == "v15000"
 
 
 def test_stronger_may_take_a_gate_failing_variant(tmp_path):
@@ -255,7 +255,9 @@ def test_a_verdict_names_the_variant_by_its_key_not_its_label(tmp_path):
     assert RV.verdict_of(folder.parent, fresh)["key"] == "k15000"
     remeasure(folder, fresh, "v15000", "k15000-resized")
     [(_, rerun)] = RV.rows_of([folder.parent])
-    assert C.choice_of(rerun)["label"] == "v15000" and RV.verdict_of(folder.parent, rerun) is None
+    # the kept variant is no longer measured (its label now names another key), so neither the keep nor the
+    # choice it set applies: the file falls back to its pick, as a `candidates` re-run leaves it
+    assert C.choice_of(rerun)["label"] == "v12000" and RV.verdict_of(folder.parent, rerun) is None
     assert not RV.is_accepted(rerun, RV.verdict_of(folder.parent, rerun))
 
 
@@ -367,7 +369,7 @@ def test_choosing_the_pick_by_hand_is_stored_as_a_choice(tmp_path):
     record["min_saving"] = 9000
     RV.choose(folder, record, "v12000")  # the gates' own pick, under the floor
     saved = json.loads((folder / "metrics.json").read_text())
-    assert saved["choice"] == saved["pick"] == "v12000.png"  # a re-run carries the by-hand decision forward
+    assert saved["choice"] == C.pick_of(saved)["key"]  # a re-run carries the by-hand decision forward
     assert saved["verdict"] == "apply" and "chosen by hand" in saved["verdict_reason"]
 
 

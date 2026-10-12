@@ -36,7 +36,7 @@ def fake_out(tmp_path, factory, *, uncalibrated=False, band_gated=False, size=(1
                                 "width": size[0], "height": size[1], "colors": None,
                                 "sha256": hashlib.sha256(src.read_bytes()).hexdigest()},
         "format": "webp" if uncalibrated else "png", "uncalibrated": uncalibrated, "waived": ["jpegoptim"],
-        "notes": [], "candidates": [{"label": "pngquant-c8", "file": "pick.png", "kind": "lossy",
+        "notes": [], "candidates": [{"key": "k-c8", "label": "pngquant-c8", "file": "pick.png", "kind": "lossy",
                                      "size": pick.stat().st_size, "band_gated": band_gated, "ssim": 0.95,
                                      "ssim_white": 0.95, "ss2": 70.0, "band": 5.0, "pass": True, "reason": ""}],
         "pick": "pick.png", "verdict": "apply", "verdict_reason": "x", "profile": "high",
@@ -410,7 +410,7 @@ def test_a_block_made_as_the_page_makes_it_is_recorded_in_both_folders(tmp_path,
     _move_source(second, "b--2", tmp_path / "elsewhere" / "photo.jpg")
     path = first / "a--1" / "metrics.json"
     record = json.loads(path.read_text())
-    record["candidates"].append({**record["candidates"][0], "label": "pngquant-c16", "file": "c16.png",
+    record["candidates"].append({**record["candidates"][0], "key": "k-c16", "label": "pngquant-c16", "file": "c16.png",
                                  "size": record["candidates"][0]["size"] + 10})
     (first / "a--1" / "c16.png").write_bytes((first / "a--1" / "pick.png").read_bytes())
     path.write_text(json.dumps(record))
@@ -598,7 +598,7 @@ def with_a_second_variant(out, *, size_delta=10, **extra):
     folder = out / "photo--x"
     record = json.loads((folder / "metrics.json").read_text())
     (folder / "c16.png").write_bytes((folder / "pick.png").read_bytes())
-    record["candidates"].append({**record["candidates"][0], "label": "pngquant-c16", "file": "c16.png",
+    record["candidates"].append({**record["candidates"][0], "key": "k-c16", "label": "pngquant-c16", "file": "c16.png",
                                  "size": record["candidates"][0]["size"] + size_delta, **extra})
     (folder / "metrics.json").write_text(json.dumps(record))
 

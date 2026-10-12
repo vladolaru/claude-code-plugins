@@ -82,7 +82,8 @@ def test_clean_keep_picks_keeps_the_choice_too(tmp_path):
     (out / WORKDIR_MARKER).write_text("")
     for name in ("source.png", "reference.png", "b.png", "c.png", "d.png"):
         (f / name).write_bytes(b"x" * 100)
-    (f / "metrics.json").write_text(json.dumps({"pick": "b.png", "choice": "c.png", "candidates": []}))
+    (f / "metrics.json").write_text(json.dumps({"pick": "b.png", "choice": "kc", "candidates": [
+        {"key": "kb", "file": "b.png"}, {"key": "kc", "file": "c.png"}, {"key": "kd", "file": "d.png"}]}))
     W.clean(out, keep_picks=True)
     assert sorted(p.name for p in f.iterdir()) == ["b.png", "c.png", "metrics.json", "reference.png", "source.png"]
 
