@@ -45,6 +45,16 @@ if Image is None:
             yellow=True)
 
 
+def _png_chunk(tag: bytes, body: bytes) -> bytes:
+    return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body))
+
+
+def _insert_after_ihdr(path: Path, *chunks: bytes) -> None:
+    data = path.read_bytes()
+    ihdr_end = 8 + 12 + 13
+    path.write_bytes(data[:ihdr_end] + b"".join(chunks) + data[ihdr_end:])
+
+
 def _photo(size: tuple[int, int]) -> Image.Image:
     w, h = size
     base = Image.linear_gradient("L").resize(size)
@@ -109,13 +119,10 @@ class Factory:
         rows = b"".join(b"\0" + b"".join(struct.pack(">H", (x * 4099 + y * 997 + c * 13001) % 65536)
                                           for x in range(w) for c in range(len(channels)))
                         for y in range(h))
-
-        def chunk(tag: bytes, data: bytes) -> bytes:
-            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
-
         path = self.root / name
-        path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 16, colour_type, 0, 0, 0))
-                         + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+        path.write_bytes(b"\x89PNG\r\n\x1a\n"
+                         + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 16, colour_type, 0, 0, 0))
+                         + _png_chunk(b"IDAT", zlib.compress(rows)) + _png_chunk(b"IEND", b""))
         return path
 
     def apng(self, name="anim.png", frames=3, size=(64, 64), photo=False) -> Path:
@@ -130,18 +137,10 @@ class Factory:
 
     def gamma_png(self, name="gamma.png", gamma=1.0, size=(200, 120)) -> Path:
         """A PNG whose gAMA (and cHRM) chunks change how browsers render it; Pillow ignores them on decode."""
-        im = _photo(size)
         path = self.root / name
-        im.save(path, "PNG")
-        data = path.read_bytes()
-
-        def chunk(tag: bytes, body: bytes) -> bytes:
-            return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body))
-
-        ihdr_end = 8 + 12 + 13
-        extra = (chunk(b"gAMA", struct.pack(">I", round(gamma * 100000)))
-                 + chunk(b"cHRM", struct.pack(">8I", 31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)))
-        path.write_bytes(data[:ihdr_end] + extra + data[ihdr_end:])
+        _photo(size).save(path, "PNG")
+        _insert_after_ihdr(path, _png_chunk(b"gAMA", struct.pack(">I", round(gamma * 100000))),
+                           _png_chunk(b"cHRM", struct.pack(">8I", 31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)))
         return path
 
     def cicp_png(self, name="cicp.png", transfer=8, size=(200, 120)) -> Path:
@@ -149,11 +148,7 @@ class Factory:
         iCCP, sRGB and gAMA, and Pillow ignores it. Transfer 8 is linear; 13 is sRGB."""
         path = self.root / name
         _photo(size).save(path, "PNG")
-        data = path.read_bytes()
-        body = bytes((1, transfer, 0, 1))
-        cicp = struct.pack(">I", 4) + b"cICP" + body + struct.pack(">I", zlib.crc32(b"cICP" + body))
-        ihdr_end = 8 + 12 + 13
-        path.write_bytes(data[:ihdr_end] + cicp + data[ihdr_end:])
+        _insert_after_ihdr(path, _png_chunk(b"cICP", bytes((1, transfer, 0, 1))))
         return path
 
     def accessible_svg(self, name="icon.svg") -> Path:
