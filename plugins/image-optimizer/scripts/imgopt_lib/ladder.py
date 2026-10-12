@@ -131,8 +131,8 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
     # Reshaped pixels have no source file to keep; a device profile alone sends only the lossy
     # rungs to sRGB pixels, so the source's lossless rungs still offer a profile-keeping pick.
     reshaped = bool(resize) or target != f.format
-    gamma_bound = f.png_colour and not assume_srgb
-    if f.format == "png" and (f.frames > 1 or gamma_bound):
+    colour_bound = f.png_colour and not assume_srgb
+    if f.format == "png" and (f.frames > 1 or colour_bound):
         why = (f"animated PNG ({f.frames} frames)" if f.frames > 1
                else "PNG colour chunks (cICP, gAMA or cHRM) that browsers apply and pixel encoders drop")
         if reshaped:

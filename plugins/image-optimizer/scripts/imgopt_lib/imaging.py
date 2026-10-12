@@ -10,8 +10,10 @@ file without transforming it.
 from __future__ import annotations
 
 import io
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from PIL import Image, ImageChops, ImageCms, ImageOps, ImageStat
 
@@ -26,6 +28,10 @@ IJG_LUMA = (16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55,
 
 
 LFS_SIGNATURE = b"version https://git-lfs.github.com/spec/v1"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# The PNG chunks that change how browsers render the pixels; all precede IDAT.
+COLOUR_CHUNKS = (b"cICP", b"gAMA", b"cHRM", b"sRGB")
+SRGB_CICP = "010d0001"  # cICP body in hex: BT.709 primaries, sRGB transfer, RGB, full range: renders as sRGB
 
 
 class ImagingError(ValueError):
@@ -53,9 +59,8 @@ class Facts:
     orientation: int
     progressive: bool
     frames: int
-    # PNG gAMA / cHRM / sRGB as Pillow reads them ("gamma", "chromaticity", "srgb"), plus cICP read from the file
-    # ("cicp", its body in hex), as sorted (key, value) pairs. Pillow's decoder ignores gAMA, cHRM and cICP;
-    # browsers apply them, so they are compared, not just pixels.
+    # A PNG's COLOUR_CHUNKS read from the file, as sorted (chunk name, body in hex) pairs. Pillow's decoder
+    # ignores cICP, gAMA and cHRM; browsers apply them, so they are compared, not just pixels.
     colour_chunks: tuple[tuple[str, str], ...] = ()
 
     @property
@@ -66,9 +71,9 @@ class Facts:
         keys = dict(self.colour_chunks)
         if self.format != "png":
             return False
-        if "cicp" in keys:
-            return keys["cicp"] != SRGB_CICP.hex()
-        return not self.icc and "srgb" not in keys and bool({"gamma", "chromaticity"} & set(keys))
+        if "cICP" in keys:
+            return keys["cICP"] != SRGB_CICP
+        return not self.icc and "sRGB" not in keys and bool({"gAMA", "cHRM"} & set(keys))
 
     @property
     def display_width(self) -> int:
@@ -116,22 +121,27 @@ def decoded_format(im: Image.Image, path: Path, *, check_name: bool = True) -> s
     return decoded
 
 
-SRGB_CICP = bytes((1, 13, 0, 1))  # BT.709 primaries, sRGB transfer, RGB, full range: renders as sRGB
+def _png_chunks(fh: BinaryIO) -> Iterator[tuple[bytes, int]]:
+    """Each chunk's (tag, body length) in an open PNG, with ``fh`` at the body for the caller to read or not;
+    nothing when ``fh`` is not a PNG."""
+    if fh.read(8) != PNG_SIGNATURE:
+        return
+    while len(header := fh.read(8)) == 8:
+        body = fh.tell()
+        length = int.from_bytes(header[:4], "big")
+        yield header[4:], length
+        fh.seek(body + length + 4)
 
 
-def _png_cicp(path: Path) -> bytes | None:
-    """The body of a PNG's cICP chunk, which Pillow does not read; None without one (it must precede IDAT)."""
+def _png_colour_chunks(path: Path) -> tuple[tuple[str, str], ...]:
     with open(path, "rb") as fh:
-        if fh.read(8) != b"\x89PNG\r\n\x1a\n":
-            return None
-        while len(header := fh.read(8)) == 8:
-            length, tag = int.from_bytes(header[:4], "big"), header[4:]
-            if tag == b"cICP":
-                return fh.read(length)
-            if tag in (b"IDAT", b"IEND"):
-                return None
-            fh.seek(length + 4, 1)
-    return None
+        found = []
+        for tag, length in _png_chunks(fh):
+            if tag == b"IDAT":
+                break
+            if tag in COLOUR_CHUNKS:
+                found.append((tag.decode("latin-1"), fh.read(length).hex()))
+    return tuple(sorted(found))
 
 
 def _open(path: Path) -> Image.Image:
@@ -153,9 +163,6 @@ def read_facts(path: Path, *, check_name: bool = True) -> Facts:
         desc = profile_description(icc)
         colors = im.convert("RGBA").getcolors(maxcolors=4096)
         fmt = decoded_format(im, path, check_name=check_name)
-        cicp = _png_cicp(path) if fmt == "png" else None
-        chunks = tuple(sorted([(k, repr(im.info[k])) for k in ("gamma", "chromaticity", "srgb")
-                               if fmt == "png" and k in im.info] + ([("cicp", cicp.hex())] if cicp else [])))
         return Facts(
             path=Path(path),
             format=fmt,
@@ -171,7 +178,7 @@ def read_facts(path: Path, *, check_name: bool = True) -> Facts:
             progressive=bool(im.info.get("progressive") or im.info.get("progression")),
             # An MPO's extra pictures are not shown by browsers (and ffmpeg reads only the first): one frame.
             frames=1 if fmt == "jpeg" else getattr(im, "n_frames", 1),
-            colour_chunks=chunks,
+            colour_chunks=_png_colour_chunks(path) if fmt == "png" else (),
         )
 
 
@@ -180,7 +187,7 @@ def read_facts(path: Path, *, check_name: bool = True) -> Facts:
 _NATIVE_MODES = ("L", "CMYK", "RGB")
 
 
-_PNG_METADATA = {"eXIf": "exif", "tEXt": "text", "iTXt": "text", "zTXt": "text", "tIME": "time", "iCCP": "icc"}
+_PNG_METADATA = {b"eXIf": "exif", b"tEXt": "text", b"iTXt": "text", b"zTXt": "text", b"tIME": "time", b"iCCP": "icc"}
 
 
 def metadata_kinds(path: Path) -> frozenset[str]:
@@ -206,13 +213,8 @@ def metadata_kinds(path: Path) -> frozenset[str]:
             elif marker == 0xE2 and body.startswith(b"ICC_PROFILE"):
                 found.add("icc")
             i += 2 + length
-    elif data[:8] == b"\x89PNG\r\n\x1a\n":
-        i = 8
-        while i + 8 <= len(data):
-            length, tag = int.from_bytes(data[i:i + 4], "big"), data[i + 4:i + 8].decode("latin-1")
-            if tag in _PNG_METADATA:
-                found.add(_PNG_METADATA[tag])
-            i += 12 + length
+    else:
+        found.update(_PNG_METADATA[tag] for tag, _ in _png_chunks(io.BytesIO(data)) if tag in _PNG_METADATA)
     return frozenset(found)
 
 

@@ -159,14 +159,14 @@ def test_the_16_bit_check_reads_plain_tuple_tiles():
 
 def test_png_colour_chunks_are_facts(factory):
     f = I.read_facts(factory.gamma_png())
-    assert dict(f.colour_chunks)["gamma"] == "1.0" and "chromaticity" in dict(f.colour_chunks)
+    assert dict(f.colour_chunks)["gAMA"] == "000186a0" and "cHRM" in dict(f.colour_chunks)  # gamma 1.0
     assert f.png_colour  # no sRGB chunk and no ICC profile: gAMA decides how browsers render it
     assert not I.read_facts(factory.logo()).png_colour
 
 
 def test_a_cicp_chunk_decides_png_colour_unless_it_signals_srgb(factory):
     linear = I.read_facts(factory.cicp_png())
-    assert dict(linear.colour_chunks)["cicp"] == "01080001" and linear.png_colour  # Pillow shows none of it
+    assert dict(linear.colour_chunks)["cICP"] == "01080001" and linear.png_colour  # Pillow shows none of it
     assert not I.read_facts(factory.cicp_png("srgb.png", transfer=13)).png_colour
 
 

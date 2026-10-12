@@ -189,8 +189,7 @@ def metadata_preserved(src: Facts, out: Facts) -> tuple[bool, str]:
     if not src.device_profile and out.device_profile:
         return False, "output gained a device colour profile"
     if src.colour_chunks != out.colour_chunks:
-        names = {"gamma": "gAMA", "chromaticity": "cHRM", "srgb": "sRGB", "cicp": "cICP"}
-        lost = sorted(names[k] for k, _ in set(src.colour_chunks) ^ set(out.colour_chunks))
+        lost = sorted({k for k, _ in set(src.colour_chunks) ^ set(out.colour_chunks)})
         return False, f"PNG colour chunks changed ({', '.join(lost)}): browsers would render it differently"
     return True, ""
 
