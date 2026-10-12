@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file the job cannot serve (a GIF in a resize) or a Git LFS pointer gets its own line instead of stopping the batch.
 - A cached candidate is made again when any tool that made or measured it changes, including tools that print no version.
 - `apply` stops with a clear reason when ffmpeg or ssimulacra2 changed since the choices were measured.
-- `candidates` measures two files at a time by default (`--jobs`), or one at a time where a sandbox denies worker processes.
+- `candidates` measures two files at a time by default (`--jobs`), or one at a time where a sandbox denies worker processes, and up to three encoders of each file at once.
 - Every measured variant goes into a variant store shared by all working folders, so measuring a file set again in a new folder costs no encoding, and `candidates` says how many variants came from the store and how many it encoded; variants unused for 30 days are pruned, the store stays under 2 GB, and `clean --store` prunes it on demand.
 - `imgopt.py variants` lists every measured variant of one file, and `imgopt.py choose` sets its variant by label, one step milder or stronger, or back to the default, restoring a variant's file from the store when needed; a choice and a verdict name the variant by its content, so a re-run keeps them only while that variant is still measured.
 - `imgopt.py record` stores the pasted verdict block in each working folder the block names and refuses a block from a page built from other results; a keep, milder or stronger on a variant other than the current choice chooses that variant first, and a kept lossy file the page showed no 1:1 crops of is named with the `sheet` command that shows them.

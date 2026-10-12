@@ -30,8 +30,9 @@ import json
 import shlex
 import shutil
 import tempfile
+import threading
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -55,6 +56,9 @@ RUN_FILE = "run.json"  # the last `candidates` run in this --out: which inputs, 
 UNCALIBRATED = ("webp", "avif")
 NOT_SMALLER = "not smaller than the original, so not measured (an in-place pick must be smaller)"
 METRIC_TOOLS = ("ffmpeg", "ssimulacra2", "butteraugli_main")
+# Rung families (and single rungs) of one file measured at once. A file's rungs otherwise run one after
+# another, so the largest file in a set decides how long the whole run takes, however many files run in parallel.
+RUNG_THREADS = 3
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
 RASTER_VERDICT_TOOLS = frozenset({"pillow", *METRIC_TOOLS})
 SVG_VERDICT_TOOLS = frozenset({"pillow", "rsvg-convert"})
@@ -449,24 +453,47 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
     origins = dict.fromkeys(("here", "store", "encoded"), 0)
     with tempfile.TemporaryDirectory(dir=folder) as measure_dir:
         ref_cache = metrics.ReferenceCache(ref_img, Path(measure_dir)) if fmt != "svg" else None
-        for rung in (r for r in rungs if _available(r, tools)):
-            key = _key(src_hash, ref_hash, opts, rung, tools)
+
+        def candidate(rung: ladder.Rung, key: str) -> tuple[dict, str]:
+            """One rung's record and where it came from. Each rung writes only its own output file."""
             old = previous.get(key)
-            stored = ST.get(key) if opts.use_store and not _reusable(old, folder) else None
             if _reusable(old, folder):
-                rec, origin = _reuse(old), "here"
-            elif stored is not None and ST.restore(stored, folder):
-                rec, origin = _reuse(stored), "store"
-            elif fmt == "svg":
-                rec, origin = _svg_rung(rung, key, inputs, folder, src, tools), "encoded"
-            else:
-                rec = _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure,
-                                size if in_place else None, Path(measure_dir), ref_cache)
-                origin = "encoded"
-            origins[origin] += 1
-            rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
+                return _reuse(old), "here"
+            stored = ST.get(key) if opts.use_store else None
+            if stored is not None and ST.restore(stored, folder):
+                return _reuse(stored), "store"
+            if fmt == "svg":
+                return _svg_rung(rung, key, inputs, folder, src, tools), "encoded"
+            return _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure,
+                             size if in_place else None, Path(measure_dir), ref_cache), "encoded"
+
+        done: dict[str, tuple[dict, str]] = {}
+        lock = threading.Lock()
+
+        def descend(unit: list[ladder.Rung]) -> None:
+            """Measure a family top-down, or one single rung."""
+            for rung in unit:
+                rec, origin = candidate(rung, _key(src_hash, ref_hash, opts, rung, tools))
+                rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
+                with lock:  # the partial record lets an interrupted run resume (it is read by key, not order)
+                    done[rung.label] = (rec, origin)
+                    write_record(folder, {"schema": SCHEMA, "complete": False,
+                                          "candidates": [r for r, _ in done.values()]})
+
+        live = [r for r in rungs if _available(r, tools)]
+        units: dict[str, list[ladder.Rung]] = {}
+        for rung in live:
+            units.setdefault(rung.family or rung.label, []).append(rung)
+        # On an error or an interrupt the units not yet started are cancelled rather than run to the end.
+        pool = ThreadPoolExecutor(max_workers=RUNG_THREADS)
+        try:
+            list(pool.map(descend, units.values()))
+        finally:
+            pool.shutdown(cancel_futures=True)
+        for rung in (r for r in live if r.label in done):  # in ladder order, whatever order they finished in
+            rec, origin = done[rung.label]
             cands.append(rec)
-            write_record(folder, {"schema": SCHEMA, "complete": False, "candidates": cands})
+            origins[origin] += 1
         if fmt == "svg":
             chosen = G.pick(cands)
         else:

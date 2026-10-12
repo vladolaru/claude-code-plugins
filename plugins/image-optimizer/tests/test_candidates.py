@@ -1075,6 +1075,18 @@ def test_jobs_give_the_same_records_as_one_process(factory, toolset, tmp_path):
     assert strip(one) == strip(two)
 
 
+def test_rungs_measured_at_once_give_the_records_of_one_at_a_time(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"png", "jpeg"})
+    inputs = [factory.logo().resolve(), factory.photo().resolve()]
+    strip = lambda rs: [(r["pick"], [(c["label"], c.get("size"), c.get("ssim"), c.get("ss2"), c.get("band"),
+                                      c.get("pass")) for c in r["candidates"]]) for r in rs]
+    monkeypatch.setattr(C, "RUNG_THREADS", 1)
+    one = C.run(inputs, opts(tmp_path / "a", "high", use_store=False), tools, log=quiet, jobs=1)
+    monkeypatch.setattr(C, "RUNG_THREADS", 4)
+    many = C.run(inputs, opts(tmp_path / "b", "high", use_store=False), tools, log=quiet, jobs=1)
+    assert strip(one) == strip(many) and len(one[1]["candidates"]) > 4
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]

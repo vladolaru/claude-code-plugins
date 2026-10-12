@@ -70,6 +70,8 @@ class Rung:
     args: tuple[str, ...]
     post_oxipng: bool = False
     palette: bool = False
+    # The descending family this rung is one level of (one encoder, quality falling), or "" for a single rung.
+    family: str = ""
 
     @property
     def kind(self) -> str:
@@ -158,13 +160,13 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
                               ("-optimize", "-progressive", "-copy", "all" if f.orientation != 1 else "icc")))
         if lossy and not pixel:
             rungs += [Rung(f"jpegoptim-m{q}", "jpegoptim", "lossy", "source", ".jpg",
-                           (f"-m{q}",) + _jpeg_strip_args(f)) for q in JPEG_LEVELS]
+                           (f"-m{q}",) + _jpeg_strip_args(f), family="jpegoptim") for q in JPEG_LEVELS]
         if pixel:
             rungs += [Rung(f"cjpeg-q{q}", "cjpeg", "lossy", "pixels_ppm", ".jpg",
-                           ("-quality", str(q), "-optimize", "-progressive")) for q in JPEG_LEVELS]
+                           ("-quality", str(q), "-optimize", "-progressive"), family="cjpeg") for q in JPEG_LEVELS]
         if lossy:
             jl_in = "pixels_gray" if gray else "pixels_flat"  # cjpegli writes as many channels as it reads
-            rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", jl_in, ".jpg", ("-q", str(q)))
+            rungs += [Rung(f"cjpegli-q{q}", "cjpegli", "lossy", jl_in, ".jpg", ("-q", str(q)), family="cjpegli")
                       for q in JPEGLI_LEVELS]
     elif target == "png":
         # --strip safe drops eXIf, the PNG orientation carrier; a source that has one keeps eXIf as well.
@@ -181,18 +183,18 @@ def plan(f: Facts, *, profile: str, out_format: str = "keep", resize: int | None
                 notes.append(f"source has {f.colors} colours: palette candidates skipped, lossless is the floor")
             else:
                 rungs += [Rung(f"pngquant-q{r}", "pngquant", "lossy", "pixels", ".png", (f"--quality={r}",),
-                               post_oxipng=True, palette=True) for r in PNG_QUALITY_RANGES]
+                               post_oxipng=True, palette=True, family="pngquant-q") for r in PNG_QUALITY_RANGES]
                 rungs += [Rung(f"pngquant-c{n}", "pngquant", "lossy", "pixels", ".png", (str(n),),
-                               post_oxipng=True, palette=True)
+                               post_oxipng=True, palette=True, family="pngquant-c")
                           for n in PNG_COLOURS if f.colors is None or n < f.colors]
     elif target == "webp":
         rungs.append(Rung("cwebp-lossless", "cwebp", "lossless", "pixels", ".webp", ("-lossless", "-z", "9")))
-        rungs += [Rung(f"cwebp-q{q}", "cwebp", "lossy", "pixels", ".webp", ("-q", str(q), "-m", "6"))
-                  for q in WEB_LEVELS]
+        rungs += [Rung(f"cwebp-q{q}", "cwebp", "lossy", "pixels", ".webp", ("-q", str(q), "-m", "6"),
+                       family="cwebp") for q in WEB_LEVELS]
     else:
         rungs.append(Rung("avifenc-lossless", "avifenc", "lossless", "pixels", ".avif", ("--lossless",)))
-        rungs += [Rung(f"avifenc-q{q}", "avifenc", "lossy", "pixels", ".avif", ("-q", str(q), "-s", "0"))
-                  for q in WEB_LEVELS]
+        rungs += [Rung(f"avifenc-q{q}", "avifenc", "lossy", "pixels", ".avif", ("-q", str(q), "-s", "0"),
+                       family="avifenc") for q in WEB_LEVELS]
     return Plan(rungs, pixel, target, notes)
 
 
