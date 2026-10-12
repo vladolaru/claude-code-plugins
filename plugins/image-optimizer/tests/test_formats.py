@@ -109,6 +109,20 @@ def test_an_image_in_a_submodule_does_not_turn_the_ignore_filter_off(tmp_path):
     assert sum("git-ignored" in s for s in skipped) == 2
 
 
+def test_a_folder_holding_repositories_filters_each_by_its_own_ignores(tmp_path):
+    sites = tmp_path / "sites"  # not a repository itself
+    for name in ("r1", "r2"):
+        (sites / name / "dist").mkdir(parents=True)
+        (sites / name / "a.png").write_bytes(b"x")
+        (sites / name / "dist" / "built.png").write_bytes(b"x")
+        _git("init", "-q", cwd=sites / name)
+    (sites / "r1" / ".gitignore").write_text("dist/\n")
+    (sites / "loose.png").write_bytes(b"x")
+    skipped: list[str] = []
+    found = [p.relative_to(sites.resolve()).as_posix() for p in expand_inputs([sites], skipped=skipped)]
+    assert found == ["loose.png", "r1/a.png", "r2/a.png", "r2/dist/built.png"], skipped
+
+
 def test_a_symlinked_image_pointing_outside_the_repository_is_walked(tmp_path):
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"x")

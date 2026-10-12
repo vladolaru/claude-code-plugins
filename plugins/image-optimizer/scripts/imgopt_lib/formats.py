@@ -50,26 +50,26 @@ def _check_ignore(top: Path, files: list[Path]) -> set[Path] | None:
     return {rel[p] for p in proc.stdout.split("\0") if p in rel}
 
 
-def _ignored(folder: Path, files: list[Path], skipped: list[str]) -> set[Path]:
-    """The files git ignores under ``folder``; empty outside a work tree or without git. git refuses a whole
-    batch when one path is inside a submodule (exit 128), so then each repository is asked about its own files,
-    by its own .gitignore; one that still refuses is named in ``skipped``, its files left in."""
-    top = repo_root(folder) if files else None
-    if top is None:
+def _ignored(folder: Path, files: list[Path], repos: list[Path], skipped: list[str]) -> set[Path]:
+    """The files git ignores, each asked of the repository that holds it, by that repository's own .gitignore,
+    as git itself treats a submodule or a nested repository: the nearest of the ``repos`` roots the walk passed,
+    else the work tree holding ``folder``. A file in no repository is not filtered. A repository that git will
+    not answer for is named in ``skipped``, so the filter is never off without a word."""
+    if not files:
         return set()
-    ignored = _check_ignore(top, files)
-    if ignored is not None:
-        return ignored
-    ignored, roots, by_repo = set(), {}, {}
+    outer = repo_root(folder)
+    nearest_first = sorted(repos, key=lambda r: len(r.parts), reverse=True)
+    by_repo: dict[Path, list[Path]] = {}
     for f in files:
-        if f.parent not in roots:
-            roots[f.parent] = repo_root(f.parent)
-        if roots[f.parent] is not None:
-            by_repo.setdefault(roots[f.parent], []).append(f)
-    for repo, members in by_repo.items():
-        found = _check_ignore(repo, members)
+        inner = next((r for r in nearest_first if f.is_relative_to(r)), None)
+        top = inner.resolve() if inner is not None else outer
+        if top is not None:
+            by_repo.setdefault(top, []).append(f)
+    ignored: set[Path] = set()
+    for top, members in by_repo.items():
+        found = _check_ignore(top, members)
         if found is None:
-            skipped.append(f"{repo}: git check-ignore failed, so its {len(members)} file(s) were not checked "
+            skipped.append(f"{top}: git check-ignore failed, so its {len(members)} file(s) were not checked "
                            "against .gitignore")
         else:
             ignored |= found
@@ -78,10 +78,14 @@ def _ignored(folder: Path, files: list[Path], skipped: list[str]) -> set[Path]:
 
 def _walk(folder: Path, skipped: list[str]) -> list[Path]:
     """The images under ``folder``. Hidden, vendored and imgopt working folders are pruned, not entered (a
-    repository root holds .git and node_modules), and each vendored or working folder is named once."""
+    repository root holds .git and node_modules), and each vendored or working folder is named once. The roots
+    of the repositories the walk passes (a .git folder, or a submodule's .git file) decide whose ignores apply."""
     found: list[Path] = []
+    repos: list[Path] = []
     for root, dirs, files in os.walk(folder):
         here = Path(root)
+        if ".git" in dirs or ".git" in files:
+            repos.append(here)
         walked = []
         for d in sorted(dirs):
             if d.startswith("."):
@@ -96,7 +100,7 @@ def _walk(folder: Path, skipped: list[str]) -> list[Path]:
         found += [here / n for n in files
                   if not n.startswith(".") and format_of(Path(n)) in INPUT_FORMATS and (here / n).is_file()]
     found.sort()
-    ignored = _ignored(folder, found, skipped)
+    ignored = _ignored(folder, found, repos, skipped)
     skipped += [f"{f}: git-ignored" for f in found if f in ignored]
     return [f for f in found if f not in ignored]
 
