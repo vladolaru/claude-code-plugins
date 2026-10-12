@@ -377,6 +377,21 @@ def test_a_lossless_choice_starts_as_keep(tmp_path, factory):
     assert _page_data(page)["files"][0]["default_verdict"] == "keep"
 
 
+def test_no_keep_is_prefilled_on_a_variant_other_than_the_choice(tmp_path, factory):
+    # a lossless choice starts as keep; with its file gone the card shows another variant, which may be lossy,
+    # and a keep the human never clicked would land on it
+    out = fake_out(tmp_path, factory)
+    meta = next(out.glob("*/metrics.json"))
+    record = json.loads(meta.read_text())
+    record["candidates"].append({**record["candidates"][0], "key": "k-oxi", "label": "oxipng", "file": "oxipng.png",
+                                 "kind": "lossless", "identical": True})
+    record["pick"] = "oxipng.png"
+    meta.write_text(json.dumps(record))
+    _, page = S.build(out)
+    assert _page_data(page)["files"][0]["default_verdict"] == "keep"
+    assert run_page(page, "[...VERDICTS.entries()]") == []
+
+
 def test_a_failing_variant_is_listed_and_labelled(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     path = out / "photo--x" / "metrics.json"
