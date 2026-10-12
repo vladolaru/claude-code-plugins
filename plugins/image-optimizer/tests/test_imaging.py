@@ -9,7 +9,7 @@ from imgopt_lib import imaging as I
 def test_read_facts_reports_orientation_progressive_and_colours(factory):
     jpg = I.read_facts(factory.photo(orientation=6, progressive=True))
     assert (jpg.format, jpg.orientation, jpg.progressive) == ("jpeg", 6, True)
-    png = I.read_facts(factory.gradient(colors=24))
+    png = I.read_facts(factory.gradient(colors=24), count_colours=True)
     assert png.colors == 24
     assert not png.has_alpha
     assert I.read_facts(factory.logo()).has_alpha
@@ -153,6 +153,11 @@ def test_the_16_bit_check_reads_plain_tuple_tiles():
         tile = [("zip", (0, 0, 4, 4), 0, "RGB;16B")]
     with pytest.raises(I.ImagingError, match="16-bit"):
         I._refuse_16_bit(Old(), Path("old.png"))
+
+
+def test_colours_are_counted_only_on_request(factory):
+    logo = factory.logo()
+    assert I.read_facts(logo).colors is None and I.read_facts(logo, count_colours=True).colors > 1
 
 
 def test_png_colour_chunks_are_facts(factory):

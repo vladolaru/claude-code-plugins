@@ -384,10 +384,10 @@ def test_unreadable_candidate_output_becomes_that_candidates_error(factory, tool
     src = factory.logo().resolve()
     real = C.read_facts
 
-    def flaky(path):
+    def flaky(path, **kw):
         if Path(path).name.startswith("oxipng"):
             raise OSError("image file is truncated")
-        return real(path)
+        return real(path, **kw)
 
     monkeypatch.setattr(C, "read_facts", flaky)
     [r] = C.run([src], opts(tmp_path / "out"), tools, log=quiet)
@@ -1198,6 +1198,24 @@ def test_a_source_is_converted_to_srgb_once_per_run(factory, toolset, device_icc
     monkeypatch.setattr(I, "_convert", lambda im, icc, label: (converted.append(label), real(im, icc, label))[1])
     [r] = C.run([src], opts(tmp_path / "out", use_store=False), tools, log=quiet)
     assert converted.count("p3.png") == 1 and any("device colour profile" in n for n in r["notes"])
+
+
+def test_only_a_source_has_its_colours_counted(factory, toolset, tmp_path, monkeypatch):
+    # counting colours decodes every pixel; the ladder plan reads the count of a source, nothing reads an output's
+    tools = toolset("recompress", "high", {"png"})
+    counted, real = [], Image.Image.getcolors
+    monkeypatch.setattr(Image.Image, "getcolors", lambda im, *a, **k: (counted.append(im.size), real(im, *a, **k))[1])
+    [r] = C.run([factory.logo().resolve()], opts(tmp_path / "out", "high", use_store=False), tools, log=quiet)
+    assert len(r["candidates"]) > 3 and len(counted) == 1 and r["source"]["colors"]
+
+
+def test_the_reviewer_check_reuses_the_prepared_reference(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src = factory.photo().resolve()
+    decoded, real = [], C.display_pixels
+    monkeypatch.setattr(C, "display_pixels", lambda path, **kw: (decoded.append(Path(path)), real(path, **kw))[1])
+    [r] = C.run([src], opts(tmp_path / "out", "high", use_store=False), tools, log=quiet)
+    assert C.pick_of(r).get("ssim_evidence") is not None and decoded.count(src) == 1
 
 
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):

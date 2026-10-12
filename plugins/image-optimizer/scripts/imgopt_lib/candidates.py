@@ -302,12 +302,14 @@ def _svg_rung(rung, key, inputs, folder, src, tools) -> dict:
     return rec
 
 
-def _reviewer_check(rec: dict, ref_path: Path, ref_facts, folder: Path, tools: dict) -> None:
+def _reviewer_check(rec: dict, ref_path: Path, ref_facts, ref_shown, folder: Path, tools: dict) -> None:
     """Record the SSIM a reviewer's ffmpeg one-liner (`compare`) prints for this candidate as
     ``ssim_evidence``, or None with ``evidence_note`` saying why ffmpeg alone cannot reproduce it.
-    A failed ffmpeg run is also marked ``evidence_failed``, so the next run checks again (see _reuse)."""
+    A failed ffmpeg run is also marked ``evidence_failed``, so the next run checks again (see _reuse).
+    ``ref_shown`` is the reference's display pixels at its own size when the caller has them, else None."""
     new = folder / rec["file"]
-    ri, ni = display_pixels(ref_path), display_pixels(new)
+    ri = ref_shown if ref_shown is not None else display_pixels(ref_path)
+    ni = display_pixels(new)
     obstacles = CP.reviewer_obstacles(ref_facts, read_facts(new), ri.size, ni.size)
     rec["ssim_evidence"] = None
     if obstacles:
@@ -395,7 +397,7 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         source_info = {"format": "svg", "width": None, "height": None, "colors": None, "frames": 1}
         folder.mkdir(parents=True, exist_ok=True)
     else:
-        facts = read_facts(src)
+        facts = read_facts(src, count_colours=True)
         source_kinds = metadata_kinds(src)
         ref_facts = read_facts(ref_path) if src in opts.refs else facts
         if opts.resize and opts.resize == facts.display_width == ref_facts.display_width:
@@ -411,6 +413,8 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         pix = display_pixels(src, width=opts.resize)
         # Without --ref the reference is the source: its pixels are prepared once (decode, sRGB, resize).
         ref_img = display_pixels(ref_path, width=opts.resize) if src in opts.refs else pix
+        # The reviewer check compares the files as stored, so it can reuse these only when nothing was resized.
+        ref_shown = None if opts.resize else ref_img
         folder.mkdir(parents=True, exist_ok=True)
         if target_fmt == "jpeg" and facts.has_alpha:
             ref_img = flatten(ref_img, "white").convert("RGBA")
@@ -520,7 +524,8 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         if fmt == "svg":
             chosen = G.pick(cands)
         else:
-            chosen = _pick(cands, opts.gates, lambda rec: _reviewer_check(rec, ref_path, ref_facts, folder, tools))
+            chosen = _pick(cands, opts.gates,
+                           lambda rec: _reviewer_check(rec, ref_path, ref_facts, ref_shown, folder, tools))
             # butteraugli is reported only, so it runs on the pick alone (a cached pick may have it already)
             if chosen and "ssim" in chosen and not chosen.get("identical") and chosen.get("butteraugli") is None:
                 chosen["butteraugli"] = metrics.butteraugli_score(ref_img, display_pixels(folder / chosen["file"]),

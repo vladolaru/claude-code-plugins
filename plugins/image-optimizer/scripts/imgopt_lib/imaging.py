@@ -52,7 +52,7 @@ class Facts:
     height: int
     mode: str
     has_alpha: bool
-    colors: int | None
+    colors: int | None  # up to 4096; None above that, or when read_facts was not asked to count them
     icc: bytes | None
     icc_desc: str | None
     device_profile: bool
@@ -156,12 +156,14 @@ def _open(path: Path) -> Image.Image:
         raise
 
 
-def read_facts(path: Path, *, check_name: bool = True) -> Facts:
+def read_facts(path: Path, *, check_name: bool = True, count_colours: bool = False) -> Facts:
+    """The file's facts from its header and chunks. Counting colours decodes every pixel, so it is done only on
+    request (``count_colours``): the ladder plan reads a source's count, and nothing reads an output's."""
     with _open(path) as im:
         _refuse_16_bit(im, path)
         icc = im.info.get("icc_profile") or None
         desc = profile_description(icc)
-        colors = im.convert("RGBA").getcolors(maxcolors=4096)
+        colors = im.convert("RGBA").getcolors(maxcolors=4096) if count_colours else None
         fmt = decoded_format(im, path, check_name=check_name)
         return Facts(
             path=Path(path),

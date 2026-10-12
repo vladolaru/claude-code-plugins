@@ -25,7 +25,7 @@ def inspect_file(path: Path, tools: dict, workdir: Path) -> dict:
     if row["format"] == "svg":
         return row
     try:
-        f = read_facts(path)
+        f = read_facts(path, count_colours=True)
         row.update(width=f.width, height=f.height, mode=f.mode, colors=f.colors,
                    profile=f.icc_desc, orientation=f.orientation, progressive=f.progressive)
         if f.format == "jpeg":
