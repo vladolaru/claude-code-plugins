@@ -219,11 +219,12 @@ const DATA = __DATA__;
 // The variant on screen, which a verdict names: the page's choice, else the first one listed.
 const SELECTED = new Map(DATA.files.map(f=>[f.name,
   f.variants.some(v=>v.label===f.choice)?f.choice:(f.variants[0]||{}).label||null]));
-// A rebuilt page starts from what was recorded; a lossless choice without a verdict starts as keep. Either is
-// pre-filled only while the card shows the choice: with the choice's file gone it shows another variant, which no
-// verdict the human gave or was offered names.
+// A rebuilt page starts from what was recorded; a lossless choice without a verdict starts as keep. A keep, milder
+// or stronger names a variant, so it is pre-filled only while the card shows the choice: with the choice's file gone
+// it shows another variant, which no such verdict names. A reject leaves the original whatever is on screen.
 const VERDICTS = new Map(DATA.files
-  .filter(f=>(f.recorded||f.default_verdict)&&SELECTED.get(f.name)===f.choice).map(f=>[f.name,
+  .filter(f=>f.recorded?.verdict==='reject'||((f.recorded||f.default_verdict)&&SELECTED.get(f.name)===f.choice))
+  .map(f=>[f.name,
   {verdict:f.recorded?f.recorded.verdict:f.default_verdict,variant:SELECTED.get(f.name)}]));
 // Apart from VERDICTS: a note outlives a variant switch.
 const NOTES = new Map(DATA.files.filter(f=>f.recorded&&f.recorded.note).map(f=>[f.name,f.recorded.note]));

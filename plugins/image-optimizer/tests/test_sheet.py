@@ -392,6 +392,21 @@ def test_no_keep_is_prefilled_on_a_variant_other_than_the_choice(tmp_path, facto
     assert run_page(page, "[...VERDICTS.entries()]") == []
 
 
+def test_a_recorded_reject_stands_whatever_variant_the_card_shows(tmp_path, factory):
+    # a reject leaves the original and names no variant, so it is restored even when the choice's file is gone
+    out = fake_out(tmp_path, factory)
+    meta = next(out.glob("*/metrics.json"))
+    record = json.loads(meta.read_text())
+    record["candidates"].append({**record["candidates"][0], "key": "k-oxi", "label": "oxipng", "file": "oxipng.png",
+                                 "kind": "lossless", "identical": True})
+    record["pick"] = "oxipng.png"
+    meta.write_text(json.dumps(record))
+    (out / RV.VERDICTS_FILE).write_text(json.dumps({"files": {record["source"]["path"]: {
+        "verdict": "reject", "variant": "oxipng", "key": "k-oxi", "note": "", "sha256": record["source"]["sha256"]}}}))
+    _, page = S.build(out)
+    assert [v["verdict"] for _, v in run_page(page, "[...VERDICTS.entries()]")] == ["reject"]
+
+
 def test_a_failing_variant_is_listed_and_labelled(tmp_path, factory):
     out = fake_out(tmp_path, factory)
     path = out / "photo--x" / "metrics.json"
