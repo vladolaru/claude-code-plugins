@@ -587,11 +587,14 @@ def print_record(record: dict, log=print) -> None:
             saved, size = "", ""
         result = "PASS" + (" (identical)" if c.get("identical") else "") if c["pass"] else f"fail: {c['reason']}"
         log(f"   {c['label']:22} {size:>9} {saved:>6} {_fmt_score(c)}  {result}")
-    chosen = pick_of(record)
-    pick_text = f"{chosen['label']} ({kb(chosen['size'])})" if chosen else "none"
-    log(f"   pick: {pick_text}   verdict: {record['verdict']} ({record['verdict_reason']})")
+    # What will be written is the choice (choice_of): the pick, or a variant chosen by hand that outlived a re-run.
+    pick, chosen = pick_of(record), choice_of(record)
+    pick_text = f"{pick['label']} ({kb(pick['size'])})" if pick else "none"
+    by_hand = (f"   choice: {chosen['label']} ({kb(chosen['size'])})"
+               if chosen is not None and chosen is not pick else "")
+    log(f"   pick: {pick_text}{by_hand}   verdict: {record['verdict']} ({record['verdict_reason']})")
     if chosen and chosen.get("metadata_removed"):
-        log(f"   pick removes metadata: {', '.join(chosen['metadata_removed'])} "
+        log(f"   {'choice' if by_hand else 'pick'} removes metadata: {', '.join(chosen['metadata_removed'])} "
             "(say so to the human: copyright and credit live there)")
     if chosen and "ssim_evidence" in chosen:
         evidence = (f"{chosen['ssim_evidence']:.6f}" if chosen["ssim_evidence"] is not None

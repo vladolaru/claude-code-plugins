@@ -1241,6 +1241,23 @@ def test_a_cached_resized_rerun_decodes_the_full_size_reference_not_at_all(facto
     assert Path(src) not in [Path(p) for p in full_size]
 
 
+def test_the_run_reports_the_variant_that_will_be_written(capsys):
+    # a choice made by hand outlives a re-run; the metadata warning and the evidence must be the choice's
+    pick = {"key": "kp", "label": "jpegoptim-m85", "file": "p.jpg", "size": 900, "kind": "lossy", "pass": True,
+            "ssim": 0.99, "ss2": 85.0, "band": 1.0, "ssim_evidence": 0.9901}
+    chosen = {**pick, "key": "kc", "label": "cjpegli-q70", "file": "c.jpg", "size": 700, "pass": False,
+              "reason": "SSIM 0.97 < 0.98", "ssim_evidence": 0.9701, "metadata_removed": ["exif", "xmp"]}
+    record = {"source": {"path": "/x/a.jpg", "size": 1000, "format": "jpeg", "width": 4, "height": 4},
+              "ref": {"path": "/x/a.jpg", "size": 1000},
+              "candidates": [chosen, pick], "pick": "p.jpg", "choice": "kc", "notes": [],
+              "verdict": "apply", "verdict_reason": "saves 300 B (30%), chosen by hand"}
+    lines = []
+    C.print_record(record, log=lines.append)
+    text = "\n".join(lines)
+    assert "pick: jpegoptim-m85 (0.9 KB)   choice: cjpegli-q70 (0.7 KB)" in text
+    assert "choice removes metadata: exif, xmp" in text and "Evidence SSIM (luma): 0.970100" in text
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]
