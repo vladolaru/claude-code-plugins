@@ -13,6 +13,7 @@ deletes the staged file and leaves the target's bytes and mtime as they were.
 
 from __future__ import annotations
 
+import filecmp
 import os
 import shutil
 import tempfile
@@ -159,6 +160,20 @@ def _tools_changed(record: dict, tools: dict) -> str:
             return (f"{name} changed since candidates ran ({then['id']} -> {now.cache_id}); "
                     "re-run candidates, then apply")
     return ""
+
+
+def unplaced(outs, dest: Path | None = None) -> list[str]:
+    """The source paths whose choice still waits: one with something to write that the human did not reject and
+    whose target does not hold the chosen variant's bytes yet (no verdict, milder or stronger, left out by
+    --only, or failed). A working folder is done only when this is empty."""
+    waiting = []
+    for folder, record in _rows(outs):
+        if not RV.writes(record) or (RV.verdict_of(folder.parent, record) or {}).get("verdict") == "reject":
+            continue
+        variant, target = folder / choice_of(record)["file"], target_of(record, dest)
+        if not (variant.is_file() and target.is_file() and filecmp.cmp(variant, target, shallow=False)):
+            waiting.append(record["source"]["path"])
+    return waiting
 
 
 def apply(outs, *, tools: dict, only=(), dest: Path | None = None, log=print) -> int:

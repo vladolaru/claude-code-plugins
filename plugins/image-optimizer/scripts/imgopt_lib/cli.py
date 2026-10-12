@@ -24,7 +24,7 @@ from . import sheet as S
 from . import store as ST
 from . import tools as T
 from . import workdirs as W
-from .formats import OUTPUT_FORMATS, WORKDIR_MARKER, expand_inputs, format_of, subdir_name
+from .formats import OUTPUT_FORMATS, WORKDIR_MARKER, command_line, expand_inputs, format_of, subdir_name
 from .ladder import UsageError
 
 SCRIPT = Path(__file__).resolve().parents[1] / "imgopt.py"
@@ -195,14 +195,12 @@ def cmd_sheet(args) -> int:
     quoted_page = shlex.quote(str(page))
     print(f"Page for the human: {page}   (macOS: open {quoted_page}; Linux: xdg-open {quoted_page})")
     failed = bool(problems)
-    script = shlex.quote(str(SCRIPT))
-    folders = " ".join(shlex.quote(str(o)) for o in outs)
     print(T.describe(chk.tools))
     if not failed and lossy:
         print("Next: the human marks a verdict for each file on the page and copies the block; store it with: "
-              f"python3 {script} record {folders} --verdicts -")
+              + command_line(SCRIPT, "record", *outs, "--verdicts", "-"))
     elif not failed and any(r["verdict"] == "apply" for r in records):
-        print(f"Next: python3 {script} apply {folders}   (lossless choices need no verdict)")
+        print(f"Next: {command_line(SCRIPT, 'apply', *outs)}   (lossless choices need no verdict)")
     return 1 if failed else 0
 
 
@@ -218,12 +216,16 @@ def cmd_apply(args) -> int:
     code = AP.apply(outs, tools=chk.tools, only=only, dest=Path(args.dest).resolve() if args.dest else None)
     marked = [out for out in outs if (out / WORKDIR_MARKER).is_file()]
     if code == 0 and marked:
-        script = shlex.quote(str(SCRIPT))
-        size = sum(W.folder_size(out) for out in marked)
-        cleans = "; ".join(f"python3 {script} clean {shlex.quote(str(out))}" for out in marked)
-        print(f"Next: once the evidence is written, offer the human to free the working folder(s) "
-              f"({size / 1e6:.1f} MB): {cleans} (with --keep-picks to keep each file's record and choice for "
-              "placing later)")
+        waiting = AP.unplaced(outs, dest=Path(args.dest).resolve() if args.dest else None)
+        if waiting:
+            print(f"Next: {len(waiting)} file(s) still wait for a verdict, a new choice or their own `apply` "
+                  "(outside --only); keep the working folder until each is placed or rejected.")
+        else:
+            size = sum(W.folder_size(out) for out in marked)
+            cleans = "; ".join(command_line(SCRIPT, "clean", out) for out in marked)
+            print(f"Next: every choice is placed or rejected. Once the evidence is written, offer the human to "
+                  f"remove the working folder(s), which hold {size / 1e6:.1f} MB: {cleans} (or --keep-picks to keep "
+                  "each file's record and choice)")
     return code
 
 
@@ -267,12 +269,11 @@ def cmd_workdir(args) -> int:
     stale = W.forgotten(folder)
     if stale:
         total = sum(size for _, size in stale)
-        script = shlex.quote(str(SCRIPT))
         print(f"note: {len(stale)} other working folder(s) untouched for {W.FORGOTTEN_DAYS} days or more hold "
               f"{total / 1e6:.1f} MB. Each may hold files not yet placed, so offer the human their removal:",
               file=sys.stderr)
         for stale_folder, size in stale:
-            print(f"  python3 {script} clean {shlex.quote(str(stale_folder))}   ({size / 1e6:.1f} MB)", file=sys.stderr)
+            print(f"  {command_line(SCRIPT, 'clean', stale_folder)}   ({size / 1e6:.1f} MB)", file=sys.stderr)
     return 0
 
 
@@ -318,8 +319,7 @@ def cmd_choose(args) -> int:
         note = f"; {C.removes(chosen)} (tell the human)" if C.removes(chosen) else ""
         print(f"{record['source']['path']}: now {chosen['label']} ({C.kb(chosen['size'])}), {gate}; "
               f"status: {record['verdict']} ({record['verdict_reason']}){note}")
-    folders = " ".join(shlex.quote(str(Path(o).resolve())) for o in args.out)
-    print(f"Next: rebuild the page: python3 {shlex.quote(str(SCRIPT))} sheet {folders}")
+    print(f"Next: rebuild the page: {command_line(SCRIPT, 'sheet', *(Path(o).resolve() for o in args.out))}")
     return 0
 
 
@@ -331,8 +331,6 @@ def cmd_record(args) -> int:
     tiled = {r["source"]["path"]: C.choice_of(r)["file"] for _, r in RV.rows_of(dirs) if S.needs_tiles(r)}
     counts = RV.record_verdicts(dirs, text)
     print("Recorded: " + (", ".join(f"{n} {v}" for v, n in sorted(counts.items())) or "no verdicts"))
-    q = shlex.quote
-    folders = " ".join(q(str(d)) for d in dirs)
     # A kept lossy file to write that the page has no crops of: another variant than the page's choice, or one
     # the page saw untouched (a keep under the saving floor).
     unseen = []
@@ -347,18 +345,17 @@ def cmd_record(args) -> int:
     for path, chosen in unseen:
         print(f"  kept without its 1:1 crops: {path} ({chosen['label']})")
     if unseen:
-        print(f"  view them before placing: python3 {q(str(SCRIPT))} sheet {folders}")
+        print(f"  view them before placing: {command_line(SCRIPT, 'sheet', *dirs)}")
     asked = [(f, r) for f, r in RV.rows_of(dirs)
              if (RV.verdict_of(f.parent, r) or {}).get("verdict") in ("milder", "stronger")]
     for folder, record in asked:
         how = RV.verdict_of(folder.parent, record)["verdict"]
-        print(f"  asked {how}: python3 {q(str(SCRIPT))} choose {folders} --file {q(record['source']['path'])} "
-              f"--{how}")
+        print(f"  asked {how}: {command_line(SCRIPT, 'choose', *dirs, '--file', record['source']['path'], '--' + how)}")
     if asked:
-        print(f"Then rebuild the page: python3 {q(str(SCRIPT))} sheet {folders}")
+        print(f"Then rebuild the page: {command_line(SCRIPT, 'sheet', *dirs)}")
     if counts.get("keep"):
-        print(f"Place the kept files: python3 {q(str(SCRIPT))} apply {folders}   "
-              f"(or copy the paths: python3 {q(str(SCRIPT))} manifest {folders} --accepted)")
+        print(f"Place the kept files: {command_line(SCRIPT, 'apply', *dirs)}   "
+              f"(or copy the paths: {command_line(SCRIPT, 'manifest', *dirs, '--accepted')})")
     return 0
 
 

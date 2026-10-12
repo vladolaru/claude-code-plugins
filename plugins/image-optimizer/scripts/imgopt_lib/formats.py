@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,12 @@ VENDORED = frozenset({"node_modules", "vendor", "bower_components"})
 # It lives here, not in workdirs, because workdirs imports ladder, which imports imaging, which imports this module.
 WORKDIR_MARKER = ".imgopt-workdir"
 WORKDIR_MARKER_TEXT = "Made by `imgopt candidates`: a working folder that `imgopt clean` may delete.\n"
+
+
+def command_line(script: Path, *args) -> str:
+    """How every imgopt command printed for the agent to run is spelt: python3, the script, each argument
+    shell-quoted, so a path with spaces pastes as one word in bash or zsh."""
+    return " ".join(["python3", *(shlex.quote(str(a)) for a in (script, *args))])
 
 
 def format_of(path: Path) -> str | None:

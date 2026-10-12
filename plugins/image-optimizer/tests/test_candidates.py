@@ -62,13 +62,13 @@ def test_candidates_marks_its_out_folder_so_clean_accepts_it(factory, toolset, t
     assert W.clean(out, keep_picks=True) >= 0 and W.clean(out, keep_picks=False) > 0 and not out.exists()
 
 
-def test_the_summary_names_the_working_folder_and_how_to_remove_it(factory, toolset, tmp_path):
+def test_the_summary_names_the_working_folder_and_when_to_offer_its_removal(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"jpeg"})
     lines = []
     out = tmp_path / "out dir"
     C.run([factory.photo().resolve()], opts(out), tools, log=lines.append, script=Path("/x y/imgopt.py"))
     line = next(l for l in lines if l.startswith("Working folder:"))
-    assert line.startswith(f"Working folder: '{out}' (") and " MB); remove it with: " in line
+    assert line.startswith(f"Working folder: '{out}' (") and " MB); once its files are placed, offer " in line
     assert line.endswith(f"python3 '/x y/imgopt.py' clean '{out}'")
     assert lines.index(line) < next(i for i, l in enumerate(lines) if l.startswith("Next:"))
 

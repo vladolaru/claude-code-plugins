@@ -397,7 +397,9 @@ def run_cli(*args):
     return subprocess.run([sys.executable, str(SCRIPT), "apply", *map(str, args)], capture_output=True, text=True)
 
 
-def test_a_finished_apply_offers_to_free_its_working_folder(factory, toolset, tmp_path, keep):
+@pytest.mark.parametrize("verdict", ["keep", "milder"])
+def test_apply_offers_the_folder_s_removal_only_once_nothing_waits(factory, toolset, tmp_path, keep, verdict):
+    # a file marked milder (or with no verdict, or outside --only) still waits: its folder must stay
     from imgopt_lib import workdirs as W
     tools = toolset("recompress", "high", {"jpeg"})
     out = tmp_path / "out"
@@ -406,11 +408,14 @@ def test_a_finished_apply_offers_to_free_its_working_folder(factory, toolset, tm
     record = json.loads((folder / "metrics.json").read_text())
     record["candidates"][0].update(_measured(folder, tools))
     (folder / "metrics.json").write_text(json.dumps(record))
-    keep(out, "photo.jpg")
+    keep(out, "photo.jpg", verdict=verdict)
     proc = run_cli(out)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     last = proc.stdout.strip().splitlines()[-1]
-    assert last.startswith("Next: once the evidence is written") and f"clean {out}" in last and "--keep-picks" in last
+    if verdict == "keep":
+        assert last.startswith("Next: every choice is placed or rejected") and f"clean {out}" in last
+    else:
+        assert last.startswith("Next: 1 file(s) still wait") and "clean" not in last
 
 
 def test_cli_exits_2_for_a_missing_out(tmp_path):

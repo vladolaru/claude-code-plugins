@@ -45,7 +45,7 @@ from . import compare as CP
 from . import gates as G
 from . import ladder, metrics
 from . import store as ST
-from .formats import EXT_BY_FORMAT, format_of, subdir_name
+from .formats import EXT_BY_FORMAT, command_line, format_of, subdir_name
 from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, metadata_kinds, read_facts,
                       resized_size, srgb_shift)
 from .store import sha256  # also `candidates.sha256`, which `apply` and the tests import
@@ -727,15 +727,13 @@ def summarize(records: list[dict], out: Path, script: Path, tools: dict, log=pri
         log("WAIVED TOOLS (fewer candidates were tried, so picks may be larger than with them; state this in "
             "any report): " + ", ".join(waived))
     lossy = [r for r in applied if choice_of(r)["kind"] == "lossy"]
-    q = shlex.quote
-    command = f"python3 {q(str(script))}"
-    log(f"Working folder: {q(str(out))} ({folder_size(out) / 1e6:.1f} MB); remove it with: "
-        f"{command} clean {q(str(out))}")
+    log(f"Working folder: {shlex.quote(str(out))} ({folder_size(out) / 1e6:.1f} MB); once its files are placed, "
+        f"offer the human its removal: {command_line(script, 'clean', out)}")
     if lossy:
-        log(f"Next: {command} sheet {q(str(out))}   (view the required tiles, show the page; "
+        log(f"Next: {command_line(script, 'sheet', out)}   (view the required tiles, show the page; "
             f"{len(lossy)} lossy choice(s) need the human's verdict, which `record` stores)")
     elif applied:
-        log(f"Next: {command} apply {q(str(out))}   (all choices are lossless; no verdict needed)")
+        log(f"Next: {command_line(script, 'apply', out)}   (all choices are lossless; no verdict needed)")
     else:
         log("Next: nothing to apply.")
 
