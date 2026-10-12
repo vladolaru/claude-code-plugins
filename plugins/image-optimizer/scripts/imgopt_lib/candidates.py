@@ -448,7 +448,7 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
     cands = []
     origins = dict.fromkeys(("here", "store", "encoded"), 0)
     with tempfile.TemporaryDirectory(dir=folder) as measure_dir:
-        ref_cache: dict = {}  # the flattened reference per background, written once for every candidate
+        ref_cache = metrics.ReferenceCache(ref_img, Path(measure_dir)) if fmt != "svg" else None
         for rung in (r for r in rungs if _available(r, tools)):
             key = _key(src_hash, ref_hash, opts, rung, tools)
             old = previous.get(key)

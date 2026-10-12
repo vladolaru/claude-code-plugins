@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+import threading
 import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass
@@ -28,6 +29,9 @@ from .imaging import Facts, alpha_used, backgrounds, flatten
 SSIM_RE = re.compile(r"All:\s*([0-9.]+)")
 FLOAT_RE = re.compile(r"-?\d+(?:\.\d+)?")
 MIN_SMOOTH_PIXELS = 50
+# The PNGs handed to ffmpeg, ssimulacra2 and butteraugli are read once and deleted: compressing them harder
+# only costs time (Pillow's default level 6 took 3x as long on a 12 MP image).
+SCRATCH_PNG = {"compress_level": 1}
 
 
 class MetricError(RuntimeError):
@@ -114,20 +118,40 @@ def percentile_from_histogram(hist: list[int], q: float) -> float:
     return v_lo + (v_hi - v_lo) * (pos - lo)
 
 
-def band_score(ref: Image.Image, new: Image.Image) -> float:
+def band_score(ref: Image.Image, new: Image.Image, mask: Image.Image | None = None) -> float:
+    """``mask`` is ``smooth_mask(ref)``, passed in when the caller scores many candidates against one reference."""
     if ref.size != new.size:
         raise MetricError(f"banding needs equal sizes, got {ref.size} and {new.size}")
-    mask = smooth_mask(ref)
+    mask = smooth_mask(ref) if mask is None else mask
     hist = diff_max(ref, new).histogram(mask=mask)
     if sum(hist) < MIN_SMOOTH_PIXELS:
         return 0.0
     return percentile_from_histogram(hist, 99.5)
 
 
+class ReferenceCache:
+    """One reference's flattened pixels, their PNG in ``workdir`` and their smooth mask per background, made on
+    first use instead of once per candidate. Threads measuring candidates of the same source share one."""
+
+    def __init__(self, ref: Image.Image, workdir: Path):
+        self.ref, self.workdir = ref, Path(workdir)
+        self._made: dict[str, tuple[Image.Image, Path, Image.Image]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, bg: str) -> tuple[Image.Image, Path, Image.Image]:
+        with self._lock:
+            if bg not in self._made:
+                r = flatten(self.ref, bg)
+                rp = self.workdir / f"ref_{bg}.png"
+                r.save(rp, **SCRATCH_PNG)
+                self._made[bg] = (r, rp, smooth_mask(r))
+            return self._made[bg]
+
+
 def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path, *, with_butteraugli: bool = True,
-            ref_cache: dict | None = None) -> Scores:
-    """``ref_cache`` (a dict the caller keeps per reference) holds the flattened reference and its PNG per
-    background, written once instead of once per candidate; it must live as long as ``workdir``."""
+            ref_cache: ReferenceCache | None = None) -> Scores:
+    """``ref_cache``, made for ``ref`` by a caller measuring many candidates of one source, must live as long
+    as its folder; without one the reference is prepared for this call alone."""
     if ref.size != new.size:
         raise MetricError(f"cannot compare {ref.size} with {new.size}")
     workdir.mkdir(parents=True, exist_ok=True)
@@ -137,21 +161,15 @@ def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path, *, w
     ssims, ss2s, bands, bas = {}, [], [], []
     ba_failed = False
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
+        cache = ref_cache if ref_cache is not None else ReferenceCache(ref, Path(tmp))
         for bg in backgrounds(alpha_used(ref) or alpha_used(new)):
-            if ref_cache is not None and bg in ref_cache:
-                r, rp = ref_cache[bg]
-            else:
-                r = flatten(ref, bg)
-                rp = (Path(workdir) if ref_cache is not None else Path(tmp)) / f"ref_{bg}.png"
-                r.save(rp)
-                if ref_cache is not None:
-                    ref_cache[bg] = (r, rp)
+            r, rp, mask = cache.get(bg)
             n = flatten(new, bg)
             np_ = Path(tmp) / f"new_{bg}.png"
-            n.save(np_)
+            n.save(np_, **SCRATCH_PNG)
             ssims[bg] = ssim_gray(ffmpeg, rp, np_)
             ss2s.append(ssimulacra2(ss2_exe, rp, np_))
-            bands.append(band_score(r, n))
+            bands.append(band_score(r, n, mask))
             if ba is not None and ba.ok:
                 value = butteraugli(ba.path, rp, np_)
                 if value is None:
@@ -171,8 +189,8 @@ def butteraugli_score(ref: Image.Image, new: Image.Image, tools: dict, workdir: 
         values = []
         for bg in backgrounds(alpha_used(ref) or alpha_used(new)):
             rp, np_ = Path(tmp) / f"r_{bg}.png", Path(tmp) / f"n_{bg}.png"
-            flatten(ref, bg).save(rp)
-            flatten(new, bg).save(np_)
+            flatten(ref, bg).save(rp, **SCRATCH_PNG)
+            flatten(new, bg).save(np_, **SCRATCH_PNG)
             value = butteraugli(ba.path, rp, np_)
             if value is None:
                 return None

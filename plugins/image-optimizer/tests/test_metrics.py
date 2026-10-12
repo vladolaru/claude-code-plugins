@@ -174,15 +174,29 @@ def test_the_flattened_reference_is_written_once_per_background(factory, toolset
     tools = toolset("compare")
     ref = I.display_pixels(factory.logo())
     others = [I.display_pixels(factory.logo(name=f"l{i}.png")) for i in range(2)]
-    saves, cache = [], {}
+    saves, cache = [], M.ReferenceCache(ref, tmp_path / "w")
     original = Image.Image.save
     monkeypatch.setattr(Image.Image, "save", lambda self, fp, *a, **k: (saves.append(Path(fp).name),
                                                                        original(self, fp, *a, **k))[1])
     work = tmp_path / "w"
+    work.mkdir()
     first = M.measure(ref, others[0], tools, work, with_butteraugli=False, ref_cache=cache)
     M.measure(ref, others[1], tools, work, with_butteraugli=False, ref_cache=cache)
     assert sorted(saves).count("ref_white.png") == 1 and sorted(saves).count("ref_dark.png") == 1
     assert first.ssim == M.measure(ref, others[0], tools, tmp_path / "w2", with_butteraugli=False).ssim
+
+
+def test_the_reference_smooth_mask_is_computed_once_per_background(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("compare")
+    ref = I.display_pixels(factory.logo())
+    others = [I.display_pixels(factory.logo(name=f"l{i}.png")) for i in range(3)]
+    (tmp_path / "w").mkdir()
+    masked, cache = [], M.ReferenceCache(ref, tmp_path / "w")
+    original = M.smooth_mask
+    monkeypatch.setattr(M, "smooth_mask", lambda rgb: (masked.append(rgb.size), original(rgb))[1])
+    bands = [M.measure(ref, o, tools, tmp_path / "w", with_butteraugli=False, ref_cache=cache).band for o in others]
+    assert len(masked) == 2  # white and dark, not once per candidate
+    assert bands[0] == M.measure(ref, others[0], tools, tmp_path / "w2", with_butteraugli=False).band
 
 
 def test_a_tool_that_cannot_run_raises_metric_error(tmp_path):
