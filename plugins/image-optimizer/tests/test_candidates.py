@@ -839,10 +839,13 @@ def test_an_interrupted_record_is_reused_and_not_applied(factory, toolset, tmp_p
     assert partial["complete"] is False and len(partial["candidates"]) == 1
     assert C.load_records(out) == []
     assert any("interrupted" in s for s in C.stale_records(out))
-    monkeypatch.setattr(ladder, "generate", real)
-    first_key = partial["candidates"][0]["key"]
+    # rungs run in parallel, so whichever finished before the interrupt is the one the re-run must not redo
+    done_key = partial["candidates"][0]["key"]
+    encoded = []
+    monkeypatch.setattr(ladder, "generate", lambda rung, **kw: (encoded.append(rung.label), real(rung, **kw))[1])
     [r] = C.run([src.resolve()], opts(out), tools, log=quiet)
-    assert r["complete"] and r["candidates"][0]["key"] == first_key
+    assert r["complete"] and done_key in [c["key"] for c in r["candidates"]]
+    assert len(encoded) == len(r["candidates"]) - 1
     assert len(C.load_records(out)) == 1 and C.stale_records(out) == []
 
 
