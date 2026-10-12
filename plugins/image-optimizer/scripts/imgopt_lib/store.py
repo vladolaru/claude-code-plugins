@@ -124,7 +124,8 @@ def put(rec: dict, folder: Path, *, source_sha: str, ref_sha: str) -> None:
     own refusal are not stored: they are retried next time. A lossy variant is indexed as produced unless it lost
     nothing: a rung that handed back the source's or the reference's bytes, or pixel-identical output. A record
     already stored as it is, with its file, only counts as a use: a fully cached re-run stores every candidate
-    again, and hashing and rewriting them all would cost it seconds."""
+    again, and hashing and rewriting them all would cost it seconds. Its produced mark was made when the record
+    was first stored (best effort, like every store write), and is not retried."""
     key = rec.get("key")
     if not key or ("error" in rec and rec.get("error_kind") != "refused"):
         return

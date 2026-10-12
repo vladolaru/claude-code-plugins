@@ -52,7 +52,9 @@ class Facts:
     height: int
     mode: str
     has_alpha: bool
-    colors: int | None  # up to 4096; None above that, or when read_facts was not asked to count them
+    # Up to 4096. None means not known to be few: above 4096, or not counted (read_facts counts on request, and
+    # ladder.tools_for plans for an unseen file); the ladder plan treats both as many colours.
+    colors: int | None
     icc: bytes | None
     icc_desc: str | None
     device_profile: bool

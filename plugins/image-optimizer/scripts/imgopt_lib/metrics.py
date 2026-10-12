@@ -3,11 +3,12 @@
 SSIM is ffmpeg's ``ssim`` filter on gray-converted inputs (``SSIM_GRAY``, which
 the reviewer one-liner in compare.py uses too), so JPEG, PNG and alpha PNG
 share one parse path (``All:``). ssimulacra2 runs on the same flattened
-PNGs; ``measure`` computes only what the gates read, and butteraugli, which is
-reported and never gated, runs through ``butteraugli_score`` on a pick. Images with alpha are flattened onto white and onto
-dark grey and the worse value counts, because quantized soft edges fringe on
-dark backgrounds; ``ssim_white`` is kept separately because it is the number
-a reviewer's ffmpeg one-liner reproduces. The banding score is the session's
+PNGs. ``measure`` computes only what the gates read; butteraugli, reported and
+never gated, runs through ``butteraugli_score`` (on a pick, and in `compare`).
+Images with alpha are flattened onto white and onto dark grey and the worse
+value counts, because quantized soft edges fringe on dark backgrounds;
+``ssim_white`` is kept separately because it is the number a reviewer's
+ffmpeg one-liner reproduces. The banding score is the session's
 gradient-quantisation measure (prbuild/banding.py), rewritten with Pillow
 filters: the 99.5th percentile of the max-channel difference over areas of
 the reference that are smooth (3x3 spread 1..6) but not flat.

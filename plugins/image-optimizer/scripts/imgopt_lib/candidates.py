@@ -64,6 +64,8 @@ RUNG_THREADS = 3
 # it skipped 45% of the rungs and changed 3 picks by 18 KB in all; stopping after one failure changed 21 by 608 KB.
 EARLY_STOP = 2
 # Besides its encoder, a cached verdict depends on whatever decoded, converted and compared the pixels.
+# butteraugli stays in the key though no gate reads it: a cached pick carries its butteraugli score, and jpeg-xl
+# ships it with ssimulacra2, so an upgrade of one is an upgrade of both.
 RASTER_VERDICT_TOOLS = frozenset({"pillow", *METRIC_TOOLS})
 SVG_VERDICT_TOOLS = frozenset({"pillow", "rsvg-convert"})
 
