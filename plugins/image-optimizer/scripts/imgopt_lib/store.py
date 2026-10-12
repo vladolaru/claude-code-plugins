@@ -181,9 +181,11 @@ def size() -> int:
     return sum(s for _, s, _ in _entries())
 
 
-def prune(now: float | None = None, max_age_days: float = MAX_AGE_DAYS, max_bytes: int = MAX_BYTES) -> tuple[int, int]:
+def prune(now: float | None = None, max_age_days: float = MAX_AGE_DAYS,
+          max_bytes: int = MAX_BYTES) -> tuple[int, int, int]:
     """Drop entries unused for ``max_age_days``, then the least recently used until the store holds at most
-    ``max_bytes``; returns (entries removed, bytes freed). The ``outputs`` index is kept; the legacy one goes."""
+    ``max_bytes``; returns (entries removed, bytes freed, bytes left), so a caller reporting the store's size needs
+    no second walk of it. The ``outputs`` index is kept; the legacy one goes."""
     shutil.rmtree(root() / LEGACY_INDEX, ignore_errors=True)
     now = time.time() if now is None else now
     entries = sorted(_entries())
@@ -196,4 +198,4 @@ def prune(now: float | None = None, max_age_days: float = MAX_AGE_DAYS, max_byte
         total -= size_
         removed += 1
         freed += size_
-    return removed, freed
+    return removed, freed, total

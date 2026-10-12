@@ -260,8 +260,8 @@ def cmd_workdir(args) -> int:
 
 def cmd_clean(args) -> int:
     if args.store:
-        removed, freed = ST.prune(max_age_days=ST.MAX_AGE_DAYS if args.older_than is None else args.older_than)
-        print(f"Pruned {removed} variant(s), freed {freed / 1e6:.1f} MB; the store holds {ST.size() / 1e6:.1f} MB.")
+        removed, freed, left = ST.prune(max_age_days=ST.MAX_AGE_DAYS if args.older_than is None else args.older_than)
+        print(f"Pruned {removed} variant(s), freed {freed / 1e6:.1f} MB; the store holds {left / 1e6:.1f} MB.")
         return 0
     if not args.out:
         raise UsageError("name the working folder, or pass --store")

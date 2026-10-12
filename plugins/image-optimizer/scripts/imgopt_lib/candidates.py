@@ -822,8 +822,8 @@ def run(inputs: list[Path], opts: Options, tools: dict, log=print, script: Path 
     here = f", {origins['here']} already in the working folder" if origins["here"] else ""
     log(f"{origins['store']} variant(s) from the store, {origins['encoded']} encoded{here}.")
     if opts.use_store:
-        removed, freed = ST.prune()
+        removed, freed, left = ST.prune()
         pruned = f"; pruned {removed} unused variant(s), {freed / 1e6:.1f} MB" if removed else ""
-        log(f"Variant store: {ST.size() / 1e6:.1f} MB at {ST.root()} (variants unused for {ST.MAX_AGE_DAYS} days "
+        log(f"Variant store: {left / 1e6:.1f} MB at {ST.root()} (variants unused for {ST.MAX_AGE_DAYS} days "
             f"go, and it stays under {ST.MAX_BYTES / 1e9:.0f} GB){pruned}")
     return records

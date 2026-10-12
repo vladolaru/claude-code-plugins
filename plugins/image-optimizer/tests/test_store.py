@@ -177,7 +177,8 @@ def test_prune_drops_old_entries_and_keeps_the_store_under_its_cap(tmp_path):
         ST.put({"key": f"key{i}", "file": "v.png", "kind": "lossy"}, folder, source_sha=SRC, ref_sha=REF)
         then = time.time() - age_days * 86400
         os.utime(ST._entry(f"key{i}"), (then, then))
-    removed, _ = ST.prune(max_bytes=1500)
+    removed, _, left = ST.prune(max_bytes=1500)
+    assert left == ST.size() <= 1500
     assert removed == 2 and ST.get("key2") is not None and ST.get("key0") is None
     assert ST.produced_lossy(ST.sha256(tmp_path / "r0" / "v.png"))  # the index outlives the variant
 
@@ -277,7 +278,7 @@ def test_prune_and_size_survive_entries_that_vanish_or_cannot_be_read(tmp_path, 
     monkeypatch.setattr(Path, "iterdir", iterdir)
     good = ST.size()
     assert good >= 1000
-    assert ST.prune(max_age_days=0, now=time.time() + 1) == (1, good)
+    assert ST.prune(max_age_days=0, now=time.time() + 1) == (1, good, 0)
 
 
 def test_clean_store_prunes_by_age_and_needs_no_folder(tmp_path, capsys):
