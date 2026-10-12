@@ -63,6 +63,33 @@ def test_a_failed_hardlink_falls_back_to_a_copy(tmp_path, monkeypatch):
     assert ST.get("k1") is not None
 
 
+@pytest.mark.parametrize("links", [True, False], ids=["hard-link", "copy"])
+def test_placing_a_variant_never_writes_into_an_existing_file(tmp_path, monkeypatch, links):
+    # a stored variant may be hard-linked into working folders: another run that got there first, or a file
+    # already placed, must keep its bytes and inode
+    placed = tmp_path / "work" / "v.png"
+    placed.parent.mkdir()
+    placed.write_bytes(b"stored first")
+    entry = tmp_path / "store" / "v.png"
+    entry.parent.mkdir()
+    os.link(placed, entry)
+    src = tmp_path / "src.png"
+    src.write_bytes(b"a second writer")
+    if not links:
+        monkeypatch.setattr(os, "link", lambda *a: (_ for _ in ()).throw(OSError("cross-device")))
+    ST._link_or_copy(src, entry)
+    assert placed.read_bytes() == b"stored first"
+
+
+def test_a_copy_lands_whole_or_not_at_all(tmp_path, monkeypatch):
+    src, dst = tmp_path / "src.png", tmp_path / "out" / "v.png"
+    dst.parent.mkdir()
+    src.write_bytes(b"variant")
+    monkeypatch.setattr(os, "link", lambda *a: (_ for _ in ()).throw(OSError("cross-device")))
+    ST._link_or_copy(src, dst)
+    assert dst.read_bytes() == b"variant" and [p.name for p in dst.parent.iterdir()] == ["v.png"]
+
+
 def test_lossy_variants_are_remembered_as_produced(tmp_path):
     folder = tmp_path / "rec"
     folder.mkdir()
