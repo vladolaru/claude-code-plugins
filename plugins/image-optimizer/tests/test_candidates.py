@@ -605,6 +605,35 @@ def test_out_inside_the_git_work_tree_of_a_file_input_is_refused(factory, tmp_pa
     assert not (repo / "work").exists()
 
 
+def test_the_cache_working_folder_is_accepted_inside_a_home_that_is_a_git_repo(factory, tmp_path, monkeypatch):
+    # a dotfiles repository at ~ holds ~/Library/Caches: the folder `workdir` makes is marked .gitignore'd, so
+    # it is never committed, while a folder of one's own inside the repository still is refused
+    from imgopt_lib import cli
+    from imgopt_lib import workdirs as Wd
+    home = tmp_path / "home"
+    home.mkdir()
+    subprocess.run(["git", "init", "-q", str(home)], check=True)
+    monkeypatch.setenv("IMGOPT_CACHE", str(home / "Library" / "Caches" / "imgopt"))
+    src = home / "Desktop" / "hero.png"
+    src.parent.mkdir()
+    src.write_bytes(factory.logo().read_bytes())
+    cli._refuse_out_inside_inputs(Wd.workdir("hero").resolve(), [src])
+    with pytest.raises(ladder.UsageError, match="inside the git work tree"):
+        cli._refuse_out_inside_inputs((home / "work").resolve(), [src])
+
+
+def test_the_out_check_asks_git_once_per_folder(factory, tmp_path, monkeypatch):
+    from imgopt_lib import cli
+    from imgopt_lib import formats as F
+    files = [tmp_path / f"{n}.png" for n in "abc"]
+    for f in files:
+        f.write_bytes(b"x")
+    asked, real = [], F.repo_root
+    monkeypatch.setattr(F, "repo_root", lambda folder: (asked.append(folder), real(folder))[1])
+    cli._refuse_out_inside_inputs((tmp_path.parent / "elsewhere").resolve(), files)
+    assert len(asked) == 1
+
+
 def test_out_gets_a_gitignore(factory, toolset, tmp_path):
     tools = toolset("recompress", "lossless", {"png"})
     C.run([factory.logo().resolve()], opts(tmp_path / "out"), tools, log=quiet)

@@ -34,7 +34,8 @@ def _git(folder: Path, *args: str, stdin: str = "") -> subprocess.CompletedProce
         return None
 
 
-def _repo_root(folder: Path) -> Path | None:
+def repo_root(folder: Path) -> Path | None:
+    """The git work tree holding ``folder``, resolved; None outside one or without git."""
     proc = _git(folder, "rev-parse", "--show-toplevel")
     return Path(proc.stdout.strip()).resolve() if proc and proc.returncode == 0 else None
 
@@ -53,7 +54,7 @@ def _ignored(folder: Path, files: list[Path], skipped: list[str]) -> set[Path]:
     """The files git ignores under ``folder``; empty outside a work tree or without git. git refuses a whole
     batch when one path is inside a submodule (exit 128), so then each repository is asked about its own files,
     by its own .gitignore; one that still refuses is named in ``skipped``, its files left in."""
-    top = _repo_root(folder) if files else None
+    top = repo_root(folder) if files else None
     if top is None:
         return set()
     ignored = _check_ignore(top, files)
@@ -62,7 +63,7 @@ def _ignored(folder: Path, files: list[Path], skipped: list[str]) -> set[Path]:
     ignored, roots, by_repo = set(), {}, {}
     for f in files:
         if f.parent not in roots:
-            roots[f.parent] = _repo_root(f.parent)
+            roots[f.parent] = repo_root(f.parent)
         if roots[f.parent] is not None:
             by_repo.setdefault(roots[f.parent], []).append(f)
     for repo, members in by_repo.items():
