@@ -212,7 +212,7 @@ def test_a_bad_out_is_a_usage_error_naming_the_path(tmp_path, make):
     with pytest.raises(UsageError, match=re.escape(str(bad))):
         AP.apply(bad, tools={}, log=lambda _: None)
     with pytest.raises(UsageError, match=re.escape(str(bad))):
-        AP.needs_metrics(bad)
+        AP.tools_needed(bad)
     assert not (tmp_path / "missing").exists()
 
 
@@ -255,11 +255,11 @@ def test_needs_metrics_only_for_lossy_picks_that_will_be_applied(factory, tmp_pa
     out = tmp_path / "out"
     _, folder = _lossy_record(out, factory)
     keep(out, "photo.jpg")
-    assert AP.needs_metrics(out) and not AP.needs_metrics(out, only=("other.jpg",))
+    assert "ffmpeg" in AP.tools_needed(out) and "ffmpeg" not in AP.tools_needed(out, only=("other.jpg",))
     record = json.loads((folder / "metrics.json").read_text())
     record["verdict"] = "untouched"
     (folder / "metrics.json").write_text(json.dumps(record))
-    assert not AP.needs_metrics(out)
+    assert "ffmpeg" not in AP.tools_needed(out)
 
 
 def test_metadata_is_checked_only_for_picks_made_from_the_source(factory, device_icc):
@@ -620,11 +620,11 @@ def test_tools_are_needed_only_for_what_apply_will_write(factory, tmp_path, keep
     sub = factory.root / "s"
     sub.mkdir()
     _lossy_record(two, type(factory)(sub), name="b.jpg", folder_name="b--2")
-    assert not AP.needs_metrics([one, two]) and not AP.needs_rsvg([one, two])  # no verdicts: nothing is written
+    assert AP.tools_needed([one, two]) == []  # no verdicts: nothing is written
     keep(two, "b.jpg")
-    assert AP.needs_metrics([one, two]) and not AP.needs_metrics([one])
+    assert "ffmpeg" in AP.tools_needed([one, two]) and "ffmpeg" not in AP.tools_needed([one])
     keep(two, "b.jpg", verdict="reject")
-    assert not AP.needs_metrics([one, two])
+    assert "ffmpeg" not in AP.tools_needed([one, two])
 
 
 def test_a_passing_choice_gets_no_fails_the_profile_suffix(factory, tmp_path, monkeypatch, keep):

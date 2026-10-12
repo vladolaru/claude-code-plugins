@@ -434,6 +434,21 @@ def test_a_corrupt_verdicts_file_refuses_before_any_choice_changes(tmp_path):
     assert RV.record_verdicts([folder.parent], text) == {"keep": 1}
 
 
+def test_the_verdicts_file_is_parsed_once_per_change(tmp_path, monkeypatch):
+    # verdict_of runs for every record of a run; reading the whole file each time grew with the square of a set
+    folder, record = fake_record(tmp_path)
+    RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+        record["source"]["path"]: {"verdict": "reject"}}))
+    parsed, real = [], json.loads
+    monkeypatch.setattr(RV.json, "loads", lambda text, *a, **k: (parsed.append(1), real(text, *a, **k))[1])
+    for _ in range(5):
+        assert RV.verdict_of(folder.parent, record)["verdict"] == "reject"
+    assert len(parsed) <= 1
+    RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
+        record["source"]["path"]: {"verdict": "keep", "variant": C.choice_of(record)["label"]}}))
+    assert RV.verdict_of(folder.parent, record)["verdict"] == "keep"  # a new verdict is seen at once
+
+
 def test_verdicts_are_written_whole_or_not_at_all(tmp_path, monkeypatch):
     folder, record = fake_record(tmp_path)
     book = folder.parent / RV.VERDICTS_FILE

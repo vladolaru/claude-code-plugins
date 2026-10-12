@@ -209,12 +209,7 @@ def cmd_apply(args) -> int:
     for out in outs:
         _print_ignored(out)
     only = split_csv(args.only) + tuple(SEL.read_list(args.files) if args.files else ())
-    needed = ["pillow"]
-    if AP.needs_metrics(outs, only):  # also refuses an `out` that is not a folder of candidates results
-        needed += ["ffmpeg", "ssimulacra2"]
-    if AP.needs_rsvg(outs, only):
-        needed.append("rsvg-convert")
-    chk = T.check(T.Requirements(tuple(needed), (), ()))
+    chk = T.check(T.Requirements(("pillow", *AP.tools_needed(outs, only)), (), ()))
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="apply", profile="-"))
     print(T.describe(chk.tools))

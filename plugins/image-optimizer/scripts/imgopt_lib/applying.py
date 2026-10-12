@@ -57,14 +57,12 @@ def _accepted(rows) -> list[tuple[Path, dict]]:
     return [(f, r) for f, r in rows if RV.is_accepted(r, RV.verdict_of(f.parent, r))]
 
 
-def needs_metrics(outs, only=()) -> bool:
-    """True when a choice `apply` will write is lossy, so verifying it needs ffmpeg and ssimulacra2."""
-    return any(needs_tiles(r) for _, r in _accepted(_to_write(outs, only)[0]))
-
-
-def needs_rsvg(outs, only=()) -> bool:
-    """True when a choice `apply` will write is an SVG, so verifying it needs rsvg-convert."""
-    return any(r["format"] == "svg" for _, r in _accepted(_to_write(outs, only)[0]))
+def tools_needed(outs, only=()) -> list[str]:
+    """The tools verifying what `apply` will write needs, from one read of the records: ffmpeg and ssimulacra2
+    for a lossy choice, rsvg-convert for an SVG. Refuses an ``outs`` that is not a folder of candidates results."""
+    accepted = [r for _, r in _accepted(_to_write(outs, only)[0])]
+    return ((["ffmpeg", "ssimulacra2"] if any(needs_tiles(r) for r in accepted) else [])
+            + (["rsvg-convert"] if any(r["format"] == "svg" for r in accepted) else []))
 
 
 def _took_source(record: dict, chosen: dict, facts) -> bool:

@@ -9,6 +9,7 @@ variant whose file is gone is restored from the variant store; one the store no 
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from collections import Counter
@@ -243,10 +244,26 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
     return dict(Counter(e["verdict"] for e in data["files"].values()))
 
 
+@functools.lru_cache(maxsize=32)
+def _parsed(path: str, inode: int, mtime_ns: int, size: int) -> dict:
+    return _load(Path(path).parent)
+
+
+def _snapshot(out: Path) -> dict:
+    """verdicts.json as last written, parsed once per change (every write replaces the file, so its inode, time
+    and size key the copy). Read-only: `verdict_of` runs for every record of a run; `record` reads with `_load`."""
+    path = Path(out) / VERDICTS_FILE
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return {"files": {}}
+    return _parsed(str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def verdict_of(out: Path, record: dict) -> dict | None:
     """The human's stored verdict for ``record``, while it still describes it: the same source and, unless it
     rejects the file, the same chosen variant by key (a label survives a re-run with other settings; a key does not)."""
-    entry = _load(out)["files"].get(record["source"]["path"])
+    entry = _snapshot(out)["files"].get(record["source"]["path"])
     chosen = choice_of(record)
     if not entry or entry.get("sha256") != record["source"]["sha256"]:
         return None
