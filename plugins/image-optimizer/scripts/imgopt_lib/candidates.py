@@ -301,10 +301,9 @@ def _reviewer_check(rec: dict, ref_path: Path, ref_facts, ref_shown, folder: Pat
     """Record the SSIM a reviewer's ffmpeg one-liner (`compare`) prints for this candidate as
     ``ssim_evidence``, or None with ``evidence_note`` saying why ffmpeg alone cannot reproduce it.
     A failed ffmpeg run is also marked ``evidence_failed``, so the next run checks again (see _reuse).
-    ``ref_shown`` is the reference's display pixels at its own size when the caller has them, else None."""
+    ``ref_shown`` is the reference's display pixels at its own size: the one-liner compares the files as stored."""
     new = folder / rec["file"]
-    ri = ref_shown if ref_shown is not None else display_pixels(ref_path)
-    ni = display_pixels(new)
+    ri, ni = ref_shown, display_pixels(new)
     obstacles = CP.reviewer_obstacles(ref_facts, read_facts(new), ri.size, ni.size)
     rec["ssim_evidence"] = None
     if obstacles:
@@ -408,8 +407,8 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         pix = display_pixels(src, width=opts.resize)
         # Without --ref the reference is the source: its pixels are prepared once (decode, sRGB, resize).
         ref_img = display_pixels(ref_path, width=opts.resize) if src in opts.refs else pix
-        # The reviewer check compares the files as stored, so it can reuse these only when nothing was resized.
-        ref_shown = None if opts.resize else ref_img
+        # The reviewer check compares the files as stored: these pixels, unless they were resized.
+        ref_shown = display_pixels(ref_path) if opts.resize else ref_img
         folder.mkdir(parents=True, exist_ok=True)
         if target_fmt == "jpeg" and facts.has_alpha:
             ref_img = flatten(ref_img, "white").convert("RGBA")
