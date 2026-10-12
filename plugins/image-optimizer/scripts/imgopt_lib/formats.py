@@ -50,6 +50,13 @@ def _check_ignore(top: Path, files: list[Path]) -> set[Path] | None:
     return {rel[p] for p in proc.stdout.split("\0") if p in rel}
 
 
+def _ignores_folder(top: Path, folder: Path) -> bool:
+    """Whether the repository at ``top`` ignores ``folder`` (asked as a folder, so `name/` patterns match)."""
+    rel = (folder.parent.resolve() / folder.name).relative_to(top).as_posix() + "/"
+    proc = _git(top, "check-ignore", "-q", "--", rel)
+    return proc is not None and proc.returncode == 0
+
+
 def _ignored(folder: Path, files: list[Path], repos: list[Path], skipped: list[str]) -> set[Path]:
     """The files git ignores, each asked of the repository that holds it, by that repository's own .gitignore,
     as git itself treats a submodule or a nested repository: the nearest of the ``repos`` roots the walk passed,
@@ -79,9 +86,22 @@ def _ignored(folder: Path, files: list[Path], repos: list[Path], skipped: list[s
 def _walk(folder: Path, skipped: list[str]) -> list[Path]:
     """The images under ``folder``. Hidden, vendored and imgopt working folders are pruned, not entered (a
     repository root holds .git and node_modules), and each vendored or working folder is named once. The roots
-    of the repositories the walk passes (a .git folder, or a submodule's .git file) decide whose ignores apply."""
+    of the repositories the walk passes (a .git folder, or a submodule's .git file) decide whose ignores apply,
+    and a repository inside a folder its enclosing repository ignores (a clone under third_party/) is not entered,
+    as git does not enter it."""
     found: list[Path] = []
     repos: list[Path] = []
+    outer: list[Path | None] = []  # the work tree holding ``folder``, asked once and only when a nested repo needs it
+
+    def enclosing(here: Path) -> Path | None:
+        inner = next((r for r in sorted(repos, key=lambda r: len(r.parts), reverse=True) if here.is_relative_to(r)),
+                     None)
+        if inner is not None:
+            return inner.resolve()
+        if not outer:
+            outer.append(repo_root(folder))
+        return outer[0]
+
     for root, dirs, files in os.walk(folder):
         here = Path(root)
         if ".git" in dirs or ".git" in files:
@@ -94,6 +114,8 @@ def _walk(folder: Path, skipped: list[str]) -> list[Path]:
                 skipped.append(f"{here / d}/: vendored, not walked")
             elif (here / d / WORKDIR_MARKER).is_file():
                 skipped.append(f"{here / d}/: an imgopt working folder, not walked")
+            elif (here / d / ".git").exists() and (top := enclosing(here)) and _ignores_folder(top, here / d):
+                skipped.append(f"{here / d}/: git-ignored, not walked")
             else:
                 walked.append(d)
         dirs[:] = walked

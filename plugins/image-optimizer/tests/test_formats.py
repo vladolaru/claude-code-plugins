@@ -123,6 +123,21 @@ def test_a_folder_holding_repositories_filters_each_by_its_own_ignores(tmp_path)
     assert found == ["loose.png", "r1/a.png", "r2/a.png", "r2/dist/built.png"], skipped
 
 
+def test_a_clone_inside_an_ignored_folder_is_not_walked(tmp_path):
+    # git never enters a folder its repository ignores; a clone kept there is not the repository's to optimize
+    outer = tmp_path / "outer"
+    clone = outer / "third_party" / "lib"
+    clone.mkdir(parents=True)
+    (outer / "a.png").write_bytes(b"x")
+    (clone / "b.png").write_bytes(b"x")
+    (outer / ".gitignore").write_text("third_party/\n")
+    _git("init", "-q", cwd=outer)
+    _git("init", "-q", cwd=clone)
+    skipped: list[str] = []
+    assert [p.name for p in expand_inputs([outer], skipped=skipped)] == ["a.png"]
+    assert any("third_party/lib" in s and "git-ignored" in s for s in skipped)
+
+
 def test_a_symlinked_image_pointing_outside_the_repository_is_walked(tmp_path):
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"x")
