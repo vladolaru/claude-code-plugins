@@ -90,6 +90,23 @@ def test_a_copy_lands_whole_or_not_at_all(tmp_path, monkeypatch):
     assert dst.read_bytes() == b"variant" and [p.name for p in dst.parent.iterdir()] == ["v.png"]
 
 
+def test_storing_an_unchanged_record_writes_and_hashes_nothing(tmp_path, monkeypatch):
+    # a fully cached re-run stores every candidate again; only a changed record is worth the write
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    (folder / "v.jpg").write_bytes(b"lossy variant")
+    rec = {"key": "k7", "file": "v.jpg", "kind": "lossy", "size": 13}
+    ST.put(rec, folder, source_sha=SRC, ref_sha=REF)
+    stored = ST._entry("k7") / "rec.json"
+    before = stored.stat().st_ino
+    hashed = []
+    monkeypatch.setattr(ST, "sha256", lambda path: hashed.append(path) or "c" * 64)
+    ST.put(dict(rec), folder, source_sha=SRC, ref_sha=REF)
+    assert hashed == [] and stored.stat().st_ino == before
+    ST.put({**rec, "ssim_evidence": 0.99}, folder, source_sha=SRC, ref_sha=REF)
+    assert ST.get("k7")["ssim_evidence"] == 0.99
+
+
 def test_lossy_variants_are_remembered_as_produced(tmp_path):
     folder = tmp_path / "rec"
     folder.mkdir()

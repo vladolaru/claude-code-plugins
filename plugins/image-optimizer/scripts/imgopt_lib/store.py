@@ -137,11 +137,20 @@ def put(rec: dict, folder: Path, *, source_sha: str, ref_sha: str) -> None:
     """Store ``rec`` (a `candidates` candidate record) and its file from ``folder``, made from the source and
     measured against the reference whose hashes are ``source_sha`` and ``ref_sha``. Errors other than an encoder's
     own refusal are not stored: they are retried next time. A lossy variant is indexed as produced unless it lost
-    nothing: a rung that handed back the source's or the reference's bytes, or pixel-identical output."""
+    nothing: a rung that handed back the source's or the reference's bytes, or pixel-identical output. A record
+    already stored as it is, with its file, only counts as a use: a fully cached re-run stores every candidate
+    again, and hashing and rewriting them all would cost it seconds."""
     key = rec.get("key")
     if not key or ("error" in rec and rec.get("error_kind") != "refused"):
         return
     entry = _entry(key)
+    text = json.dumps(rec)
+    try:
+        if (entry / "rec.json").read_text() == text and (not rec.get("file") or (entry / rec["file"]).is_file()):
+            os.utime(entry)
+            return
+    except OSError:
+        pass
     try:
         entry.mkdir(parents=True, exist_ok=True)
         if rec.get("file"):
@@ -152,7 +161,7 @@ def put(rec: dict, folder: Path, *, source_sha: str, ref_sha: str) -> None:
                 sha = sha256(stored)
                 if sha not in (source_sha, ref_sha):
                     mark_produced(sha, "lossy", source_sha)
-        _replace_with(entry / "rec.json", lambda tmp: tmp.write_text(json.dumps(rec)))
+        _replace_with(entry / "rec.json", lambda tmp: tmp.write_text(text))
     except OSError:
         pass
 
