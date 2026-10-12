@@ -1219,6 +1219,18 @@ def test_the_reviewer_check_reuses_the_prepared_reference(factory, toolset, tmp_
     assert C.pick_of(r).get("ssim_evidence") is not None and decoded.count(src) == 1
 
 
+def test_a_cached_resized_rerun_decodes_the_full_size_reference_not_at_all(factory, toolset, tmp_path, monkeypatch):
+    # the reviewer check's full-size reference is needed only when a pick has no evidence yet
+    tools = {**toolset("prepare", "high", {"jpeg"}), **toolset("recompress", "high", {"jpeg"})}
+    src = factory.photo(size=(400, 300), quality=95).resolve()
+    C.run([src], opts(tmp_path / "out", "high", resize=200), tools, log=quiet)
+    full_size, real = [], C.display_pixels
+    monkeypatch.setattr(C, "display_pixels",
+                        lambda path, **kw: (full_size.append(path) if not kw.get("width") else None, real(path, **kw))[1])
+    C.run([src], opts(tmp_path / "out", "high", resize=200), tools, log=quiet)
+    assert Path(src) not in [Path(p) for p in full_size]
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]

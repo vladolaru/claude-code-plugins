@@ -77,10 +77,11 @@ def test_placing_a_variant_never_writes_into_an_existing_file(tmp_path, monkeypa
     src.write_bytes(b"a second writer")
     if not links:
         monkeypatch.setattr(os, "link", lambda *a: (_ for _ in ()).throw(OSError("cross-device")))
-    try:
+    if links:  # an existing name is reported; the caller decides whether it is this variant
+        with pytest.raises(FileExistsError):
+            ST._link_or_copy(src, entry)
+    else:
         ST._link_or_copy(src, entry)
-    except FileExistsError:  # the caller decides whether an existing file is this variant
-        pass
     assert placed.read_bytes() == b"stored first"
 
 

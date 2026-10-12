@@ -3,8 +3,9 @@
 ``cache_root()`` is stable across sessions (so a re-run reuses candidates): $IMGOPT_CACHE, else
 ~/Library/Caches/imgopt on macOS, else $XDG_CACHE_HOME/imgopt or ~/.cache/imgopt. Sandboxes such as Codex's
 cannot write there, so ``workdir()`` falls back to $TMPDIR/image-optimization when TMPDIR is set; it never
-picks /tmp itself. ``clean()`` deletes a working folder or its losing candidates. ``replace_with()`` is how
-every imgopt file in the cache is written: whole, under a temporary name of its own, then renamed into place.
+picks /tmp itself. ``clean()`` deletes a working folder or its losing candidates. ``replace_with()`` is how the
+records and store files that other runs read while they change are written (store entries, the produced index,
+run.json, metrics.json, verdicts.json): whole, under a temporary name of its own, then renamed into place.
 """
 
 from __future__ import annotations
