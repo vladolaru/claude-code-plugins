@@ -583,6 +583,16 @@ def test_a_batch_where_every_file_is_refused_is_a_usage_error(factory, tmp_path)
         C.run([gif.resolve()], opts(tmp_path / "out", "high", out_format="webp"), {}, log=quiet)
 
 
+def test_a_file_input_may_sit_above_the_working_folder(factory):
+    # ~/hero.png with the cache under ~/Library/Caches: only a folder input is walked, and a walk skips working folders
+    from imgopt_lib import cli
+    src = factory.logo().resolve()
+    out = src.parent / "Library" / "Caches" / "imgopt" / "work" / "hero"
+    cli._refuse_out_inside_inputs(out, [src])
+    with pytest.raises(ladder.UsageError, match="inside the input folder"):
+        cli._refuse_out_inside_inputs(out, [src.parent])
+
+
 def test_out_inside_the_git_work_tree_of_a_file_input_is_refused(factory, tmp_path):
     repo = tmp_path / "repo"
     (repo / "img").mkdir(parents=True)

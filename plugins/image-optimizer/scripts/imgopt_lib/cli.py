@@ -66,13 +66,14 @@ def _git_top(folder: Path) -> Path | None:
 
 
 def _refuse_out_inside_inputs(out: Path, paths) -> None:
-    """--out inside an input's folder would be read as input next run, and inside a git work tree it is one
-    `git add -A` from a commit; both are refused before anything is written."""
+    """--out inside an input folder would be walked as input next run, and inside the git work tree of any input
+    it is one `git add -A` from a commit; both are refused before anything is written. A file input is not
+    walked, so its folder may hold the working folder: ~/hero.png with the cache under ~/Library/Caches."""
     for raw in paths:
         p = Path(raw).resolve()
         folder = p if p.is_dir() else p.parent
-        if out.is_relative_to(folder):
-            raise UsageError(f"--out {out} is inside the input folder {folder}; use `imgopt workdir <task>`")
+        if p.is_dir() and out.is_relative_to(p):
+            raise UsageError(f"--out {out} is inside the input folder {p}; use `imgopt workdir <task>`")
         top = _git_top(folder)
         if top and out.is_relative_to(top):
             raise UsageError(f"--out {out} is inside the git work tree {top}; use `imgopt workdir <task>`")
