@@ -2,8 +2,9 @@
 
 SSIM is ffmpeg's ``ssim`` filter on gray-converted inputs (``SSIM_GRAY``, which
 the reviewer one-liner in compare.py uses too), so JPEG, PNG and alpha PNG
-share one parse path (``All:``). ssimulacra2 and butteraugli run on
-the same flattened PNGs. Images with alpha are flattened onto white and onto
+share one parse path (``All:``). ssimulacra2 runs on the same flattened
+PNGs; ``measure`` computes only what the gates read, and butteraugli, which is
+reported and never gated, runs through ``butteraugli_score`` on a pick. Images with alpha are flattened onto white and onto
 dark grey and the worse value counts, because quantized soft edges fringe on
 dark backgrounds; ``ssim_white`` is kept separately because it is the number
 a reviewer's ffmpeg one-liner reproduces. The banding score is the session's
@@ -56,7 +57,6 @@ class Scores:
     ssim_white: float
     ss2: float
     band: float
-    butteraugli: float | None
 
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess:
@@ -160,7 +160,7 @@ class ReferenceCache:
             return self._made[bg]
 
 
-def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path, *, with_butteraugli: bool = True,
+def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path, *,
             ref_cache: ReferenceCache | None = None) -> Scores:
     """``ref_cache``, made for ``ref`` by a caller measuring many candidates of one source, must live as long
     as its folder; without one the reference is prepared for this call alone."""
@@ -169,9 +169,7 @@ def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path, *, w
     workdir.mkdir(parents=True, exist_ok=True)
     ffmpeg = tools["ffmpeg"].path
     ss2_exe = tools["ssimulacra2"].path
-    ba = tools.get("butteraugli_main") if with_butteraugli else None
-    ssims, ss2s, bands, bas = {}, [], [], []
-    ba_failed = False
+    ssims, ss2s, bands = {}, [], []
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
         cache = ref_cache if ref_cache is not None else ReferenceCache(ref, Path(tmp))
         for bg in backgrounds(alpha_used(ref) or alpha_used(new)):
@@ -182,13 +180,7 @@ def measure(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path, *, w
             ssims[bg] = ssim_gray(ffmpeg, rp, np_)
             ss2s.append(ssimulacra2(ss2_exe, rp, np_))
             bands.append(band_score(r, n, mask))
-            if ba is not None and ba.ok:
-                value = butteraugli(ba.path, rp, np_)
-                if value is None:
-                    ba_failed = True
-                else:
-                    bas.append(value)
-    return Scores(min(ssims.values()), ssims["white"], min(ss2s), max(bands), max(bas) if bas and not ba_failed else None)
+    return Scores(min(ssims.values()), ssims["white"], min(ss2s), max(bands))
 
 
 def butteraugli_score(ref: Image.Image, new: Image.Image, tools: dict, workdir: Path) -> float | None:

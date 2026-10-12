@@ -141,23 +141,16 @@ def _fake_butteraugli(tmp_path, body):
     return Tool("butteraugli_main", str(exe), "fake", "test")
 
 
-def test_butteraugli_is_none_unless_every_background_has_a_value(factory, toolset, tmp_path):
+def test_measuring_runs_no_butteraugli(factory, toolset, tmp_path):
+    # the gates never read butteraugli; `apply` re-measures every lossy file it writes, and paid for one
     tools = dict(toolset("compare"))
     logo = I.display_pixels(factory.logo())
     other = I.display_pixels(factory.logo(name="l2.png"))
-    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, 'case "$2" in *dark*) exit 1;; esac\necho 1.5\n')
-    assert M.measure(logo, other, tools, tmp_path / "w1").butteraugli is None
-    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, "echo 1.5\n")
-    assert M.measure(logo, other, tools, tmp_path / "w2").butteraugli == 1.5
-
-
-def test_butteraugli_can_be_left_out_of_a_measurement(factory, toolset, tmp_path):
-    tools = dict(toolset("compare"))
-    logo = I.display_pixels(factory.logo())
-    other = I.display_pixels(factory.logo(name="l2.png"))
-    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, "echo 1.5\n")
-    assert M.measure(logo, other, tools, tmp_path / "w1", with_butteraugli=False).butteraugli is None
-    assert M.butteraugli_score(logo, other, tools, tmp_path / "w1") == 1.5
+    ran = tmp_path / "ran"
+    tools["butteraugli_main"] = _fake_butteraugli(tmp_path, f"touch {ran}\necho 1.5\n")
+    M.measure(logo, other, tools, tmp_path / "w1")
+    assert not ran.exists()
+    assert M.butteraugli_score(logo, other, tools, tmp_path / "w2") == 1.5 and ran.exists()
 
 
 def test_butteraugli_score_is_none_without_the_tool_or_a_value(factory, toolset, tmp_path):
@@ -167,7 +160,7 @@ def test_butteraugli_score_is_none_without_the_tool_or_a_value(factory, toolset,
     tools.pop("butteraugli_main", None)
     assert M.butteraugli_score(logo, other, tools, tmp_path) is None
     tools["butteraugli_main"] = _fake_butteraugli(tmp_path, 'case "$2" in *dark*) exit 1;; esac\necho 1.5\n')
-    assert M.butteraugli_score(logo, other, tools, tmp_path) is None
+    assert M.butteraugli_score(logo, other, tools, tmp_path) is None  # one background without a value
 
 
 def test_the_flattened_reference_is_written_once_per_background(factory, toolset, tmp_path, monkeypatch):
@@ -180,10 +173,10 @@ def test_the_flattened_reference_is_written_once_per_background(factory, toolset
                                                                        original(self, fp, *a, **k))[1])
     work = tmp_path / "w"
     work.mkdir()
-    first = M.measure(ref, others[0], tools, work, with_butteraugli=False, ref_cache=cache)
-    M.measure(ref, others[1], tools, work, with_butteraugli=False, ref_cache=cache)
+    first = M.measure(ref, others[0], tools, work, ref_cache=cache)
+    M.measure(ref, others[1], tools, work, ref_cache=cache)
     assert sorted(saves).count("ref_white.png") == 1 and sorted(saves).count("ref_dark.png") == 1
-    assert first.ssim == M.measure(ref, others[0], tools, tmp_path / "w2", with_butteraugli=False).ssim
+    assert first.ssim == M.measure(ref, others[0], tools, tmp_path / "w2").ssim
 
 
 def test_the_reference_smooth_mask_is_computed_once_per_background(factory, toolset, tmp_path, monkeypatch):
@@ -194,9 +187,9 @@ def test_the_reference_smooth_mask_is_computed_once_per_background(factory, tool
     masked, cache = [], M.ReferenceCache(ref, tmp_path / "w")
     original = M.smooth_mask
     monkeypatch.setattr(M, "smooth_mask", lambda rgb: (masked.append(rgb.size), original(rgb))[1])
-    bands = [M.measure(ref, o, tools, tmp_path / "w", with_butteraugli=False, ref_cache=cache).band for o in others]
+    bands = [M.measure(ref, o, tools, tmp_path / "w", ref_cache=cache).band for o in others]
     assert len(masked) == 2  # white and dark, not once per candidate
-    assert bands[0] == M.measure(ref, others[0], tools, tmp_path / "w2", with_butteraugli=False).band
+    assert bands[0] == M.measure(ref, others[0], tools, tmp_path / "w2").band
 
 
 def _flat_pair(tmp_path, a, b, size=(64, 64)):

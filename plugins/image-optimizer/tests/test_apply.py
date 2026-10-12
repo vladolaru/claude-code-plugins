@@ -286,7 +286,7 @@ def _drop_key(folder, key):
 
 
 def _scores(monkeypatch, **delta):
-    base = {"ssim": 0.9, "ssim_white": 0.9, "ss2": 50.0, "band": 1.0, "butteraugli": None}
+    base = {"ssim": 0.9, "ssim_white": 0.9, "ss2": 50.0, "band": 1.0}
     monkeypatch.setattr(AP.metrics, "measure", lambda *a, **k: metrics.Scores(**{**base, **delta}))
 
 

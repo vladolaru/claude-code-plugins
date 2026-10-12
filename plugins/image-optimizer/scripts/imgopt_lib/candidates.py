@@ -276,11 +276,11 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_meas
         rec["discarded"] = "pixels differ and the metric tools are absent (lossless profile)"
         return rec
     try:
-        s = metrics.measure(ref_img, cand, tools, measure_dir, with_butteraugli=False, ref_cache=ref_cache)
+        s = metrics.measure(ref_img, cand, tools, measure_dir, ref_cache=ref_cache)
     except metrics.MetricError as error:
         rec["error"] = str(error)
         return rec
-    rec.update(ssim=s.ssim, ssim_white=s.ssim_white, ss2=s.ss2, band=s.band, butteraugli=s.butteraugli)
+    rec.update(ssim=s.ssim, ssim_white=s.ssim_white, ss2=s.ss2, band=s.band)
     return rec
 
 

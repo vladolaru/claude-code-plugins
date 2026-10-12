@@ -140,7 +140,8 @@ def compare(ref_spec: str, new_spec: str, tools: dict, workdir: Path, cwd: Path 
         result.update(ssim=1.0, ssim_white=1.0, ss2=100.0, band=0.0, butteraugli=0.0)
     else:
         s = metrics.measure(ri, ni, tools, workdir)
-        result.update(ssim=s.ssim, ssim_white=s.ssim_white, ss2=s.ss2, band=s.band, butteraugli=s.butteraugli)
+        result.update(ssim=s.ssim, ssim_white=s.ssim_white, ss2=s.ss2, band=s.band,
+                      butteraugli=metrics.butteraugli_score(ri, ni, tools, workdir))
     result["reproducible"] = not reasons
     result["reason"] = "; ".join(reasons)
     result["command"] = result["ssim_evidence"] = None
