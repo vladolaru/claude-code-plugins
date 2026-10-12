@@ -7,7 +7,10 @@ exact graph itself and reports its number as `ssim_evidence`, which is what
 the evidence quotes, because ffmpeg's JPEG decoder differs from Pillow's by
 up to about 1e-3 (9.8e-4 on real JPEGs, 2026-10-08; enough to flip a 0.98
 floor; `candidates` therefore runs the same check, ``reviewer_check()``, on
-each lossy pick and holds it to the SSIM floor). Alpha images are composited
+each lossy pick and holds it to the SSIM floor). The exception is a JPEG whose
+black sits on a DC rounding tie: libjpeg-turbo (Pillow) decodes it as 1 and
+ffmpeg as 0, about 0.015 apart under metrics.SSIM_GRAY. Both graphs prepare
+gray with metrics.SSIM_GRAY. Alpha images are composited
 onto white with `overlay=...:format=rgb`: the default YUV compositing drifted
 5e-4 from Pillow's flatten (self-review, 2026-10-08).
 A reviewer reproduces the number with the same ffmpeg build (`compare` prints
@@ -39,7 +42,8 @@ from .ladder import UsageError
 from .imaging import Facts, alpha_used, display_pixels, read_facts
 
 # Through rgb24 first, as the module docstring explains.
-PLAIN_GRAPH = "[0:v]format=rgb24,format=gray[a];[1:v]format=rgb24,format=gray[b];[a][b]ssim"
+PLAIN_GRAPH = (f"[0:v]format=rgb24,{metrics.SSIM_GRAY}[a];"
+               f"[1:v]format=rgb24,{metrics.SSIM_GRAY}[b];[a][b]ssim")
 SSIM_RE = re.compile(r"All:([0-9.]+)")
 FETCH_TIMEOUT = 60  # seconds without data before a download fails (OSError, so `compare` exits 2)
 
@@ -49,8 +53,8 @@ def reviewer_graph(size: tuple[int, int], alpha: bool) -> str:
         return PLAIN_GRAPH
     w, h = size
     return (f"color=white:s={w}x{h}[w0];color=white:s={w}x{h}[w1];"
-            "[w0][0:v]overlay=shortest=1:format=rgb,format=gray[a];"
-            "[w1][1:v]overlay=shortest=1:format=rgb,format=gray[b];[a][b]ssim")
+            f"[w0][0:v]overlay=shortest=1:format=rgb,{metrics.SSIM_GRAY}[a];"
+            f"[w1][1:v]overlay=shortest=1:format=rgb,{metrics.SSIM_GRAY}[b];[a][b]ssim")
 
 
 def reviewer_command(graph: str) -> str:

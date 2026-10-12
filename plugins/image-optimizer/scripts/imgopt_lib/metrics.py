@@ -1,7 +1,8 @@
 """Measurements for imgopt: the one place a score is computed.
 
-SSIM is ffmpeg's ``ssim`` filter on gray-converted inputs, so JPEG, PNG and
-alpha PNG share one parse path (``All:``). ssimulacra2 and butteraugli run on
+SSIM is ffmpeg's ``ssim`` filter on gray-converted inputs (``SSIM_GRAY``, which
+the reviewer one-liner in compare.py uses too), so JPEG, PNG and alpha PNG
+share one parse path (``All:``). ssimulacra2 and butteraugli run on
 the same flattened PNGs. Images with alpha are flattened onto white and onto
 dark grey and the worse value counts, because quantized soft edges fringe on
 dark backgrounds; ``ssim_white`` is kept separately because it is the number
@@ -29,6 +30,17 @@ from .imaging import Facts, alpha_used, backgrounds, flatten
 SSIM_RE = re.compile(r"All:\s*([0-9.]+)")
 FLOAT_RE = re.compile(r"-?\d+(?:\.\d+)?")
 MIN_SMOOTH_PIXELS = 50
+# What both inputs of every SSIM go through, here and in the reviewer one-liner (compare.py). ffmpeg's ssim
+# (vf_ssim.c) uses C1 = .01²·255²·64 against sums over 8x8 windows, 1/64 of Wang et al.'s constant, so near
+# black a window of 0s against one of 1s scores 0.09 (the paper: 0.87). A JPEG whose luma DC step puts black
+# on a rounding tie decodes it as 1 in libjpeg-turbo, and whole black backgrounds scored as lost (SSIM 0.42 at
+# ss2 76); noisy near-black backgrounds hit the same term. Luminance is compared on value + SSIM_PEDESTAL,
+# scaled into 16 bits so no two levels merge; ordinary content between SSIM 0.95 and 0.99 moves by +0.0003
+# (median) to +0.0013, within the decoder spread the floors already absorb, so no floor was re-calibrated
+# (analysis 2026-10-12). 4 is about the black of a 1000:1 display (sRGB code 3.3).
+SSIM_PEDESTAL = 4
+SSIM_GRAY = (f"format=gray,format=gray16le,"
+             f"lut=c0={SSIM_PEDESTAL * 256}+val*{65535 - SSIM_PEDESTAL * 256}/65535+0.5")
 # The PNGs handed to ffmpeg, ssimulacra2 and butteraugli are read once and deleted: compressing them harder
 # only costs time (Pillow's default level 6 took 3x as long on a 12 MP image).
 SCRATCH_PNG = {"compress_level": 1}
@@ -56,7 +68,7 @@ def _run(argv: list[str]) -> subprocess.CompletedProcess:
 
 def ssim_gray(ffmpeg: str, a: Path, b: Path) -> float:
     proc = _run([ffmpeg, "-hide_banner", "-nostats", "-i", str(a), "-i", str(b), "-lavfi",
-                 "[0:v]format=gray[x];[1:v]format=gray[y];[x][y]ssim", "-f", "null", "-"])
+                 f"[0:v]{SSIM_GRAY}[x];[1:v]{SSIM_GRAY}[y];[x][y]ssim", "-f", "null", "-"])
     match = SSIM_RE.search(proc.stderr)
     if not match:
         raise MetricError(f"ffmpeg printed no SSIM for {a.name} vs {b.name}: {proc.stderr.strip()[-300:]}")

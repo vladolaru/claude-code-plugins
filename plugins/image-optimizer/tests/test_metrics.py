@@ -199,6 +199,39 @@ def test_the_reference_smooth_mask_is_computed_once_per_background(factory, tool
     assert bands[0] == M.measure(ref, others[0], tools, tmp_path / "w2", with_butteraugli=False).band
 
 
+def _flat_pair(tmp_path, a, b, size=(64, 64)):
+    pa, pb = tmp_path / f"flat{a}.png", tmp_path / f"flat{b}.png"
+    Image.new("RGB", size, (a, a, a)).save(pa)
+    Image.new("RGB", size, (b, b, b)).save(pb)
+    return pa, pb
+
+
+def test_black_lifted_one_level_is_not_scored_as_lost_structure(toolset, tmp_path):
+    # ffmpeg's ssim scores flat 0 against flat 1 at 0.09 (its C1 is 1/64 of the paper's); a JPEG decode that
+    # lifts black on a DC rounding tie failed whole backgrounds that way
+    ffmpeg = toolset("compare")["ffmpeg"].path
+    assert M.ssim_gray(ffmpeg, *_flat_pair(tmp_path, 0, 1)) >= 0.96
+
+
+def test_the_pedestal_barely_moves_ordinary_content(factory, toolset, tmp_path):
+    ffmpeg = toolset("compare")["ffmpeg"].path
+    plain = lambda a, b: float(M.SSIM_RE.search(M._run(
+        [ffmpeg, "-hide_banner", "-nostats", "-i", str(a), "-i", str(b), "-lavfi",
+         "[0:v]format=gray[x];[1:v]format=gray[y];[x][y]ssim", "-f", "null", "-"]).stderr).group(1))
+    mid = _flat_pair(tmp_path, 128, 129)
+    ref = factory.photo()
+    new = tmp_path / "q60.jpg"
+    Image.open(ref).save(new, "JPEG", quality=60)
+    for a, b in (mid, (ref, new)):
+        assert abs(M.ssim_gray(ffmpeg, a, b) - plain(a, b)) < 1e-3
+
+
+def test_the_gate_and_the_reviewer_graph_prepare_gray_the_same_way():
+    from imgopt_lib import compare as CP
+    assert CP.PLAIN_GRAPH.count(M.SSIM_GRAY) == 2
+    assert CP.reviewer_graph((8, 8), alpha=True).count(M.SSIM_GRAY) == 2
+
+
 def test_a_tool_that_cannot_run_raises_metric_error(tmp_path):
     missing = str(tmp_path / "no-such-ffmpeg")
     with pytest.raises(M.MetricError, match="no-such-ffmpeg"):

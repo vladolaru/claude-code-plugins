@@ -48,10 +48,11 @@ from .tools import describe
 from .workdirs import folder_size, mark
 
 SCHEMA = 1
-# Bump when a cached record would be wrong or lack a key. 6: svgo keeps <desc> and empty groups;
+# Bump when a cached record would be wrong or lack a key. 7: SSIM compares gray on a pedestal (metrics.SSIM_GRAY);
+# 6: svgo keeps <desc> and empty groups;
 # 5: every raster rung records metadata_removed; 3: svgo keeps ids, roles and classes; 2: a rung's kind
 # follows its input.
-CACHE_VERSION = 6
+CACHE_VERSION = 7
 RUN_FILE = "run.json"  # the last `candidates` run in this --out: which inputs, which settings
 UNCALIBRATED = ("webp", "avif")
 NOT_SMALLER = "not smaller than the original, so not measured (an in-place pick must be smaller)"
