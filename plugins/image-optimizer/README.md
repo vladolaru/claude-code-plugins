@@ -68,7 +68,9 @@ cmake --build build --target cjpegli --parallel    # then copy build/tools/cjpeg
 
 These flags make a binary that loads only system libraries, so it keeps working after you delete the build folder or upgrade Homebrew.
 
-ImageOptim.app, if installed, is the first choice for jpegoptim, because its build is linked to mozjpeg and Homebrew's is not. Without ImageOptim, build jpegoptim against Homebrew's mozjpeg once and put it on `PATH` ahead of any other copy; `doctor` prints the commands, and flags a jpegoptim that is not linked to mozjpeg:
+ImageOptim.app, if installed, is the first choice for jpegoptim, because its build is linked to mozjpeg and Homebrew's is not. For the mozjpeg jpegtran, pngquant and gifsicle, ImageOptim.app is only a fallback when they are not on `PATH`; its copies date from 2023, and `doctor` suggests Homebrew's pngquant and gifsicle when it finds only the bundled ones. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`) or oxipng older than 10, which includes the bundled oxipng 9 (its zopfli mode is about ten times slower).
+
+Without ImageOptim, build jpegoptim against Homebrew's mozjpeg once and put it on `PATH` ahead of any other copy; `doctor` prints the commands, and flags a jpegoptim that is not linked to mozjpeg:
 
 ```bash
 brew install mozjpeg
@@ -76,8 +78,6 @@ curl -fsSL https://github.com/tjko/jpegoptim/archive/refs/tags/v1.5.6.tar.gz | t
 ./configure --with-libjpeg=$(brew --prefix mozjpeg)
 make LIBS="$(brew --prefix mozjpeg)/lib/libjpeg.a -lm"    # then copy jpegoptim to ~/.local/bin
 ```
-
- For the mozjpeg jpegtran, pngquant and gifsicle it is only a fallback when they are not on `PATH`; its copies date from 2023, and `doctor` suggests Homebrew's pngquant and gifsicle when it finds only the bundled ones. A libjpeg-turbo `jpegtran` or `cjpeg` is never used, and neither is svgo older than 4 (its defaults drop `viewBox` and `<title>`) or oxipng older than 10, which includes the bundled oxipng 9 (its zopfli mode is about ten times slower).
 
 Tested on macOS only. On Linux the install lines `doctor` prints are best effort, and no run has been verified. Inside the Codex sandbox the working folder falls back to `$TMPDIR`, and `--jobs` falls back to one file at a time when the sandbox denies a process pool. Both fallbacks are designed for that sandbox but have not been re-run there yet; the last Codex run predates them.
 
