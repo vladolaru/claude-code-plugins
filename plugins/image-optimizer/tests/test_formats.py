@@ -119,6 +119,17 @@ def test_a_symlinked_image_pointing_outside_the_repository_is_walked(tmp_path):
     assert [p.name for p in expand_inputs([repo])] == ["outside.png"]  # inputs are resolved
 
 
+def test_a_vendored_folder_is_reported_once_and_not_walked(tmp_path):
+    for name in ("a.png", "b.png", "c.png"):
+        p = tmp_path / "node_modules" / "pkg" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    (tmp_path / "keep.png").write_bytes(b"x")
+    skipped: list[str] = []
+    assert [p.name for p in expand_inputs([tmp_path], skipped=skipped)] == ["keep.png"]
+    assert len(skipped) == 1 and "node_modules" in skipped[0]
+
+
 def test_a_project_folder_holding_run_or_metrics_json_is_walked(tmp_path):
     for rel in ("data/run.json", "data/a.png", "stats/sub/b.png", "stats/metrics.json"):
         p = tmp_path / rel

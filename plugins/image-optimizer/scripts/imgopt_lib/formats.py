@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 
@@ -75,19 +76,25 @@ def _ignored(folder: Path, files: list[Path], skipped: list[str]) -> set[Path]:
 
 
 def _walk(folder: Path, skipped: list[str]) -> list[Path]:
+    """The images under ``folder``. Hidden, vendored and imgopt working folders are pruned, not entered (a
+    repository root holds .git and node_modules), and each vendored or working folder is named once."""
     found: list[Path] = []
-    for f in sorted(folder.rglob("*")):
-        rel = f.relative_to(folder)
-        if not f.is_file() or format_of(f) not in INPUT_FORMATS or any(p.startswith(".") for p in rel.parts):
-            continue
-        vendored = next((p for p in rel.parts[:-1] if p in VENDORED), None)
-        if vendored:
-            skipped.append(f"{f}: under {vendored}/")
-            continue
-        if any((folder / Path(*rel.parts[:i]) / WORKDIR_MARKER).is_file() for i in range(1, len(rel.parts))):
-            skipped.append(f"{f}: inside an imgopt working folder")
-            continue
-        found.append(f)
+    for root, dirs, files in os.walk(folder):
+        here = Path(root)
+        walked = []
+        for d in sorted(dirs):
+            if d.startswith("."):
+                continue
+            if d in VENDORED:
+                skipped.append(f"{here / d}/: vendored, not walked")
+            elif (here / d / WORKDIR_MARKER).is_file():
+                skipped.append(f"{here / d}/: an imgopt working folder, not walked")
+            else:
+                walked.append(d)
+        dirs[:] = walked
+        found += [here / n for n in files
+                  if not n.startswith(".") and format_of(Path(n)) in INPUT_FORMATS and (here / n).is_file()]
+    found.sort()
     ignored = _ignored(folder, found, skipped)
     skipped += [f"{f}: git-ignored" for f in found if f in ignored]
     return [f for f in found if f not in ignored]
