@@ -60,17 +60,19 @@ def _job_for(args) -> str:
 def _refuse_out_inside_inputs(out: Path, paths) -> None:
     """--out inside an input folder would be walked as input next run, and inside the git work tree of any input
     it is one `git add -A` from a commit; both are refused before anything is written. A file input is not
-    walked, so its folder may hold the working folder: ~/hero.png with the cache under ~/Library/Caches. A
-    folder in imgopt's cache passes the git check: `workdir` and `candidates` mark it .gitignore'd, so it is never
-    committed, even where the home folder is itself a git work tree (dotfiles). git is asked once per folder."""
-    cache = W.cache_root().resolve()
+    walked, so its folder may hold the working folder: ~/hero.png with the cache under ~/Library/Caches. A folder
+    imgopt already marked (`workdir` made it, wherever the cache or its $TMPDIR fallback is) passes the git check:
+    marking writes a .gitignore of `*`, so nothing in it is committed, even where the home folder is itself a git
+    work tree (dotfiles). An unmarked folder inside a work tree may hold the repository's own files, so it is
+    refused. git is asked once per folder."""
+    marked = (out / WORKDIR_MARKER).is_file()
     tops: dict[Path, Path | None] = {}
     for raw in paths:
         p = Path(raw).resolve()
         folder = p if p.is_dir() else p.parent
         if p.is_dir() and out.is_relative_to(p):
             raise UsageError(f"--out {out} is inside the input folder {p}; use `imgopt workdir <task>`")
-        if out.is_relative_to(cache):
+        if marked:
             continue
         if folder not in tops:
             tops[folder] = F.repo_root(folder)
