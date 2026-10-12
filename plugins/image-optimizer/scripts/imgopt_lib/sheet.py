@@ -258,11 +258,10 @@ function card(f){
   const c=document.createElement('section'); c.className='card';
   // What `apply` does with the choice under the verdict on screen (review.is_accepted): reject, milder and
   // stronger hold any choice back; a lossy one waits for a keep of that variant; a lossless one needs none.
-  const kept=()=>{const k=VERDICTS.get(f.name); return !!k&&k.verdict==='keep'&&k.variant===f.choice;};
   const writeTag=()=>{
     const k=VERDICTS.get(f.name);
     if(k&&k.verdict!=='keep') return tag('not written');
-    return tag(f.choice_kind==='lossy'&&!kept()?'written if kept':'will be written');
+    return tag(f.choice_kind==='lossy'&&!(k&&k.variant===f.choice)?'written if kept':'will be written');
   };
   const cut=f.name.lastIndexOf('/')+1;  // the file name leads; its folder sits below it
   const h=document.createElement('h3'); h.textContent=f.name.slice(cut);
