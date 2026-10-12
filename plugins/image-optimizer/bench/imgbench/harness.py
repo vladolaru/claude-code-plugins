@@ -4,8 +4,8 @@ The harness imports imgopt_lib directly, so it measures exactly what users run. 
 of that job it makes a new output folder `<run>/<job>/<category>/`, runs the ladder on the category's files,
 reads the records back and appends one row per file to `rows.jsonl`: the pick, its scores, every candidate's
 size and gate outcome, the seconds and the disk the record folder took. Right after the rows are written the
-folder is pruned with `workdirs.clean(keep_picks=True)`, which leaves each record's metrics.json, reference,
-source copy and pick: all `sheet` and the human review need, and a small part of the ladder's output (the full
+folder is pruned with `workdirs.clean(keep_picks=True)`, which leaves each record's metrics.json, reference
+(with its prepared.json key), source copy and pick: all `sheet` and the human review need, and a small part of the ladder's output (the full
 ladder over this corpus does not fit on a laptop disk). `timing.json` carries the tool versions, the commit,
 the corpus.json checksum, each job's settings and missing optional tools, and each category's wall time. Row
 schema: see `_row`. `report.load` and `report.timing` are the one reader of both files; `report` and `review`

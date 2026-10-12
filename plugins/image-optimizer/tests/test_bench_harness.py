@@ -56,7 +56,7 @@ def test_run_writes_rows_prunes_to_picks_and_records_skips(factory, toolset, tmp
     for folder in out.glob("*/metrics.json"):
         record = json.loads(folder.read_text())
         kept = {p.name for p in folder.parent.iterdir()}
-        allowed = {"metrics.json", "reference.png", record["pick"]}
+        allowed = {"metrics.json", "reference.png", "prepared.json", record["pick"]}
         assert {n for n in kept if not n.startswith("source.")} <= allowed
     timing = json.loads((run_dir / "timing.json").read_text())
     assert timing["tools"].startswith("tools: ") and "lossless/photo-small" in timing["categories"]
