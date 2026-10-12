@@ -1298,6 +1298,22 @@ def test_the_run_reports_the_variant_that_will_be_written(capsys):
     assert "choice removes metadata: exif, xmp" in text and "Evidence SSIM (luma): 0.970100" in text
 
 
+@pytest.mark.parametrize("kind", ["png", "p3-jpeg"])
+def test_an_unchanged_rerun_prepares_and_writes_nothing(factory, toolset, device_icc, tmp_path, monkeypatch, kind):
+    # every candidate comes from the folder: no decode, colour count, colour conversion or pixel file is needed
+    tools = toolset("recompress", "high", {"png", "jpeg"})
+    src = (factory.gradient() if kind == "png" else factory.photo(name="p3.jpg", icc=device_icc)).resolve()
+    out = tmp_path / "out"
+    [first] = C.run([src], opts(out, "high"), tools, log=quiet)
+    work: list[str] = []
+    monkeypatch.setattr(C, "display_pixels", lambda *a, **k: work.append("decode"))
+    monkeypatch.setattr(Image.Image, "getcolors", lambda *a, **k: work.append("count colours"))
+    monkeypatch.setattr(Image.Image, "save", lambda *a, **k: work.append("write"))
+    monkeypatch.setattr(C.shutil, "copyfile", lambda *a, **k: work.append("copy"))
+    [again] = C.run([src], opts(out, "high"), tools, log=quiet)
+    assert work == [] and again["notes"] == first["notes"] and again["source"] == first["source"]
+
+
 def test_a_pool_that_cannot_start_falls_back_to_one_file_at_a_time(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png", "jpeg"})
     inputs = [factory.logo().resolve(), factory.photo().resolve()]

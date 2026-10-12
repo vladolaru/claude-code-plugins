@@ -34,7 +34,7 @@ import tempfile
 import threading
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from . import compare as CP
@@ -172,16 +172,85 @@ def _record_skip(folder: Path, why: str) -> None:
         write_record(folder, {"schema": SCHEMA, "complete": False, "skipped": why, "candidates": []})
 
 
-def _previous(path: Path) -> tuple[dict, str | None]:
-    """(the last record's candidates by key, the key of the variant someone chose by hand, if any). A partial
-    record, written while a run measures, carries the choice forward too, so an interrupted run keeps it."""
-    if not path.is_file():
-        return {}, None
+def _read_record(path: Path) -> dict:
+    """The record at ``path`` as it was left, complete or partial; empty when there is none or it is unreadable."""
     try:
         record = json.loads(path.read_text())
-        return {c["key"]: c for c in record.get("candidates", []) if "key" in c}, record.get("choice")
-    except (json.JSONDecodeError, KeyError):
-        return {}, None
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def _previous(record: dict) -> tuple[dict, str | None]:
+    """(the last record's candidates by key, the key of the variant someone chose by hand, if any). A partial
+    record, written while a run measures, carries the choice forward too, so an interrupted run keeps it."""
+    return ({c["key"]: c for c in record.get("candidates", []) if isinstance(c, dict) and "key" in c},
+            record.get("choice"))
+
+
+PIXEL_FILES = {"pixels": "pixels.png", "pixels_flat": "pixels_flat.png", "pixels_gray": "pixels_gray.png",
+               "pixels_ppm": "pixels.ppm"}
+
+
+class _Pixels:
+    """One source's prepared pixels for this run, each made on first use and once, whichever rung thread asks
+    first: decoding, the sRGB conversion and a resize cost seconds on a large photo, and a run whose candidates
+    all come from the working folder or the store needs none of them."""
+
+    def __init__(self, src: Path, ref_path: Path, resize: int | None, flatten_ref: bool, folder: Path):
+        self.src, self.ref_path, self.resize, self.flatten_ref, self.folder = src, ref_path, resize, flatten_ref, folder
+        self._made: dict = {}
+        self._lock = threading.RLock()  # a preparation may ask for another one (the reference is the source)
+
+    def _once(self, name: str, make):
+        with self._lock:
+            if name not in self._made:
+                self._made[name] = make()
+            return self._made[name]
+
+    def source(self):
+        return self._once("source", lambda: display_pixels(self.src, width=self.resize))
+
+    def reference(self):
+        """The reference as displayed, at the encoded width; without --ref it is the source."""
+        return self._once("reference", lambda: display_pixels(self.ref_path, width=self.resize)
+                          if self.ref_path != self.src else self.source())
+
+    def measured(self):
+        """What candidates are compared with: the reference, flattened onto white for a JPEG made from alpha."""
+        return self._once("measured", lambda: flatten(self.reference(), "white").convert("RGBA")
+                          if self.flatten_ref else self.reference())
+
+    def shown(self):
+        """The reference as stored, which the reviewer one-liner compares: the prepared one unless resized."""
+        return self._once("shown", lambda: display_pixels(self.ref_path) if self.resize else self.reference())
+
+    def cache(self, measure_dir: Path) -> metrics.ReferenceCache:
+        return self._once("cache", lambda: metrics.ReferenceCache(self.measured(), measure_dir))
+
+    def input(self, name: str) -> Path:
+        """An encoder input file, written the first time a rung that reads it encodes."""
+        def make():
+            path = self.folder / PIXEL_FILES[name]
+            flat = None if name == "pixels" else self._once("flat", lambda: flatten(self.source(), "white"))
+            image = {"pixels": self.source() if name == "pixels" else None, "pixels_flat": flat,
+                     "pixels_gray": flat.convert("L") if name == "pixels_gray" else None, "pixels_ppm": flat}[name]
+            image.save(path)
+            return path
+        return self._once(name, make)
+
+
+class _Inputs(dict):
+    """`ladder.generate`'s inputs: the source and its flags as given, each pixel file made when first read."""
+
+    def __init__(self, pixels: _Pixels | None, **given):
+        super().__init__(**given)
+        self.pixels = pixels
+
+    def __missing__(self, name: str) -> Path:
+        if self.pixels is None or name not in PIXEL_FILES:
+            raise KeyError(name)
+        return self.pixels.input(name)
 
 
 def keyed_tools(rung: ladder.Rung) -> list[str]:
@@ -217,8 +286,8 @@ def _perfect(rec: dict) -> dict:
     return rec
 
 
-def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure, size_limit,
-              measure_dir, ref_cache) -> dict:
+def _run_rung(rung, key, inputs, folder, facts, source_kinds, pixels, tools, can_measure, size_limit,
+              measure_dir) -> dict:
     rec = {"key": key, "label": rung.label, "tool": rung.tool, "kind": rung.kind, "band_gated": rung.palette}
     try:
         out = ladder.generate(rung, inputs=inputs, out_dir=folder, tools=tools)
@@ -229,15 +298,14 @@ def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, ca
         return rec
     rec["file"], rec["size"] = out.name, out.stat().st_size
     try:
-        return _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, size_limit,
-                      measure_dir, ref_cache)
+        return _judge(rec, rung, out, inputs, facts, source_kinds, pixels, tools, can_measure, size_limit,
+                      measure_dir)
     except READ_FAILURES as error:
         rec["error"] = str(error)
         return rec
 
 
-def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, size_limit, measure_dir,
-           ref_cache) -> dict:
+def _judge(rec, rung, out, inputs, facts, source_kinds, pixels, tools, can_measure, size_limit, measure_dir) -> dict:
     """Read the encoded file and fill in its metadata verdict and scores. ``size_limit`` is the source size of
     an in-place job: a lossy candidate that is not smaller cannot be picked, so it is not measured."""
     ofacts = read_facts(out)
@@ -258,7 +326,7 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_meas
         else:
             _perfect(rec)
         return rec
-    cand = display_pixels(out)
+    cand, ref_img = display_pixels(out), pixels.measured()
     rec["identical"] = cand.size == ref_img.size and cand.tobytes() == ref_img.tobytes()
     if rec["identical"]:
         return _perfect(rec)
@@ -271,7 +339,7 @@ def _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_meas
         rec["discarded"] = "pixels differ and the metric tools are absent (lossless profile)"
         return rec
     try:
-        s = metrics.measure(ref_img, cand, tools, measure_dir, ref_cache=ref_cache)
+        s = metrics.measure(ref_img, cand, tools, measure_dir, ref_cache=pixels.cache(measure_dir))
     except metrics.MetricError as error:
         rec["error"] = str(error)
         return rec
@@ -385,6 +453,11 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
     fmt = format_of(src)
     notes: list[str] = []
     can_measure = all(n in tools and tools[n].ok for n in ("ffmpeg", "ssimulacra2"))
+    prev = _read_record(folder / "metrics.json")
+    previous, chosen_key = _previous(prev)
+    # What the last complete record already knows about these bytes need not be worked out again.
+    same_source = prev.get("complete") is True and (prev.get("source") or {}).get("sha256") == src_hash
+    pixels = None
     if fmt == "svg":
         if opts.profile != "lossless":
             notes.append("SVG gets the lossless svgo rung only")
@@ -392,7 +465,10 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         source_info = {"format": "svg", "width": None, "height": None, "colors": None, "frames": 1}
         folder.mkdir(parents=True, exist_ok=True)
     else:
-        facts = read_facts(src, count_colours=True)
+        # Counting colours decodes every pixel; the last record of these bytes has the count.
+        facts = read_facts(src, count_colours=not same_source)
+        if same_source:
+            facts = replace(facts, colors=prev["source"].get("colors"))
         source_kinds = metadata_kinds(src)
         ref_facts = read_facts(ref_path) if src in opts.refs else facts
         if opts.resize and opts.resize == facts.display_width == ref_facts.display_width:
@@ -404,41 +480,36 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
         rungs, target_fmt = plan.rungs, plan.out_format
         source_info = {"format": facts.format, "width": facts.width, "height": facts.height, "colors": facts.colors,
                        "frames": facts.frames}
-        # Prepared before the folder exists: an unconvertible profile skips the file cleanly.
-        pix = display_pixels(src, width=opts.resize)
-        # Without --ref the reference is the source: its pixels are prepared once (decode, sRGB, resize).
-        ref_img = display_pixels(ref_path, width=opts.resize) if src in opts.refs else pix
-        # The reviewer check compares the files as stored: these pixels, unless they were resized, in which case
-        # the full-size reference is decoded once, and only if a pick needs the check.
-        prepared = ref_img
-        ref_shown = functools.cache(lambda: display_pixels(ref_path) if opts.resize else prepared)
+        pixels = _Pixels(src, ref_path, opts.resize, target_fmt == "jpeg" and facts.has_alpha, folder)
+        # reference.png (what `sheet` and `apply` compare with) stands while the inputs and settings that made it do.
+        unchanged = (same_source and (prev.get("ref") or {}).get("sha256") == ref_hash
+                     and prev.get("resize") == opts.resize and prev.get("format") == target_fmt
+                     and (folder / "reference.png").is_file())
+        if not unchanged:
+            pixels.measured()  # before the folder exists: an unconvertible profile skips the file cleanly
         folder.mkdir(parents=True, exist_ok=True)
-        if target_fmt == "jpeg" and facts.has_alpha:
-            ref_img = flatten(ref_img, "white").convert("RGBA")
-        ref_img.save(folder / "reference.png")
-        # Pixel files are written only when a rung reads them: a lossless job needs none.
-        needed = {r.input for r in rungs}
-        flat = flatten(pix, "white") if needed & {"pixels_flat", "pixels_gray", "pixels_ppm"} else None
-        if "pixels" in needed:
-            pix.save(folder / "pixels.png")
-        if "pixels_flat" in needed:
-            flat.save(folder / "pixels_flat.png")
-        if "pixels_gray" in needed:
-            flat.convert("L").save(folder / "pixels_gray.png")
-        if "pixels_ppm" in needed:
-            flat.save(folder / "pixels.ppm")
+        if not unchanged:
+            pixels.measured().save(folder / "reference.png")
         if facts.device_profile:
-            mean, peak = srgb_shift(src, pix)
-            notes.append(f"device colour profile '{facts.icc_desc}': pixel candidates are converted to sRGB "
-                         f"(the conversion alone shifts mean {mean:.1f}, max {peak} of 255)")
+            known = next((n for n in prev.get("notes", []) if n.startswith("device colour profile")), None)
+            if unchanged and known:
+                notes.append(known)
+            else:
+                mean, peak = srgb_shift(src, pixels.source())
+                notes.append(f"device colour profile '{facts.icc_desc}': pixel candidates are converted to sRGB "
+                             f"(the conversion alone shifts mean {mean:.1f}, max {peak} of 255)")
         if facts.orientation != 1:
             notes.append(f"EXIF orientation {facts.orientation}: lossless candidates keep the tag, "
                          "pixel candidates have it applied")
         if opts.resize:
-            notes.append(f"resized {facts.width}x{facts.height} -> {pix.width}x{pix.height} (Lanczos); "
+            shown_w, shown_h = (facts.height, facts.width) if facts.orientation in (5, 6, 7, 8) else (facts.width,
+                                                                                                     facts.height)
+            notes.append(f"resized {facts.width}x{facts.height} -> {opts.resize}x"
+                         f"{max(1, round(shown_h * opts.resize / shown_w))} (Lanczos); "
                          "the reference is scaled the same way")
-    previous, chosen_key = _previous(folder / "metrics.json")
-    shutil.copyfile(src, folder / f"source{src.suffix.lower()}")
+    copy = folder / f"source{src.suffix.lower()}"
+    if not (same_source and copy.is_file()):
+        shutil.copyfile(src, copy)
     if src in opts.refs:
         notes.append(f"measured against {ref_path}")
     skipped = [r for r in rungs if not _available(r, tools)]
@@ -451,9 +522,7 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
     if waived_here:
         n_waived = sum(1 for r in skipped if set(r.tools) & set(waived_here))
         notes.append(f"skipped {n_waived} rung(s), tools waived: {', '.join(waived_here)}")
-    inputs = {"source": src, "pixels": folder / "pixels.png", "pixels_flat": folder / "pixels_flat.png",
-              "pixels_gray": folder / "pixels_gray.png",
-              "pixels_ppm": folder / "pixels.ppm", "ref_is_source": ref_hash == src_hash}
+    inputs = _Inputs(pixels, source=src, ref_is_source=ref_hash == src_hash)
     # A same-format job rewrites the source itself (a resize too); only a new format gets a new name.
     target = src if target_fmt == fmt else src.with_suffix(EXT_BY_FORMAT[target_fmt])
     size = src.stat().st_size
@@ -461,8 +530,6 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
     cands = []
     origins = dict.fromkeys(("here", "store", "encoded"), 0)
     with tempfile.TemporaryDirectory(dir=folder) as measure_dir:
-        ref_cache = metrics.ReferenceCache(ref_img, Path(measure_dir)) if fmt != "svg" else None
-
         def candidate(rung: ladder.Rung, key: str) -> tuple[dict, str]:
             """One rung's record and where it came from. Each rung writes only its own output file."""
             old = previous.get(key)
@@ -473,8 +540,8 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
                 return _reuse(stored), "store"
             if fmt == "svg":
                 return _svg_rung(rung, key, inputs, folder, src, tools), "encoded"
-            return _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, can_measure,
-                             size if in_place else None, Path(measure_dir), ref_cache), "encoded"
+            return _run_rung(rung, key, inputs, folder, facts, source_kinds, pixels, tools, can_measure,
+                             size if in_place else None, Path(measure_dir)), "encoded"
 
         done: dict[str, tuple[dict, str]] = {}
         lock = threading.Lock()
@@ -523,10 +590,11 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
             chosen = G.pick(cands)
         else:
             chosen = _pick(cands, opts.gates,
-                           lambda rec: _reviewer_check(rec, ref_path, ref_facts, ref_shown, folder, tools))
+                           lambda rec: _reviewer_check(rec, ref_path, ref_facts, pixels.shown, folder, tools))
             # butteraugli is reported only, so it runs on the pick alone (a cached pick may have it already)
             if chosen and "ssim" in chosen and not chosen.get("identical") and chosen.get("butteraugli") is None:
-                chosen["butteraugli"] = metrics.butteraugli_score(ref_img, display_pixels(folder / chosen["file"]),
+                chosen["butteraugli"] = metrics.butteraugli_score(pixels.measured(),
+                                                                  display_pixels(folder / chosen["file"]),
                                                                   tools, Path(measure_dir))
     # Someone's choice (the pick too: a by-hand keep under the floors) outlives a re-run while its variant (its
     # key) is still measured here.
