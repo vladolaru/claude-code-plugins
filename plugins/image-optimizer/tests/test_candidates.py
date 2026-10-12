@@ -1144,6 +1144,24 @@ def test_a_variant_chosen_by_hand_is_measured_past_the_stop(factory, toolset, tm
     assert labels == ["jpegoptim-m95", "jpegoptim-m90", "jpegoptim-m50"] and r["choice"] == "jpegoptim-m50.jpg"
 
 
+def test_a_passing_choice_past_the_stop_does_not_restart_the_descent(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"jpeg"})
+    src, out = factory.photo().resolve(), tmp_path / "out"
+    monkeypatch.setattr(C, "_run_rung", _scripted_rungs({}, "pass"))
+    C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
+    [meta] = list(out.glob("*/metrics.json"))
+    record = json.loads(meta.read_text())
+    record["choice"] = "jpegoptim-m50.jpg"
+    meta.write_text(json.dumps(record))
+    for f in meta.parent.glob("*.jpg"):
+        f.unlink()
+    monkeypatch.setattr(C, "_run_rung", _scripted_rungs({"jpegoptim-m95": "fail", "jpegoptim-m90": "fail"}, "pass"))
+    [r] = C.run([src], opts(out, "high", use_store=False), tools, log=quiet)
+    labels = [c["label"] for c in r["candidates"] if c["label"].startswith("jpegoptim-")]
+    assert labels == ["jpegoptim-m95", "jpegoptim-m90", "jpegoptim-m50"]
+    assert "jpegoptim: stopped after 2 levels in a row failed the gates; 9 lower level(s) not measured" in r["notes"]
+
+
 def test_a_choice_survives_an_interrupted_rerun(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "high", {"jpeg"})
     src, out = factory.photo().resolve(), tmp_path / "out"

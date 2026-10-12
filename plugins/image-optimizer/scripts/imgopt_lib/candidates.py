@@ -484,12 +484,14 @@ def _process(src: Path, opts: Options, tools: dict) -> tuple[dict, dict[str, int
             streak = skipped = 0
             for rung in unit:
                 key = _key(src_hash, ref_hash, opts, rung, tools)
-                if streak >= EARLY_STOP and key != chosen_key:
+                stopped = streak >= EARLY_STOP
+                if stopped and key != chosen_key:
                     skipped += 1
                     continue
                 rec, origin = candidate(rung, key)
                 rec["pass"], rec["reason"] = G.evaluate(rec, opts.gates)
-                streak = 0 if rec["pass"] else streak + ("ssim" in rec)
+                if not stopped:  # the chosen variant, measured past the stop, does not restart the descent
+                    streak = 0 if rec["pass"] else streak + ("ssim" in rec)
                 with lock:  # the partial record lets an interrupted run resume (it is read by key, not order)
                     done[rung.label] = (rec, origin)
                     write_record(folder, {"schema": SCHEMA, "complete": False, "choice_key": chosen_key,
