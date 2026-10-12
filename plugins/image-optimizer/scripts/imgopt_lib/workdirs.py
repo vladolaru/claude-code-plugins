@@ -3,7 +3,8 @@
 ``cache_root()`` is stable across sessions (so a re-run reuses candidates): $IMGOPT_CACHE, else
 ~/Library/Caches/imgopt on macOS, else $XDG_CACHE_HOME/imgopt or ~/.cache/imgopt. Sandboxes such as Codex's
 cannot write there, so ``workdir()`` falls back to $TMPDIR/image-optimization when TMPDIR is set; it never
-picks /tmp itself. ``clean()`` deletes a working folder or its losing candidates.
+picks /tmp itself. ``clean()`` deletes a working folder or its losing candidates. ``replace_with()`` is how
+every imgopt file in the cache is written: whole, under a temporary name of its own, then renamed into place.
 """
 
 from __future__ import annotations
@@ -13,10 +14,27 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from .formats import WORKDIR_MARKER, WORKDIR_MARKER_TEXT
 from .ladder import UsageError
+
+
+def replace_with(dst: Path, write) -> None:
+    """Write ``dst`` whole through ``write(temp_path)`` into a temporary file of its own beside it, then rename it
+    over ``dst``. Concurrent writers never share a temporary file, a reader never sees half a file, and an
+    existing ``dst``, which may be hard-linked elsewhere, keeps its bytes: the rename replaces the name, not the
+    inode. ``write`` sets the mode it needs (the temporary file starts owner-only)."""
+    dst = Path(dst)
+    fd, tmp = tempfile.mkstemp(dir=dst.parent, prefix=f".{dst.name}.", suffix=".tmp")
+    os.close(fd)
+    try:
+        write(Path(tmp))
+        os.replace(tmp, dst)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def cache_root() -> Path:

@@ -18,11 +18,10 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
 import time
 from pathlib import Path
 
-from .workdirs import cache_root
+from .workdirs import cache_root, replace_with
 
 MAX_AGE_DAYS = 30
 MAX_BYTES = 2_000_000_000
@@ -51,31 +50,17 @@ def _produced(sha: str) -> Path:
     return root() / "outputs" / sha[:2] / f"{sha}.json"
 
 
-def _replace_with(dst: Path, write) -> None:
-    """Write a file whole through ``write(temp_path)`` into a temporary file of its own beside ``dst``, then rename
-    it over ``dst``. Concurrent writers (two runs, or two files of the same bytes) never share a temporary file,
-    a reader never sees half a file, and an existing ``dst``, which may be hard-linked into working folders, keeps
-    its bytes: the rename replaces the name, not the inode."""
-    fd, tmp = tempfile.mkstemp(dir=dst.parent, prefix=f".{dst.name}.", suffix=".tmp")
-    os.close(fd)
-    try:
-        write(Path(tmp))
-        os.replace(tmp, dst)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
 def _link_or_copy(src: Path, dst: Path) -> None:
     """Variant files are write-once: a working folder's file may be a hard link to the store's, so nothing may
-    write into one in place (`ladder.generate` and `restore` unlink a file before replacing it). A ``dst`` that
-    exists already holds this variant (its name comes from the variant's key), so it is left as it is."""
+    write into one in place (`ladder.generate` and `restore` unlink a file before replacing it). A copy keeps the
+    source's mode, since a variant can be placed in a repository. An existing ``dst`` raises FileExistsError: only
+    the caller knows whether it is this variant."""
     try:
         os.link(src, dst)
     except FileExistsError:
-        pass
+        raise
     except OSError:  # another file system, or links not allowed
-        _replace_with(dst, lambda tmp: shutil.copyfile(src, tmp))
+        replace_with(dst, lambda tmp: shutil.copy(src, tmp))
 
 
 def get(key: str) -> dict | None:
@@ -120,7 +105,7 @@ def mark_produced(sha: str, kind: str, source: str) -> None:
     path = _produced(sha)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        _replace_with(path, lambda tmp: tmp.write_text(json.dumps({"kind": kind, "source": source})))
+        replace_with(path, lambda tmp: tmp.write_text(json.dumps({"kind": kind, "source": source})))
     except OSError:
         pass
 
@@ -156,12 +141,15 @@ def put(rec: dict, folder: Path, *, source_sha: str, ref_sha: str) -> None:
         if rec.get("file"):
             stored = entry / rec["file"]
             if not stored.is_file():
-                _link_or_copy(Path(folder) / rec["file"], stored)
+                try:
+                    _link_or_copy(Path(folder) / rec["file"], stored)
+                except FileExistsError:  # a concurrent run stored it first: entries are named by key
+                    pass
             if rec.get("kind") == "lossy" and not rec.get("identical"):
                 sha = sha256(stored)
                 if sha not in (source_sha, ref_sha):
                     mark_produced(sha, "lossy", source_sha)
-        _replace_with(entry / "rec.json", lambda tmp: tmp.write_text(text))
+        replace_with(entry / "rec.json", lambda tmp: tmp.write_text(text))
     except OSError:
         pass
 

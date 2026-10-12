@@ -77,7 +77,10 @@ def test_placing_a_variant_never_writes_into_an_existing_file(tmp_path, monkeypa
     src.write_bytes(b"a second writer")
     if not links:
         monkeypatch.setattr(os, "link", lambda *a: (_ for _ in ()).throw(OSError("cross-device")))
-    ST._link_or_copy(src, entry)
+    try:
+        ST._link_or_copy(src, entry)
+    except FileExistsError:  # the caller decides whether an existing file is this variant
+        pass
     assert placed.read_bytes() == b"stored first"
 
 
@@ -86,8 +89,29 @@ def test_a_copy_lands_whole_or_not_at_all(tmp_path, monkeypatch):
     dst.parent.mkdir()
     src.write_bytes(b"variant")
     monkeypatch.setattr(os, "link", lambda *a: (_ for _ in ()).throw(OSError("cross-device")))
+    src.chmod(0o644)
     ST._link_or_copy(src, dst)
     assert dst.read_bytes() == b"variant" and [p.name for p in dst.parent.iterdir()] == ["v.png"]
+    assert dst.stat().st_mode & 0o777 == 0o644  # a copied variant can reach a repo through `apply`
+
+
+def test_restore_reports_a_name_taken_by_another_writer(tmp_path, monkeypatch):
+    # a working folder's file is named by its label, which another run's variant can share: only the store's
+    # own entries, named by key, may take an existing file as already placed
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    (folder / "v.png").write_bytes(b"variant")
+    ST.put({"key": "k9", "file": "v.png", "kind": "lossless"}, folder, source_sha=SRC, ref_sha=REF)
+    other = tmp_path / "other"
+    other.mkdir()
+    real_link = os.link
+
+    def raced(src, dst):
+        Path(dst).write_bytes(b"another run's variant")  # lands between restore's unlink and its link
+        real_link(src, dst)
+
+    monkeypatch.setattr(os, "link", raced)
+    assert not ST.restore(ST.get("k9"), other)
 
 
 def test_storing_an_unchanged_record_writes_and_hashes_nothing(tmp_path, monkeypatch):

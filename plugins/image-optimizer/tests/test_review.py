@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -436,10 +437,10 @@ def test_verdicts_are_written_whole_or_not_at_all(tmp_path, monkeypatch):
     book = folder.parent / RV.VERDICTS_FILE
     book.write_text('{"files": {}}')
 
-    def fails(self, target):
+    def fails(src, dst):
         raise OSError("disk full")
 
-    monkeypatch.setattr(Path, "replace", fails)
+    monkeypatch.setattr(os, "replace", fails)
     with pytest.raises(OSError, match="disk full"):
         RV.record_verdicts([folder.parent], block(RV.fingerprint(RV.rows_of([folder.parent])), {
             record["source"]["path"]: {"verdict": "reject"}}))

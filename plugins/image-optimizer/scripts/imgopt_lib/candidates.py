@@ -45,7 +45,7 @@ from .imaging import (READ_FAILURES, ImagingError, display_pixels, flatten, meta
                       srgb_shift)
 from .store import sha256  # also `candidates.sha256`, which `apply` and the tests import
 from .tools import describe
-from .workdirs import folder_size, mark
+from .workdirs import folder_size, mark, replace_with
 
 SCHEMA = 1
 # Bump when a cached record would be wrong or lack a key. 7: SSIM compares gray on a pedestal (metrics.SSIM_GRAY);
@@ -118,9 +118,7 @@ def write_run(out: Path, inputs: list[Path], opts: Options) -> None:
     run = {"schema": SCHEMA, "inputs": sorted(str(Path(p).resolve()) for p in inputs), "profile": opts.profile,
            "resize": opts.resize, "format": opts.out_format,
            "assume_srgb": opts.assume_srgb}
-    tmp = out / (RUN_FILE + ".tmp")
-    tmp.write_text(json.dumps(run, indent=1))
-    tmp.replace(out / RUN_FILE)
+    replace_with(out / RUN_FILE, lambda tmp: tmp.write_text(json.dumps(run, indent=1)))
 
 
 def _scan(out: Path) -> tuple[list[tuple[Path, dict]], list[str]]:
@@ -158,9 +156,7 @@ def stale_records(out: Path) -> list[str]:
 
 
 def write_record(folder: Path, record: dict) -> None:
-    tmp = folder / "metrics.json.tmp"
-    tmp.write_text(json.dumps(record, indent=1))
-    tmp.replace(folder / "metrics.json")
+    replace_with(folder / "metrics.json", lambda tmp: tmp.write_text(json.dumps(record, indent=1)))
 
 
 def _record_skip(folder: Path, why: str) -> None:

@@ -18,6 +18,7 @@ from . import gates as G
 from . import store as ST
 from .candidates import choice_of, kb, load_records, removes, write_record
 from .ladder import UsageError
+from .workdirs import replace_with
 
 BLOCK_HEADER = "imgopt-verdicts 1"
 VERDICTS_FILE = "verdicts.json"
@@ -238,9 +239,7 @@ def record_verdicts(dirs, text: str) -> dict[str, int]:
                                "key": chosen.get("key") if chosen else None, "note": str(entry.get("note") or ""),
                                "sha256": record["source"]["sha256"]}
     for out, book in stored.items():  # whole or not at all: a cut file would read as corrupt
-        tmp = out / (VERDICTS_FILE + ".tmp")
-        tmp.write_text(json.dumps(book, indent=1))
-        tmp.replace(out / VERDICTS_FILE)
+        replace_with(out / VERDICTS_FILE, lambda tmp, book=book: tmp.write_text(json.dumps(book, indent=1)))
     return dict(Counter(e["verdict"] for e in data["files"].values()))
 
 
