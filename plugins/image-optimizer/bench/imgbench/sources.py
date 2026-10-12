@@ -220,7 +220,9 @@ def plain_background(path: Path) -> bool:
 
 
 def download(url: str, dest: Path, attempts: int = 6) -> None:
-    """Fetch `url` into `dest`; on HTTP 429/503 wait as long as the server asks (default 10 s, at most 120 s)."""
+    """Fetch `url` into `dest`, retrying what a later attempt can fix: HTTP 429/503 after as long as the server
+    asks (default 10 s, at most 120 s), and a dropped connection or a stalled read after 10 s. Any other HTTP
+    error, and the last attempt's error, is raised."""
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(1, attempts + 1):
         try:
@@ -228,11 +230,15 @@ def download(url: str, dest: Path, attempts: int = 6) -> None:
                 while chunk := r.read(1 << 20):
                     fh.write(chunk)
             return
-        except urllib.error.HTTPError as error:
+        except urllib.error.HTTPError as error:  # before URLError, which it subclasses
             if error.code not in (429, 503) or attempt == attempts:
                 raise
             wait = error.headers.get("Retry-After", "10")
             time.sleep(min(int(wait) if wait.isdigit() else 10, 120))
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == attempts:
+                raise
+            time.sleep(10)
 
 
 def pick_plain(candidates: list[Source], count: int, dest: Path, get=download, pause: float = 0.0,

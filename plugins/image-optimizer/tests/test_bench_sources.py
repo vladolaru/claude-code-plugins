@@ -4,6 +4,7 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 BENCH = Path(__file__).resolve().parents[1] / "bench"
@@ -173,6 +174,53 @@ def test_download_waits_and_retries_when_the_server_says_slow_down(monkeypatch, 
     monkeypatch.setattr(SR.time, "sleep", naps.append)
     SR.download("https://e/a.jpg", tmp_path / "a.jpg")
     assert len(calls) == 2 and naps == [7] and (tmp_path / "a.jpg").read_bytes() == b"image"
+
+
+@pytest.mark.parametrize("dropped", ["url", "timeout", "reset"])
+def test_download_retries_a_dropped_connection(monkeypatch, tmp_path, dropped):
+    import io
+    import urllib.error
+
+    calls, naps = [], []
+
+    class Reply(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    errors = {"url": urllib.error.URLError("connection refused"), "timeout": TimeoutError("timed out"),
+              "reset": ConnectionResetError("reset by peer")}
+
+    def urlopen(req, timeout):
+        calls.append(req.full_url)
+        if len(calls) == 1:
+            raise errors[dropped]
+        return Reply(b"image")
+
+    monkeypatch.setattr(SR.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(SR.time, "sleep", naps.append)
+    SR.download("https://e/a.jpg", tmp_path / "a.jpg")
+    assert len(calls) == 2 and naps == [10] and (tmp_path / "a.jpg").read_bytes() == b"image"
+
+
+def test_download_gives_up_on_a_missing_file_and_after_its_last_attempt(monkeypatch, tmp_path):
+    import urllib.error
+
+    def missing(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 404, "gone", {}, None)
+
+    monkeypatch.setattr(SR.urllib.request, "urlopen", missing)
+    monkeypatch.setattr(SR.time, "sleep", lambda s: pytest.fail("a 404 is not retried"))
+    with pytest.raises(urllib.error.HTTPError):
+        SR.download("https://e/a.jpg", tmp_path / "a.jpg")
+    naps = []
+    monkeypatch.setattr(SR.urllib.request, "urlopen", lambda req, timeout: (_ for _ in ()).throw(TimeoutError()))
+    monkeypatch.setattr(SR.time, "sleep", naps.append)
+    with pytest.raises(TimeoutError):
+        SR.download("https://e/a.jpg", tmp_path / "a.jpg", attempts=3)
+    assert len(naps) == 2
 
 
 def test_artist_markup_becomes_spaced_plain_text():
