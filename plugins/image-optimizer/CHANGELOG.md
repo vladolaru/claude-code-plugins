@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `apply` writes a lossy choice only when the human kept it and a lossless one unless the human rejected it or asked for another variant, and refuses the run when no lossy choice has a verdict; `manifest --accepted` lists the same files. A kept or chosen variant smaller than its original is written even under the saving floor, also after a re-run, and `record` and `apply` name any keep that still writes nothing.
 - `imgopt.py workdir <task>` gives a working folder that survives sessions, so a re-run reuses earlier candidates; sandboxes get one under `$TMPDIR`.
 - `candidates` refuses a working folder inside a folder input, one inside a git work tree unless `imgopt workdir` made it, and one that already has files it did not make.
-- `imgopt.py clean` deletes a folder `candidates` made, or with `--keep-picks` everything but each file's pick and choice, and `candidates` prints the folder's size and that command.
+- `imgopt.py clean` deletes a folder `candidates` made, or with `--keep-picks` everything but each file's pick and choice, `candidates` and `apply` print the folder's size and that command, and `imgopt.py workdir` names working folders left untouched for two weeks so the agent can offer their removal.
 - `sheet` and `apply` act only on the files the last `candidates` run in a working folder measured, so a file that run skipped is not offered again, and they name the records they ignore.
 - An interrupted `candidates` run resumes from its last finished candidate, and its partial results are never applied.
 - The `candidates` summary and the page lead with whole-batch totals, signed, beside the files that will change, and printed commands quote their paths.

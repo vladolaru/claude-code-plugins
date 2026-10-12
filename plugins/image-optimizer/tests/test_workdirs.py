@@ -1,4 +1,9 @@
 import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
 
 import pytest
 
@@ -6,6 +11,8 @@ from imgopt_lib import cli
 from imgopt_lib import workdirs as W
 from imgopt_lib.formats import WORKDIR_MARKER
 from imgopt_lib.ladder import UsageError
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "imgopt.py"
 
 
 def test_cache_root_honours_imgopt_cache(monkeypatch, tmp_path):
@@ -110,3 +117,38 @@ def test_the_cli_prints_the_workdir_and_cleans_it(monkeypatch, tmp_path, capsys)
     assert capsys.readouterr().out.strip() == str(folder)
     assert cli.main(["clean", str(folder)]) == 0
     assert "Freed" in capsys.readouterr().out and not folder.exists()
+
+
+def _aged(folder: Path, days: float) -> Path:
+    """Make every file and folder in ``folder`` (and itself) look last touched ``days`` ago."""
+    when = time.time() - days * 86400
+    for p in [*folder.rglob("*"), folder]:
+        os.utime(p, (when, when))
+    return folder
+
+
+def test_forgotten_names_marked_folders_left_untouched_for_two_weeks(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMGOPT_CACHE", str(tmp_path / "cache"))
+    current = W.workdir("today")
+    old = W.workdir("last-month")
+    (old / "rec--1").mkdir()
+    (old / "rec--1" / "metrics.json").write_text("{}")
+    (old / "rec--1" / "pick.png").write_bytes(b"x" * 5000)
+    _aged(old, 30)
+    _aged(W.workdir("last-week"), 7)
+    other = tmp_path / "cache" / "work" / "not-ours"
+    other.mkdir()
+    _aged(other, 30)  # unmarked: not a working folder, never named
+    assert [(f.name, size >= 5000) for f, size in W.forgotten(current)] == [("last-month", True)]
+
+
+def test_the_workdir_command_prints_its_path_alone_and_notes_forgotten_folders(tmp_path):
+    env = {**os.environ, "IMGOPT_CACHE": str(tmp_path / "cache")}
+    run = lambda task: subprocess.run([sys.executable, str(SCRIPT), "workdir", task], capture_output=True,
+                                      text=True, env=env, check=True)
+    old = Path(run("last-month").stdout.strip())
+    (old / "big.png").write_bytes(b"x" * 2_000_000)
+    _aged(old, 30)
+    proc = run("today")
+    assert proc.stdout.strip() == str(tmp_path / "cache" / "work" / "today")  # `$(imgopt workdir x)` stays a path
+    assert "untouched for 14 days or more" in proc.stderr and f"clean {old}" in proc.stderr and "2.0 MB" in proc.stderr

@@ -45,7 +45,7 @@ Every command is `python3 "$SKILL_DIR/../../scripts/imgopt.py" <command>`, writt
 
 Folder inputs skip git-ignored files, `node_modules`, `vendor`, `bower_components` and imgopt working folders, and say what they skipped.
 
-**Working folder (`--out`).** Get it with `IMGOPT workdir <task-slug>`. It is the same folder in every session, so a re-run reuses every candidate whose inputs, settings and tool versions are unchanged, and an interrupted run resumes from its last finished candidate. `candidates` refuses any other folder that is inside the repository or holds files it did not make. Every later command acts only on the files the folder's last `candidates` run measured; older records are listed as `ignored:`. `clean --keep-picks` keeps what `sheet` and `apply` read, for when the human will place the files later.
+**Working folder (`--out`).** Get it with `IMGOPT workdir <task-slug>`; it also names other working folders left untouched for two weeks, which step 11 says what to do with. It is the same folder in every session, so a re-run reuses every candidate whose inputs, settings and tool versions are unchanged, and an interrupted run resumes from its last finished candidate. `candidates` refuses any other folder that is inside the repository or holds files it did not make. Every later command acts only on the files the folder's last `candidates` run measured; older records are listed as `ignored:`. `clean --keep-picks` keeps what `sheet` and `apply` read, for when the human will place the files later.
 
 **The variant store.** Every measured variant also goes into a store shared by all working folders, so a run in any folder reuses what an earlier run measured instead of encoding again. A working folder's variant files may be hard links into the store, so place a variant by copying it, never by moving or hard-linking it.
 
@@ -80,7 +80,7 @@ Banding is gated only on palette PNG output; elsewhere it is reported and the sm
    - When `apply` refuses the run, it wrote nothing: do what its message says, and ask the human before removing a file that is in the way of a converted output.
    - When a line says MISMATCH: the original was left as it was; stop and investigate.
 10. **Evidence** for whoever reviews the change: use the format below.
-11. **Clean up** each working folder with `IMGOPT clean <dir>` once nothing is left to place.
+11. **Offer the clean-up.** Once the files are placed and the evidence is written, offer the human the `clean` line `apply` prints, with the folder's size, or `--keep-picks` when they will place files later. A working folder may hold files not yet placed, so remove one only on the human's yes; that holds for the forgotten folders `workdir` names too.
 
 ## Baselines
 

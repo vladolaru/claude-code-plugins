@@ -16,6 +16,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from .formats import WORKDIR_MARKER, WORKDIR_MARKER_TEXT
@@ -93,6 +94,32 @@ def mark(out: Path) -> None:
 
 def folder_size(path: Path) -> int:
     return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
+
+
+# A working folder outlives its session on purpose (a later one resumes it), so nothing removes it on its own;
+# `workdir` names the ones left this long, for the agent to offer the human their clean-up.
+FORGOTTEN_DAYS = 14
+
+
+def _last_used(folder: Path) -> float:
+    """When ``folder`` last changed: the folder, its files (the marker, run.json, verdicts.json) or a record."""
+    paths = [folder, *folder.iterdir(), *folder.glob("*/metrics.json")]
+    return max(p.stat().st_mtime for p in paths)
+
+
+def forgotten(current: Path, days: float = FORGOTTEN_DAYS, now: float | None = None) -> list[tuple[Path, int]]:
+    """(folder, bytes) of each other working folder beside ``current`` untouched for ``days``, by name. Only
+    folders carrying the marker count: anything else there is not imgopt's to name."""
+    cutoff = (time.time() if now is None else now) - days * 86400
+    found = []
+    for folder in sorted(Path(current).parent.iterdir()):
+        try:
+            if (folder != current and folder.is_dir() and (folder / WORKDIR_MARKER).is_file()
+                    and _last_used(folder) < cutoff):
+                found.append((folder, folder_size(folder)))
+        except OSError:  # gone or unreadable while listed
+            continue
+    return found
 
 
 def clean(out: Path, *, keep_picks: bool) -> int:

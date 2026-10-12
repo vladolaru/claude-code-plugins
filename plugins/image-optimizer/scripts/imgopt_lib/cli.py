@@ -215,7 +215,16 @@ def cmd_apply(args) -> int:
     if chk.blocked:
         raise T.ToolingError(T.report(chk, job="apply", profile="-"))
     print(T.describe(chk.tools))
-    return AP.apply(outs, tools=chk.tools, only=only, dest=Path(args.dest).resolve() if args.dest else None)
+    code = AP.apply(outs, tools=chk.tools, only=only, dest=Path(args.dest).resolve() if args.dest else None)
+    marked = [out for out in outs if (out / WORKDIR_MARKER).is_file()]
+    if code == 0 and marked:
+        script = shlex.quote(str(SCRIPT))
+        size = sum(W.folder_size(out) for out in marked)
+        cleans = "; ".join(f"python3 {script} clean {shlex.quote(str(out))}" for out in marked)
+        print(f"Next: once the evidence is written, offer the human to free the working folder(s) "
+              f"({size / 1e6:.1f} MB): {cleans} (with --keep-picks to keep each file's record and choice for "
+              "placing later)")
+    return code
 
 
 def cmd_manifest(args) -> int:
@@ -251,7 +260,19 @@ def cmd_compare(args) -> int:
 
 
 def cmd_workdir(args) -> int:
-    print(W.workdir(args.task))
+    """Prints the folder alone on stdout, which `$(imgopt workdir <task>)` captures; working folders forgotten
+    beside it are named on stderr."""
+    folder = W.workdir(args.task)
+    print(folder)
+    stale = W.forgotten(folder)
+    if stale:
+        total = sum(size for _, size in stale)
+        script = shlex.quote(str(SCRIPT))
+        print(f"note: {len(stale)} other working folder(s) untouched for {W.FORGOTTEN_DAYS} days or more hold "
+              f"{total / 1e6:.1f} MB. Each may hold files not yet placed, so offer the human their removal:",
+              file=sys.stderr)
+        for stale_folder, size in stale:
+            print(f"  python3 {script} clean {shlex.quote(str(stale_folder))}   ({size / 1e6:.1f} MB)", file=sys.stderr)
     return 0
 
 
