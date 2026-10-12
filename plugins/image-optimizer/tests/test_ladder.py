@@ -137,12 +137,13 @@ def test_generate_runs_lossless_rungs(factory, toolset, tmp_path):
         assert out.is_file() and out.stat().st_size > 0
 
 
-def test_pngquant_unreachable_quality_returns_none(factory, toolset, tmp_path):
+def test_pngquant_unreachable_quality_is_a_refusal(factory, toolset, tmp_path):
     tools = toolset("recompress", "high", {"png"})
     src = factory.photo(name="textured.png", size=(160, 120))  # thousands of colours: 99-100 is out of reach
     rung = L.Rung("pngquant-q99-100", "pngquant", "lossy", "pixels", ".png", ("--quality=99-100",),
                   post_oxipng=True, palette=True)
-    assert L.generate(rung, inputs={"pixels": src}, out_dir=tmp_path, tools=tools) is None
+    with pytest.raises(L.EncoderRefused, match="could not reach this quality range"):
+        L.generate(rung, inputs={"pixels": src}, out_dir=tmp_path, tools=tools)
 
 
 def test_lossless_png_rung_keeps_orientation_and_icc(factory, device_icc, toolset, tmp_path):

@@ -889,6 +889,17 @@ def test_an_encoder_refusal_is_cached(factory, toolset, tmp_path, monkeypatch):
     assert calls.count("oxipng") == 1
 
 
+def test_an_unreachable_pngquant_range_is_not_encoded_again(factory, toolset, tmp_path, monkeypatch):
+    tools = toolset("recompress", "high", {"png"})
+    src = factory.photo(name="textured.png", size=(160, 120)).resolve()  # thousands of colours
+    [first] = C.run([src], opts(tmp_path / "out", "high", use_store=False), tools, log=quiet)
+    unreachable = [c["label"] for c in first["candidates"] if "could not reach" in c.get("error", "")]
+    assert unreachable  # pngquant exits 99 for the tightest ranges
+    calls = counting_generate(monkeypatch)
+    C.run([src], opts(tmp_path / "out", "high", use_store=False), tools, log=quiet)
+    assert not set(calls) & set(unreachable)
+
+
 def test_an_encoder_killed_by_a_signal_is_not_cached_as_a_refusal(factory, toolset, tmp_path, monkeypatch):
     tools = toolset("recompress", "lossless", {"png"})
     src = factory.logo()

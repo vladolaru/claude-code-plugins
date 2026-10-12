@@ -44,8 +44,6 @@ def inspect_file(path: Path, tools: dict, workdir: Path) -> dict:
                 continue
             try:
                 out = ladder.generate(rung, inputs={"source": path}, out_dir=Path(tmp), tools=tools)
-                if out is None:
-                    continue
                 ok, _ = metrics.metadata_preserved(f, read_facts(out))
                 if not ok or display_pixels(out).tobytes() != reference.tobytes():
                     continue

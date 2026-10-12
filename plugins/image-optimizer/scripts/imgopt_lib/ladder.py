@@ -241,11 +241,12 @@ def _tail(proc: subprocess.CompletedProcess) -> str:
     return " ".join((proc.stderr or proc.stdout).split())[-300:]
 
 
-def generate(rung: Rung, *, inputs: dict, out_dir: Path, tools: dict) -> Path | None:
-    """Run one rung and return its output, or None when pngquant cannot reach its quality range.
+def generate(rung: Rung, *, inputs: dict, out_dir: Path, tools: dict) -> Path:
+    """Run one rung and return its output.
 
-    Raises EncodeError when an encoder or post-pass cannot run or exits non-zero; no partial
-    output is left in ``out_dir`` in that case.
+    Raises EncoderRefused when the encoder refuses this input, which repeats for the same input and
+    build (it exits non-zero, or pngquant cannot reach the rung's quality range), and EncodeError when
+    an encoder or post-pass cannot run or fails another way; no partial output is left in ``out_dir``.
     """
     exe = _exe(tools, rung.tool)
     src = Path(inputs[rung.input])
@@ -258,7 +259,7 @@ def generate(rung: Rung, *, inputs: dict, out_dir: Path, tools: dict) -> Path | 
         raise
 
 
-def _encode(rung: Rung, exe: str, src: Path, out: Path, tools: dict) -> Path | None:
+def _encode(rung: Rung, exe: str, src: Path, out: Path, tools: dict) -> Path:
     if rung.tool == "jpegoptim":
         shutil.copyfile(src, out)
         argv = [exe, "-q", *rung.args, str(out)]
@@ -282,7 +283,7 @@ def _encode(rung: Rung, exe: str, src: Path, out: Path, tools: dict) -> Path | N
         raise EncodeError(f"no runner for {rung.tool}")
     proc = _run(argv, rung.label, rung.tool)
     if rung.tool == "pngquant" and proc.returncode == 99:
-        return None
+        raise EncoderRefused(f"{rung.label}: pngquant could not reach this quality range")
     if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
         # Only an exit status is the encoder's own verdict; a signal (negative status, say an OOM kill) or a
         # missing output after exit 0 may not repeat, so those are retried.

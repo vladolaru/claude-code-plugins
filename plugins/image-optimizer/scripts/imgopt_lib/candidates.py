@@ -227,9 +227,6 @@ def _run_rung(rung, key, inputs, folder, facts, source_kinds, ref_img, tools, ca
         if isinstance(error, ladder.EncoderRefused):
             rec["error_kind"] = "refused"
         return rec
-    if out is None:
-        rec["error"] = "pngquant could not reach this quality range"
-        return rec
     rec["file"], rec["size"] = out.name, out.stat().st_size
     try:
         return _judge(rec, rung, out, inputs, facts, source_kinds, ref_img, tools, can_measure, size_limit,
