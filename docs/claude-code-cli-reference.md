@@ -140,15 +140,15 @@ From the [official tools reference](https://code.claude.com/docs/en/tools-refere
 | `acceptEdits` | `--permission-mode acceptEdits` | Auto-approves file edits for the session |
 | `plan` | `--permission-mode plan` | Read-only — no modifications or commands |
 | `dontAsk` | `--permission-mode dontAsk` | **Auto-denies** tools unless pre-approved via `--allowedTools` |
-| `bypassPermissions` | `--dangerously-skip-permissions` | **Auto-approves** all tools (still protects `.git`, `.claude`, `.vscode`, `.idea` from writes) |
+| `bypassPermissions` | `--dangerously-skip-permissions` | Skips routine permission prompts, including writes to protected paths. Explicit deny rules and [actions no mode auto-approves](https://code.claude.com/docs/en/permission-modes#actions-no-mode-auto-approves) still apply. |
 
 **For subprocess invocations**, two safe patterns:
 
 1. **Allowlist approach** — `--permission-mode dontAsk` + `--allowedTools "Read,Grep,Glob,Write,Bash(git diff *)"`. Only explicitly listed tools work. Everything else is silently denied. Most restrictive.
 
-2. **Bypass approach** — `--dangerously-skip-permissions` + `--tools "Read,Grep,Glob,Write,Bash"`. All available tools are auto-approved, but `--tools` restricts which tools exist. Simpler, but `--tools` doesn't support per-command scoping like `--allowedTools` does.
+2. **Bypass approach** — `--dangerously-skip-permissions` + `--tools "Read,Grep,Glob,Write,Bash"`. Routine permission prompts are skipped, but explicit deny rules and [actions no mode auto-approves](https://code.claude.com/docs/en/permission-modes#actions-no-mode-auto-approves) still apply. `--tools` restricts which tools exist; it doesn't support per-command scoping like `--allowedTools`.
 
-**Key gotcha:** `--permission-mode dontAsk` **without** `--allowedTools` denies everything — the subprocess will fail on its first tool call. Always pair `dontAsk` with pre-approved tools.
+**Key gotcha:** `--permission-mode dontAsk` denies tools that would require approval unless an allow rule or another documented permission mechanism approves them. Reads and other actions that need no approval can still run. For headless tasks that need tools requiring approval, define an explicit allowlist.
 
 ### Session Control
 
@@ -446,7 +446,7 @@ The mitigation stack (`--system-prompt` replaces prompt, `--strict-mcp-config` b
 | Hook suppression | `--settings '{"disableAllHooks": true}'` | N/A (no hooks system) |
 | MCP isolation | `--mcp-config '{"mcpServers":{}}' --strict-mcp-config` | N/A (MCP configured per-session) |
 | Skill suppression | `--disable-slash-commands` | N/A |
-| Permission control | `dontAsk` (deny unless allowed) or `bypassPermissions` (approve all) | `--approval never` |
+| Permission control | `dontAsk` (deny calls requiring approval unless pre-approved) or `bypassPermissions` (skip routine prompts, with documented exceptions) | `--approval never` |
 | Sandbox | Not available — use `--tools` + `--allowedTools` for tool-level scoping | `--sandbox read-only` / `workspace-write` |
 | Tool scoping | `--allowedTools 'Read,Grep,Write,Bash(git diff *)'` | Implicit via sandbox |
 
