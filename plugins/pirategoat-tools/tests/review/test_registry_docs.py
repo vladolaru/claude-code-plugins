@@ -74,6 +74,10 @@ WOO_INVARIANT_ROWS = [
         "Settings - form-only invariant vs. REST/CLI writers",
         id="settings-write-surface-woocommerce-subscriptions-4612",
     ),
+    pytest.param(
+        "Hooks - required callback argument on a foreign hook",
+        id="short-fired-hook-woocommerce-subscriptions-5779",
+    ),
 ]
 
 
