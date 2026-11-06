@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.124.0] - 2026-11-06
+
+### Added
+
+- `woo-regression-reviewer` now flags new callbacks on cart, checkout, tax and payment hooks the plugin does not own when a parameter after the first has no default. Other plugins can fire these hooks with fewer arguments than core does, and a missing required parameter is a fatal error that no guard inside the callback can prevent.
+
 ## [1.123.0] - 2026-10-08
 
 ### Added
